@@ -105,6 +105,7 @@ struct ExprBuilder {
                          std::unordered_set<Block *> &VisitedBlocks,
                          BasicBlock *BB);
   Inst *get(Value *V);
+  void markExternalUses(Inst *I);
 };
 
 }
@@ -214,6 +215,31 @@ Inst *ExprBuilder::buildGEP(Inst *Ptr, gep_type_iterator begin,
     }
   }
   return Ptr;
+}
+
+void ExprBuilder::markExternalUses (Inst *I) {
+  std::map<Inst *, unsigned> UsesCount;
+  std::vector<Inst *> Stack;
+  Stack.push_back(I);
+  while(!Stack.empty()) {
+    Inst* T = Stack.back();
+    Stack.pop_back();
+    if (I != T) {
+      if (UsesCount.find(T) == UsesCount.end())
+        UsesCount[T] = 1;
+      else
+        UsesCount[T]++;
+    }
+    for (auto i: T->Ops) {
+      if (i->K != Inst::Const && i->K != Inst::Var
+          && i->K != Inst::UntypedConst && i->K != Inst::Phi)
+        Stack.push_back(i);
+    }
+  }
+  for (auto i : UsesCount)
+    for (auto R: EBC.InstMap)
+      if (R.second == i.first && R.first->getNumUses() != i.second)
+        I->DepsWithExternalUses.insert(i.first);
 }
 
 Inst *ExprBuilder::build(Value *V) {
@@ -738,7 +764,9 @@ void ExtractExprCandidates(Function &F, const LoopInfo *LI, DemandedBits *DB,
     std::unique_ptr<BlockCandidateSet> BCS(new BlockCandidateSet);
     for (auto &I : BB) {
       if (I.getType()->isIntegerTy()) {
-        BCS->Replacements.emplace_back(&I, InstMapping(EB.get(&I), 0));
+        Inst *In = EB.get(&I);
+        EB.markExternalUses(In);
+        BCS->Replacements.emplace_back(&I, InstMapping(In, 0));
         assert(EB.get(&I)->hasOrigin(&I));
       }
     }

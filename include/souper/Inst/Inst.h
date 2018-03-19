@@ -112,6 +112,7 @@ struct Inst : llvm::FoldingSetNode {
   bool Available = true;
   llvm::APInt Val;
   std::string Name;
+  std::set<Inst *> DepsWithExternalUses;
   std::vector<Inst *> Ops;
   mutable std::vector<Inst *> OrderedOps;
   std::vector<llvm::Value *> Origins;
@@ -175,7 +176,7 @@ public:
                 llvm::raw_ostream &Out, bool printNames);
   void printBlockPCs(const BlockPCs &BPCs,
                      llvm::raw_ostream &Out, bool printNames);
-  std::string printInst(Inst *I, llvm::raw_ostream &Out, bool printNames);
+  std::string printInst(Inst *I, llvm::raw_ostream &Out, bool printNames, Inst *OrigI = nullptr);
   std::string printBlock(Block *B, llvm::raw_ostream &Out);
   Inst *getInst(llvm::StringRef Name);
   void setInst(llvm::StringRef Name, Inst *I);
