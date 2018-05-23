@@ -230,16 +230,16 @@ void ExprBuilder::markExternalUses (Inst *I) {
       else
         UsesCount[T]++;
     }
-    for (auto i: T->Ops) {
-      if (i->K != Inst::Const && i->K != Inst::Var
-          && i->K != Inst::UntypedConst && i->K != Inst::Phi)
-        Stack.push_back(i);
+    for (auto Op: T->Ops) {
+      if (Op->K != Inst::Const && Op->K != Inst::Var
+          && Op->K != Inst::UntypedConst && Op->K != Inst::Phi)
+        Stack.push_back(Op);
     }
   }
-  for (auto i : UsesCount)
-    for (auto R: EBC.InstMap)
-      if (R.second == i.first && R.first->getNumUses() != i.second)
-        I->DepsWithExternalUses.insert(i.first);
+  for (auto U : UsesCount)
+    for (auto R : EBC.InstMap)
+      if (R.second == U.first && R.first->getNumUses() != U.second)
+        I->DepsWithExternalUses.insert(U.first);
 }
 
 Inst *ExprBuilder::build(Value *V) {
