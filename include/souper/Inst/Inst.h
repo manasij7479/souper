@@ -170,13 +170,14 @@ class ReplacementContext {
   llvm::DenseMap<Block *, std::string> BlockNames;
   std::map<std::string, Inst *> NameToInst;
   std::map<std::string, Block *> NameToBlock;
+  std::string printInstImpl(Inst *I, llvm::raw_ostream &Out, bool printNames, Inst *OrigI);
 
 public:
   void printPCs(const std::vector<InstMapping> &PCs,
                 llvm::raw_ostream &Out, bool printNames);
   void printBlockPCs(const BlockPCs &BPCs,
                      llvm::raw_ostream &Out, bool printNames);
-  std::string printInst(Inst *I, llvm::raw_ostream &Out, bool printNames, Inst *OrigI = nullptr);
+  std::string printInst(Inst *I, llvm::raw_ostream &Out, bool printNames);
   std::string printBlock(Block *B, llvm::raw_ostream &Out);
   Inst *getInst(llvm::StringRef Name);
   void setInst(llvm::StringRef Name, Inst *I);
