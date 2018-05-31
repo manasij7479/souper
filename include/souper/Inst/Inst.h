@@ -23,6 +23,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace souper {
@@ -112,7 +113,7 @@ struct Inst : llvm::FoldingSetNode {
   bool Available = true;
   llvm::APInt Val;
   std::string Name;
-  std::set<Inst *> DepsWithExternalUses;
+  std::unordered_set<Inst *> DepsWithExternalUses;
   std::vector<Inst *> Ops;
   mutable std::vector<Inst *> OrderedOps;
   std::vector<llvm::Value *> Origins;

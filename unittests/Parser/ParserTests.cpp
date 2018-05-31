@@ -166,6 +166,9 @@ TEST(ParserTest, Errors) {
       { "%0:i8 = var (nonNegative) (nonZero) (powerOfTwo) (signBits=3\n",
         "<input>:1:1: expected ')' to complete data flow fact string" },
       { "%0:i64 = var ; 0\n"
+        "%1:i1 = add 42:i32, %0 (^",
+        "<input>:2:25: unexpected '^'" },
+      { "%0:i64 = var ; 0\n"
         "%1:i1 = extractvalue 42, 1 (hasExternalUses\n"
         "infer %1\n",
         "<input>:2:1: expected ')' to complete external uses string" },

@@ -307,7 +307,7 @@ struct Parser {
   // set of blockpc(s) related to B. The map is used for error- and
   // type-checking.
   std::map<Block *, unsigned> BlockPCIdxMap;
-  std::unordered_set<Inst*> ExternalUsesSet;
+  std::unordered_set<Inst *> ExternalUsesSet;
   Inst *LHS = 0;
 
   std::string makeErrStr(const std::string &ErrStr) {
