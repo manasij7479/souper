@@ -464,6 +464,11 @@ cand %2 1:i1
 cand %2 1:i1
 )i",
       R"i(%0:i32 = var ; 0
+%1:i32 = bitreverse %0
+%2:i1 = eq 1:i32, %1
+cand %2 1:i1
+)i",
+      R"i(%0:i32 = var ; 0
 %1:i32 = bswap %0
 %2:i1 = eq 1:i32, %1
 cand %2 1:i1

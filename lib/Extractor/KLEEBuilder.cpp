@@ -33,6 +33,7 @@ class KLEEBuilder : public ExprBuilder {
   std::vector<std::unique_ptr<Array>> Arrays;
   std::map<Inst *, ref<Expr>> ExprMap;
   std::vector<Inst *> Vars;
+  std::vector<std::vector<ref<Expr>>> BitReverseArrays;
 
 public:
   KLEEBuilder(InstContext &IC) : ExprBuilder(IC) {}
@@ -289,6 +290,19 @@ private:
       return SleExpr::create(get(Ops[0]), get(Ops[1]));
     case Inst::CtPop:
       return countOnes(get(Ops[0]));
+    case Inst::BitReverse: {
+      ref<Expr> L = get(Ops[0]);
+      unsigned Width = L->getWidth();
+      if (Width == 1) {
+        return L;
+      }
+      ref<Expr> result = ConcatExpr::create(ExtractExpr::create(L, 1, 1),
+                                            ExtractExpr::create(L, 0, 1));
+      for (std::size_t i = 2; i < Width; ++i) {
+        result = ConcatExpr::create(ExtractExpr::create(L, i, 1), result);
+      }
+      return result;
+    }
     case Inst::BSwap: {
       ref<Expr> L = get(Ops[0]);
       unsigned Width = L->getWidth();

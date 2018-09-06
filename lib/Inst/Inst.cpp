@@ -380,6 +380,8 @@ const char *Inst::getKindName(Kind K) {
     return "ctpop";
   case BSwap:
     return "bswap";
+  case BitReverse:
+    return "bitreverse";
   case Cttz:
     return "cttz";
   case Ctlz:
@@ -454,6 +456,7 @@ Inst::Kind Inst::getKind(std::string Name) {
                    .Case("sle", Inst::Sle)
                    .Case("ctpop", Inst::CtPop)
                    .Case("bswap", Inst::BSwap)
+                   .Case("bitreverse", Inst::BitReverse)
                    .Case("cttz", Inst::Cttz)
                    .Case("ctlz", Inst::Ctlz)
                    .Case("sadd.with.overflow", Inst::SAddWithOverflow)

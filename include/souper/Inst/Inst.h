@@ -86,6 +86,7 @@ struct Inst : llvm::FoldingSetNode {
     Sle,
     CtPop,
     BSwap,
+    BitReverse,
     Cttz,
     Ctlz,
     ExtractValue,
