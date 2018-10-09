@@ -101,9 +101,9 @@ std::vector<Inst *> matchWidth(Inst *I, unsigned NewW, InstContext &IC) {
   return { I };
 }
 
-void addGuess(Inst *RHS, int MaxCost, std::vector<Inst *> &Guesses,
+void addGuess(Inst *RHS, int LHSCost, std::vector<Inst *> &Guesses,
               int &TooExpensive) {
-  if (souper::cost(RHS) < MaxCost)
+  if (souper::cost(RHS) < LHSCost + 2) // TODO(manasij7479) : Get rid of magic number
     Guesses.push_back(RHS);
   else
     TooExpensive++;
