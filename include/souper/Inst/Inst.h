@@ -19,11 +19,13 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/KnownBits.h"
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 namespace souper {
@@ -268,6 +270,44 @@ void separatePCs(const std::vector<InstMapping> &PCs,
                  InstContext &IC,
                  std::map<Inst *, llvm::APInt> *ConstMap,
                  bool CloneVars);
+
+struct EvalValue {
+  EvalValue(llvm::APInt Val_, bool Poison_, bool Unavailable_)
+    : Val(Val_), Poison(Poison_), Unavailable(Unavailable_) {}
+  EvalValue() : Unavailable(true) {}
+  llvm::APInt Val;
+  bool Poison;
+  bool Unavailable;
+};
+
+using ValueCache = std::unordered_map<std::string, EvalValue>;
+
+EvalValue Evaluate(Inst *Root, ValueCache &Cache);
+
+class ValueAnalysis {
+public:
+  ValueAnalysis(Inst *LHS_, std::vector<ValueCache> &Inputs_) : LHS(LHS_), Inputs(Inputs_) {
+    for (auto &&Input : Inputs) {
+      LHSValues.push_back(Evaluate(LHS, Input));
+    }
+  }
+  virtual bool IsInfeasible(Inst *RHS) = 0;
+private:
+  Inst *LHS;
+protected:
+  std::vector<EvalValue> LHSValues;
+  std::vector<ValueCache> &Inputs;
+};
+
+llvm::KnownBits FindKnownBits(Inst* I, ValueCache& C);
+
+class ComputeKnownBits : ValueAnalysis {
+public:
+  ComputeKnownBits(Inst *LHS_, std::vector<ValueCache> &Inputs_)
+    : ValueAnalysis(LHS_, Inputs_) {}
+
+  bool IsInfeasible(souper::Inst *RHS) override;
+};
 
 }
 

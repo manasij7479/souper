@@ -368,13 +368,44 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   if (DebugLevel > 1)
     llvm::errs() << "got " << Inputs.size() << " candidates from LHS\n";
 
-  std::vector<Inst *> Guesses;
+  std::vector<Inst *> AllGuesses;
   int LHSCost = souper::cost(LHS, /*IgnoreDepsWithExternalUses=*/true);
-  getGuesses(Guesses, Inputs, LHS->Width, LHSCost, IC);
+
+  getGuesses(AllGuesses, Inputs, LHS->Width, LHSCost, IC);
 
   std::error_code EC;
-  if (Guesses.size() < 1)
+  if (AllGuesses.size() < 1)
     return EC;
+
+  std::vector<ValueCache> InputSets;
+
+  ValueCache Cache;
+  int64_t Current = 0;
+  for (auto &&I : Inputs) {
+    Cache[I->Name] = {llvm::APInt(I->Width, Current++, false), false, false};
+  }
+  InputSets.push_back(Cache);
+
+  Current = 2*Current + 1;
+  for (auto &&I : Inputs) {
+    Cache[I->Name] = {llvm::APInt(I->Width, Current++, false), false, false};
+  }
+  InputSets.push_back(Cache);
+
+
+  ComputeKnownBits CKB(LHS, InputSets);
+
+  std::vector<Inst *> Guesses;
+
+  for (auto &&Guess : AllGuesses) {
+    if (!CKB.IsInfeasible(Guess)) {
+      Guesses.push_back(Guess);
+    }
+  }
+  if (DebugLevel > 2) {
+    llvm::outs() << "Filtered out " << AllGuesses.size() - Guesses.size()
+                 << "/" << AllGuesses.size() << " guesses.\n";
+  }
 
   // one of the real advantages of this approach to synthesis vs
   // CEGIS is that we can synthesize in precisely increasing cost

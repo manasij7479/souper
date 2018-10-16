@@ -62,3 +62,35 @@ TEST(InstTest, Print) {
   EXPECT_EQ("%0:i64 = add 1:i64, 2:i64\n"
             "%1:i64 = mul 3:i64, %0\n", SS.str());
 }
+
+TEST(InstTest, Evaluate) {
+  InstContext IC;
+
+  Inst *I1 = IC.getConst(llvm::APInt(64, 2));
+  Inst *I2 = IC.getConst(llvm::APInt(64, 3));
+
+  std::unordered_map<std::string, EvalValue> cache;
+
+  EXPECT_EQ(Evaluate(IC.getInst(Inst::Add, 64, {I1, I2}), cache).Val, 5);
+  EXPECT_EQ(Evaluate(IC.getInst(Inst::Sub, 64, {I1, I2}), cache).Val, -1);
+  EXPECT_EQ(Evaluate(IC.getInst(Inst::Mul, 64, {I1, I2}), cache).Val, 6);
+  EXPECT_EQ(Evaluate(IC.getInst(Inst::And, 64, {I1, I2}), cache).Val, 2);
+  EXPECT_EQ(Evaluate(IC.getInst(Inst::Or, 64, {I1, I2}), cache).Val, 3);
+  EXPECT_EQ(Evaluate(IC.getInst(Inst::Xor, 64, {I1, I2}), cache).Val, 1);
+}
+
+TEST(InstTest, KnownBits) {
+  InstContext IC;
+  Inst *I1 = IC.getConst(llvm::APInt(64, 2));
+  Inst *I2 = IC.getConst(llvm::APInt(64, 3));
+
+  Inst *IShift = IC.getInst(Inst::Shl, 64, {I2, I1});
+
+  std::unordered_map<std::string, EvalValue> cache;
+
+  auto result = FindKnownBits(IShift, cache);
+
+  EXPECT_EQ(
+    std::string("0000000000000000000000000000000000000000000000000000000000001100"),
+    IShift->getKnownBitsString(result.Zero, result.One));
+}

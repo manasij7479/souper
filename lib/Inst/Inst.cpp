@@ -902,3 +902,221 @@ void souper::separatePCs(const std::vector<InstMapping> &PCs,
     PCsCopy.emplace_back(getInstCopy(PC.LHS, IC, InstCache, BlockCache, ConstMap, CloneVars),
                          getInstCopy(PC.RHS, IC, InstCache, BlockCache, ConstMap, CloneVars));
 }
+
+namespace {
+EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
+  switch (Inst->K) {
+    case souper::Inst::Const:
+      return {Inst->Val, false, false};
+    case souper::Inst::UntypedConst:
+      return {Inst->Val, false, false};
+    case souper::Inst::Var:
+      llvm_unreachable("Should get value from cache without reaching here");
+    case souper::Inst::Phi:
+      llvm_unreachable("unsupported");
+    case souper::Inst::Add:
+      return {args[0].Val + args[1].Val, false, false};
+  //   case AddNSW:
+  //     return "addnsw";
+  //   case AddNUW:
+  //     return "addnuw";
+  //   case AddNW:
+  //     return "addnw";
+    case souper::Inst::Sub:
+      return {args[0].Val - args[1].Val, false, false};
+  //   case SubNSW:
+  //     return "subnsw";
+  //   case SubNUW:
+  //     return "subnuw";
+  //   case SubNW:
+  //     return "subnw";
+    case souper::Inst::Mul:
+      return {args[0].Val * args[1].Val, false, false};
+
+  //   case MulNSW:
+  //     return "mulnsw";
+  //   case MulNUW:
+  //     return "mulnuw";
+  //   case MulNW:
+  //     return "mulnw";
+  //   case UDiv:
+  //     return "udiv";
+  //   case SDiv:
+  //     return "sdiv";
+  //   case UDivExact:
+  //     return "udivexact";
+  //   case SDivExact:
+  //     return "sdivexact";
+  //   case URem:
+  //     return "urem";
+  //   case SRem:
+  //     return "srem";
+    case souper::Inst::And:
+      return {args[0].Val & args[1].Val, false, false};
+    case souper::Inst::Or:
+      return {args[0].Val | args[1].Val, false, false};
+    case souper::Inst::Xor:
+      return {args[0].Val ^ args[1].Val, false, false};
+    case souper::Inst::Shl:
+      return {args[0].Val << args[1].Val, false, false};
+  //   case ShlNSW:
+  //     return "shlnsw";
+  //   case ShlNUW:
+  //     return "shlnuw";
+  //   case ShlNW:
+  //     return "shlnw";
+    case souper::Inst::LShr:
+      return {args[0].Val.lshr(args[1].Val), false, false};
+  //   case LShrExact:
+  //     return "lshrexact";
+    case souper::Inst::AShr:
+      return {args[0].Val.ashr(args[1].Val), false, false};
+      //   case AShrExact:
+  //     return "ashrexact";
+  //   case Select:
+  //     return "select";
+  //   case ZExt:
+  //     return "zext";
+  //   case SExt:
+  //     return "sext";
+  //   case Trunc:
+  //     return "trunc";
+    case souper::Inst::Eq:
+      return {{1, args[0].Val == args[1].Val, false}, false, false};
+    case souper::Inst::Ne:
+      return {{1, args[0].Val != args[1].Val, false}, false, false};
+    case souper::Inst::Ult:
+      return {{1, args[0].Val.ult(args[1].Val), false}, false, false};
+    case souper::Inst::Slt:
+      return {{1, args[0].Val.slt(args[1].Val), false}, false, false};
+    case souper::Inst::Ule:
+      return {{1, args[0].Val.ule(args[1].Val), false}, false, false};
+    case souper::Inst::Sle:
+      return {{1, args[0].Val.sle(args[1].Val), false}, false, false};
+  //   case CtPop:
+  //     return "ctpop";
+  //   case BSwap:
+  //     return "bswap";
+  //   case Cttz:
+  //     return "cttz";
+  //   case Ctlz:
+  //     return "ctlz";
+  //   case ExtractValue:
+  //     return "extractvalue";
+  //   case SAddWithOverflow:
+  //     return "sadd.with.overflow";
+  //   case UAddWithOverflow:
+  //     return "uadd.with.overflow";
+  //   case SSubWithOverflow:
+  //     return "ssub.with.overflow";
+  //   case USubWithOverflow:
+  //     return "usub.with.overflow";
+  //   case SMulWithOverflow:
+  //     return "smul.with.overflow";
+  //   case UMulWithOverflow:
+  //     return "umul.with.overflow";
+  //   case SAddO:
+  //   case UAddO:
+  //   case SSubO:
+  //   case USubO:
+  //   case SMulO:
+  //   case UMulO:
+    default:
+      return EvalValue(); // Indicates an 'unavailable' value
+  }
+}
+}
+
+EvalValue souper::Evaluate(souper::Inst* Root, ValueCache &Cache) {
+  std::vector<EvalValue> EvaluatedArgs;
+  for (auto &&I : Root->Ops) {
+    auto It = Cache.find(I->Name);
+    if (It != Cache.end()) {
+      return It->second;
+    }
+    auto eval = Evaluate(I, Cache);
+    EvaluatedArgs.push_back(eval);
+    if (I->Name != "") {
+      Cache[I->Name] = eval;
+    }
+  }
+
+  return EvaluateInst(Root, EvaluatedArgs);
+}
+
+EvalValue getValue(Inst *I, ValueCache &C) {
+  if (I->K == souper::Inst::Const) {
+      return {I->Val, false, false};
+  } else {
+    assert(I->Name != "");
+    if (C.find(I->Name) != C.end()) {
+      return C[I->Name];
+    } else {
+      return EvalValue(); // unavailable
+    }
+  }
+}
+
+llvm::KnownBits souper::FindKnownBits(Inst* I, ValueCache& C) {
+  llvm::KnownBits result(I->Width);
+  switch(I->K) {
+    case souper::Inst::Const: {
+      result.One = I->Val;
+      result.Zero = ~ I->Val;
+      return result;
+    }
+    case souper::Inst::Shl : {
+      auto Op0KB = FindKnownBits(I->Ops[0], C);
+      auto Op1V = getValue(I->Ops[1], C);
+      if (!Op1V.Unavailable) {
+        Op0KB.One <<= Op1V.Val;
+        Op0KB.Zero <<= Op1V.Val;
+        Op0KB.Zero.setLowBits(Op1V.Val.getLimitedValue());
+        return Op0KB;
+      } else {
+        return result;
+      }
+    }
+    case souper::Inst::And : {
+      auto Op0KB = FindKnownBits(I->Ops[0], C);
+      auto Op1KB = FindKnownBits(I->Ops[1], C);
+
+      Op0KB.One &= Op1KB.One;
+      Op0KB.Zero |= Op1KB.Zero;
+      return Op0KB;
+    }
+    case souper::Inst::Or : {
+      auto Op0KB = FindKnownBits(I->Ops[0], C);
+      auto Op1KB = FindKnownBits(I->Ops[1], C);
+
+      Op0KB.One |= Op1KB.One;
+      Op0KB.Zero &= Op1KB.Zero;
+      return Op0KB;
+    }
+    case souper::Inst::Xor : {
+      auto Op0KB = FindKnownBits(I->Ops[0], C);
+      auto Op1KB = FindKnownBits(I->Ops[1], C);
+
+      llvm::APInt KnownZeroOut = (Op0KB.Zero & Op1KB.Zero) | (Op0KB.One & Op1KB.One);
+      Op0KB.One = (Op0KB.Zero & Op1KB.One) | (Op0KB.One & Op1KB.Zero);
+      Op0KB.Zero = std::move(KnownZeroOut);
+      // ^ copied from LLVM ValueTracking.cpp
+      return Op0KB;
+    }
+
+    default : return result;
+  }
+}
+
+bool souper::ComputeKnownBits::IsInfeasible(souper::Inst* RHS) {
+  for (int i = 0; i < Inputs.size(); ++i) {
+    auto KB = FindKnownBits(RHS, Inputs[i]);
+    auto C = LHSValues[i];
+    if (!C.Unavailable) {
+      if ((KB.Zero & C.Val) != 0 || (KB.One & ~C.Val) != 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
