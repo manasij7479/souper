@@ -1139,11 +1139,15 @@ llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCach
       auto R1 = FindConstantRange(I->Ops[1], C);
       return R0.add(R1);
     }
-    // case souper::Inst::AddNSW: {
-    //   auto R0 = FindConstantRange(I->Ops[0], C);
-    //   auto R1 = FindConstantRange(I->Ops[1], C);
-    //   return R0.addNoSignedWrap(R1);
-    // }
+    case souper::Inst::AddNSW: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto V1 = getValue(I->Ops[1], C);
+      if (!V1.Unavailable) {
+        return R0.addWithNoSignedWrap(V1.Val);
+      } else {
+        return result; // full range, can we do better?
+      }
+    }
     case souper::Inst::Sub: {
       auto R0 = FindConstantRange(I->Ops[0], C);
       auto R1 = FindConstantRange(I->Ops[1], C);
@@ -1184,6 +1188,11 @@ llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCach
       auto R1 = FindConstantRange(I->Ops[1], C);
       return R0.udiv(R1);
     }
+//     case souper::Inst::SDiv: {
+//       auto R0 = FindConstantRange(I->Ops[0], C);
+//       auto R1 = FindConstantRange(I->Ops[1], C);
+//       return R0.sdiv(R1); // unimplemented
+//     }
     // TODO: Xor pattern for not, truncs and extends, etc
     default: return result;
   }
