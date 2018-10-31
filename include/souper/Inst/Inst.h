@@ -292,31 +292,15 @@ public:
       LHSValues.push_back(Evaluate(LHS, Input));
     }
   }
-  virtual bool IsInfeasible(Inst *RHS) = 0;
-protected:
+  bool IsInfeasible(Inst *RHS);
+private:
   Inst *LHS;
   std::vector<EvalValue> LHSValues;
   std::vector<ValueCache> &Inputs;
 };
 
 llvm::KnownBits FindKnownBits(Inst *I, ValueCache &C);
-
-class ComputeKnownBits : public ValueAnalysis {
-public:
-  ComputeKnownBits(Inst *LHS_, std::vector<ValueCache> &Inputs_)
-    : ValueAnalysis(LHS_, Inputs_) {}
-
-  bool IsInfeasible(souper::Inst *RHS) override;
-};
-
 llvm::ConstantRange FindConstantRange(Inst *I, ValueCache &C);
-
-class RangeAnalysis : public ValueAnalysis {
-public:
-  RangeAnalysis(Inst *LHS_, std::vector<ValueCache> &Inputs)
-    : ValueAnalysis(LHS_, Inputs) {}
-  bool IsInfeasible(souper::Inst *RHS) override;
-};
 
 }
 

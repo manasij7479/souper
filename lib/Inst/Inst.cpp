@@ -1122,19 +1122,6 @@ llvm::KnownBits souper::FindKnownBits(Inst* I, ValueCache& C) {
   }
 }
 
-bool souper::ComputeKnownBits::IsInfeasible(souper::Inst* RHS) {
-  for (int i = 0; i < Inputs.size(); ++i) {
-    auto KB = FindKnownBits(RHS, Inputs[i]);
-    auto C = LHSValues[i];
-    if (!C.Unavailable) {
-      if ((KB.Zero & C.Val) != 0 || (KB.One & ~C.Val) != 0) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCache& C) {
   llvm::ConstantRange result(I->Width);
   switch (I->K) {
@@ -1202,16 +1189,21 @@ llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCach
   }
 }
 
-bool souper::RangeAnalysis::IsInfeasible(souper::Inst* RHS) {
+bool souper::ValueAnalysis::IsInfeasible(souper::Inst* RHS) {
   for (int i = 0; i < Inputs.size(); ++i) {
-    auto CR = FindConstantRange(RHS, Inputs[i]);
     auto C = LHSValues[i];
     if (!C.Unavailable) {
+      auto CR = FindConstantRange(RHS, Inputs[i]);
       if (!CR.contains(C.Val)) {
+        return true;
+      }
+      auto KB = FindKnownBits(RHS, Inputs[i]);
+      if ((KB.Zero & C.Val) != 0 || (KB.One & ~C.Val) != 0) {
         return true;
       }
     }
   }
   return false;
 }
+
 
