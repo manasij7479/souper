@@ -905,6 +905,14 @@ void souper::separatePCs(const std::vector<InstMapping> &PCs,
 
 namespace {
 EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
+  if (!args.empty()) {
+    int size = args[0].Val.getBitWidth();
+    for (int i = 1; i < args.size(); ++i) {
+      if (args[i].Val.getBitWidth() != size) {
+        return EvalValue();
+      }
+    }
+  }
   switch (Inst->K) {
     case souper::Inst::Const:
       return {Inst->Val, false, false};
@@ -982,16 +990,16 @@ EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
 
     case souper::Inst::Eq:
       return {{1, args[0].Val == args[1].Val, false}, false, false};
-//     case souper::Inst::Ne:
-//       return {{1, args[0].Val != args[1].Val, false}, false, false};
-//     case souper::Inst::Ult:
-//       return {{1, args[0].Val.ult(args[1].Val), false}, false, false};
-//     case souper::Inst::Slt:
-//       return {{1, args[0].Val.slt(args[1].Val), false}, false, false};
-//     case souper::Inst::Ule:
-//       return {{1, args[0].Val.ule(args[1].Val), false}, false, false};
-//     case souper::Inst::Sle:
-//       return {{1, args[0].Val.sle(args[1].Val), false}, false, false};
+    case souper::Inst::Ne:
+      return {{1, args[0].Val != args[1].Val, false}, false, false};
+    case souper::Inst::Ult:
+      return {{1, args[0].Val.ult(args[1].Val), false}, false, false};
+    case souper::Inst::Slt:
+      return {{1, args[0].Val.slt(args[1].Val), false}, false, false};
+    case souper::Inst::Ule:
+      return {{1, args[0].Val.ule(args[1].Val), false}, false, false};
+    case souper::Inst::Sle:
+      return {{1, args[0].Val.sle(args[1].Val), false}, false, false};
   //   case CtPop:
   //     return "ctpop";
   //   case BSwap:
@@ -1029,11 +1037,6 @@ EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
 EvalValue souper::Evaluate(souper::Inst* Root, ValueCache &Cache) {
   std::vector<EvalValue> EvaluatedArgs;
   EvalValue result;
-
-  llvm::errs() << "STARTING EVAL: \n";
-
-  ReplacementContext RC;
-  RC.printInst(Root, llvm::errs(), true);
 
   if (Root->K == souper::Inst::Var) {
       result = Cache[Root->Name];
