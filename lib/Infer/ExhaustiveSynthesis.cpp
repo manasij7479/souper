@@ -382,13 +382,15 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   ValueCache Cache;
   int64_t Current = 0;
   for (auto &&I : Inputs) {
-    Cache[I->Name] = {llvm::APInt(I->Width, Current++, false), false, false};
+    if (I->K == souper::Inst::Var)
+      Cache[I->Name] = {llvm::APInt(I->Width, Current++, false), false, false};
   }
   InputSets.push_back(Cache);
 
   Current = 2*Current + 1;
   for (auto &&I : Inputs) {
-    Cache[I->Name] = {llvm::APInt(I->Width, Current++, false), false, false};
+    if (I->K == souper::Inst::Var)
+      Cache[I->Name] = {llvm::APInt(I->Width, Current++, false), false, false};
   }
   InputSets.push_back(Cache);
 
@@ -396,16 +398,19 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   ComputeKnownBits CKB(LHS, InputSets);
 
   std::vector<Inst *> Guesses;
-
+  ReplacementContext RC;
+//   for (auto &&I : Inputs) {
+//     RC.printInst(I, llvm::errs(), true);
+//   }
   for (auto &&Guess : AllGuesses) {
     if (!CKB.IsInfeasible(Guess)) {
       Guesses.push_back(Guess);
     }
   }
-  if (DebugLevel > 2) {
+//   if (DebugLevel > 2) {
     llvm::outs() << "Filtered out " << AllGuesses.size() - Guesses.size()
                  << "/" << AllGuesses.size() << " guesses.\n";
-  }
+//   }
 
   // one of the real advantages of this approach to synthesis vs
   // CEGIS is that we can synthesize in precisely increasing cost

@@ -79,6 +79,40 @@ TEST(InstTest, Evaluate) {
   EXPECT_EQ(Evaluate(IC.getInst(Inst::Xor, 64, {I1, I2}), cache).Val, 1);
 }
 
+TEST(InstTest, Evaluate2) {
+  InstContext IC;
+
+  Inst *I0 = IC.getConst(llvm::APInt(64, 2));
+  Inst *I1 = IC.getConst(llvm::APInt(64, 3));
+
+  auto I2 = IC.getInst(Inst::Xor, 32 , {I0, I1});
+  auto I3 = IC.getInst(Inst::Xor, 32 , {I1, I2});
+  auto I4 = IC.getInst(Inst::Xor, 32 , {I2, I3});
+
+  std::unordered_map<std::string, EvalValue> cache;
+  EXPECT_EQ(Evaluate(I4, cache).Val, 3);
+}
+
+TEST(InstTest, Evaluate3) {
+  InstContext IC;
+
+  Inst *I0 = IC.createVar(32, "0");
+  Inst *I1 = IC.createVar(32, "1");
+
+
+  auto I2 = IC.getInst(Inst::Xor, 32 , {I0, I1});
+  auto I3 = IC.getInst(Inst::Xor, 32 , {I1, I2});
+  auto I4 = IC.getInst(Inst::Xor, 32 , {I2, I3});
+
+  std::unordered_map<std::string, EvalValue> cache;
+  cache["0"] = {llvm::APInt(32, 2), false, false};
+  cache["1"] = {llvm::APInt(32, 3), false, false};
+
+  EXPECT_EQ(Evaluate(I4, cache).Val, 3);
+}
+
+
+
 TEST(InstTest, KnownBits) {
   InstContext IC;
   Inst *I1 = IC.getConst(llvm::APInt(64, 2));
@@ -86,11 +120,18 @@ TEST(InstTest, KnownBits) {
 
   Inst *IShift = IC.getInst(Inst::Shl, 64, {I2, I1});
 
-  std::unordered_map<std::string, EvalValue> cache;
+  Inst *IVar = IC.createVar(8, "x");
 
-  auto result = FindKnownBits(IShift, cache);
+  std::unordered_map<std::string, EvalValue> cache;
+  cache["x"] = {llvm::APInt(8, 5), false, false};
+
+  auto result1 = FindKnownBits(IShift, cache);
 
   EXPECT_EQ(
     std::string("0000000000000000000000000000000000000000000000000000000000001100"),
-    IShift->getKnownBitsString(result.Zero, result.One));
+    IShift->getKnownBitsString(result1.Zero, result1.One));
+
+  auto result2 = FindKnownBits(IVar, cache);
+  EXPECT_EQ(std::string("00000101"), IVar->getKnownBitsString(result2.Zero, result2.One));
+
 }

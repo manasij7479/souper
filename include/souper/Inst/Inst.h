@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/Support/KnownBits.h"
 #include <map>
 #include <memory>
@@ -292,22 +293,32 @@ public:
     }
   }
   virtual bool IsInfeasible(Inst *RHS) = 0;
-private:
-  Inst *LHS;
 protected:
+  Inst *LHS;
   std::vector<EvalValue> LHSValues;
   std::vector<ValueCache> &Inputs;
 };
 
-llvm::KnownBits FindKnownBits(Inst* I, ValueCache& C);
+llvm::KnownBits FindKnownBits(Inst *I, ValueCache &C);
 
-class ComputeKnownBits : ValueAnalysis {
+class ComputeKnownBits : public ValueAnalysis {
 public:
   ComputeKnownBits(Inst *LHS_, std::vector<ValueCache> &Inputs_)
     : ValueAnalysis(LHS_, Inputs_) {}
 
   bool IsInfeasible(souper::Inst *RHS) override;
 };
+
+// llvm::ConstantRange FindConstantRange(Inst *I, ValueCache &C);
+//
+// class RangeAnalysis : public ValueAnalysis {
+// public:
+//   RangeAnalysis(Inst *LHS_, std::vector<ValueCache> &Inputs)
+//     : ValueAnalysis(LHS_, Inputs) {}
+//   bool IsInfeasible(souper::Inst *RHS) override;
+// };
+
+void printInst(Inst *I);
 
 }
 

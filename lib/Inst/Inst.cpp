@@ -912,8 +912,6 @@ EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
       return {Inst->Val, false, false};
     case souper::Inst::Var:
       llvm_unreachable("Should get value from cache without reaching here");
-    case souper::Inst::Phi:
-      llvm_unreachable("unsupported");
     case souper::Inst::Add:
       return {args[0].Val + args[1].Val, false, false};
   //   case AddNSW:
@@ -981,18 +979,19 @@ EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
   //     return "sext";
   //   case Trunc:
   //     return "trunc";
+
     case souper::Inst::Eq:
       return {{1, args[0].Val == args[1].Val, false}, false, false};
-    case souper::Inst::Ne:
-      return {{1, args[0].Val != args[1].Val, false}, false, false};
-    case souper::Inst::Ult:
-      return {{1, args[0].Val.ult(args[1].Val), false}, false, false};
-    case souper::Inst::Slt:
-      return {{1, args[0].Val.slt(args[1].Val), false}, false, false};
-    case souper::Inst::Ule:
-      return {{1, args[0].Val.ule(args[1].Val), false}, false, false};
-    case souper::Inst::Sle:
-      return {{1, args[0].Val.sle(args[1].Val), false}, false, false};
+//     case souper::Inst::Ne:
+//       return {{1, args[0].Val != args[1].Val, false}, false, false};
+//     case souper::Inst::Ult:
+//       return {{1, args[0].Val.ult(args[1].Val), false}, false, false};
+//     case souper::Inst::Slt:
+//       return {{1, args[0].Val.slt(args[1].Val), false}, false, false};
+//     case souper::Inst::Ule:
+//       return {{1, args[0].Val.ule(args[1].Val), false}, false, false};
+//     case souper::Inst::Sle:
+//       return {{1, args[0].Val.sle(args[1].Val), false}, false, false};
   //   case CtPop:
   //     return "ctpop";
   //   case BSwap:
@@ -1029,25 +1028,30 @@ EvalValue EvaluateInst(souper::Inst* Inst, std::vector<EvalValue> args) {
 
 EvalValue souper::Evaluate(souper::Inst* Root, ValueCache &Cache) {
   std::vector<EvalValue> EvaluatedArgs;
-  for (auto &&I : Root->Ops) {
-    auto It = Cache.find(I->Name);
-    if (It != Cache.end()) {
-      return It->second;
-    }
-    auto eval = Evaluate(I, Cache);
-    EvaluatedArgs.push_back(eval);
-    if (I->Name != "") {
-      Cache[I->Name] = eval;
-    }
-  }
+  EvalValue result;
 
-  return EvaluateInst(Root, EvaluatedArgs);
+  llvm::errs() << "STARTING EVAL: \n";
+
+  ReplacementContext RC;
+  RC.printInst(Root, llvm::errs(), true);
+
+  if (Root->K == souper::Inst::Var) {
+      result = Cache[Root->Name];
+  } else {
+    for (auto &&I : Root->Ops) {
+      auto eval = Evaluate(I, Cache);
+      EvaluatedArgs.push_back(eval);
+    }
+
+    result = EvaluateInst(Root, EvaluatedArgs);
+  }
+  return result;
 }
 
 EvalValue getValue(Inst *I, ValueCache &C) {
   if (I->K == souper::Inst::Const) {
       return {I->Val, false, false};
-  } else {
+  } else if (I->K == souper::Inst::Var || I->K == souper::Inst::Reserved) {
     assert(I->Name != "");
     if (C.find(I->Name) != C.end()) {
       return C[I->Name];
@@ -1055,15 +1059,22 @@ EvalValue getValue(Inst *I, ValueCache &C) {
       return EvalValue(); // unavailable
     }
   }
+  return EvalValue();
 }
 
 llvm::KnownBits souper::FindKnownBits(Inst* I, ValueCache& C) {
   llvm::KnownBits result(I->Width);
   switch(I->K) {
-    case souper::Inst::Const: {
-      result.One = I->Val;
-      result.Zero = ~ I->Val;
-      return result;
+    case souper::Inst::Const:
+    case souper::Inst::Var : {
+      EvalValue V = getValue(I, C);
+      if (!V.Unavailable) {
+        result.One = V.Val;
+        result.Zero = ~ V.Val;
+        return result;
+      } else {
+        return result;
+      }
     }
     case souper::Inst::Shl : {
       auto Op0KB = FindKnownBits(I->Ops[0], C);
@@ -1114,9 +1125,50 @@ bool souper::ComputeKnownBits::IsInfeasible(souper::Inst* RHS) {
     auto C = LHSValues[i];
     if (!C.Unavailable) {
       if ((KB.Zero & C.Val) != 0 || (KB.One & ~C.Val) != 0) {
+//         ReplacementContext RC;
+//         RC.printInst(LHS, llvm::errs(), true);
+//         llvm::errs() << "==>\n";
+//         ReplacementContext RC2;
+//         RC2.printInst(RHS, llvm::errs(), true);
+//         llvm::errs() << "WHY INFEASIBLE: \n";
+//         llvm::errs() << "LHS = " << C.Val << "\n";
+//         llvm::errs() << "RHS KB = " << RHS->getKnownBitsString(KB.Zero, KB.One) << "\n";
+//
+//         llvm::errs() << "==========\n";
+//         //for (int i = 0; i < LHSValues.size(); ++i) {
+//         llvm::errs() << "CONSTS HERE " << i << "\n";
+//           llvm::errs() << "LHS = " << LHSValues[i].Val << "\n";
+//           for (auto p : Inputs[i]) {
+//             if (!p.second.Unavailable) {
+//               llvm::errs() << "INPUT: " << p.first << " \t" << p.second.Val << "\n";
+//             } else {
+//               llvm::errs() << "INPUT: "   << p.first << "UNAV\n";
+//             }
+//           }
+//         //}
+//         llvm::errs() << "====END===\n";
+
         return true;
       }
     }
   }
   return false;
 }
+
+// llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCache& C) {
+//   llvm::ConstantRange result(I->Width);
+//   switch (I->K) {
+//     default: return result;
+//   }
+//
+// }
+//
+// bool souper::RangeAnalysis::IsInfeasible(souper::Inst* RHS) {
+//   return false;
+// }
+
+void printInst(Inst *I) {
+  ReplacementContext RC;
+  RC.printInst(I, llvm::errs(), true);
+}
+
