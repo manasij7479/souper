@@ -309,16 +309,14 @@ public:
   bool IsInfeasible(souper::Inst *RHS) override;
 };
 
-// llvm::ConstantRange FindConstantRange(Inst *I, ValueCache &C);
-//
-// class RangeAnalysis : public ValueAnalysis {
-// public:
-//   RangeAnalysis(Inst *LHS_, std::vector<ValueCache> &Inputs)
-//     : ValueAnalysis(LHS_, Inputs) {}
-//   bool IsInfeasible(souper::Inst *RHS) override;
-// };
+llvm::ConstantRange FindConstantRange(Inst *I, ValueCache &C);
 
-void printInst(Inst *I);
+class RangeAnalysis : public ValueAnalysis {
+public:
+  RangeAnalysis(Inst *LHS_, std::vector<ValueCache> &Inputs)
+    : ValueAnalysis(LHS_, Inputs) {}
+  bool IsInfeasible(souper::Inst *RHS) override;
+};
 
 }
 

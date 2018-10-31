@@ -396,6 +396,7 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 
 
   ComputeKnownBits CKB(LHS, InputSets);
+  RangeAnalysis RA(LHS, InputSets);
 
   std::vector<Inst *> Guesses;
   ReplacementContext RC;
@@ -403,7 +404,7 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 //     RC.printInst(I, llvm::errs(), true);
 //   }
   for (auto &&Guess : AllGuesses) {
-    if (!CKB.IsInfeasible(Guess)) {
+    if (!CKB.IsInfeasible(Guess) && !RA.IsInfeasible(Guess)) {
       Guesses.push_back(Guess);
     }
   }

@@ -1128,29 +1128,6 @@ bool souper::ComputeKnownBits::IsInfeasible(souper::Inst* RHS) {
     auto C = LHSValues[i];
     if (!C.Unavailable) {
       if ((KB.Zero & C.Val) != 0 || (KB.One & ~C.Val) != 0) {
-//         ReplacementContext RC;
-//         RC.printInst(LHS, llvm::errs(), true);
-//         llvm::errs() << "==>\n";
-//         ReplacementContext RC2;
-//         RC2.printInst(RHS, llvm::errs(), true);
-//         llvm::errs() << "WHY INFEASIBLE: \n";
-//         llvm::errs() << "LHS = " << C.Val << "\n";
-//         llvm::errs() << "RHS KB = " << RHS->getKnownBitsString(KB.Zero, KB.One) << "\n";
-//
-//         llvm::errs() << "==========\n";
-//         //for (int i = 0; i < LHSValues.size(); ++i) {
-//         llvm::errs() << "CONSTS HERE " << i << "\n";
-//           llvm::errs() << "LHS = " << LHSValues[i].Val << "\n";
-//           for (auto p : Inputs[i]) {
-//             if (!p.second.Unavailable) {
-//               llvm::errs() << "INPUT: " << p.first << " \t" << p.second.Val << "\n";
-//             } else {
-//               llvm::errs() << "INPUT: "   << p.first << "UNAV\n";
-//             }
-//           }
-//         //}
-//         llvm::errs() << "====END===\n";
-
         return true;
       }
     }
@@ -1158,20 +1135,83 @@ bool souper::ComputeKnownBits::IsInfeasible(souper::Inst* RHS) {
   return false;
 }
 
-// llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCache& C) {
-//   llvm::ConstantRange result(I->Width);
-//   switch (I->K) {
-//     default: return result;
-//   }
-//
-// }
-//
-// bool souper::RangeAnalysis::IsInfeasible(souper::Inst* RHS) {
-//   return false;
-// }
+llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCache& C) {
+  llvm::ConstantRange result(I->Width);
+  switch (I->K) {
+    case souper::Inst::Const:
+    case souper::Inst::Var : {
+      EvalValue V = getValue(I, C);
+      if (!V.Unavailable) {
+        return llvm::ConstantRange(V.Val);
+      } else {
+        return result; // Whole range
+      }
+    }
+    case souper::Inst::Add: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.add(R1);
+    }
+    // case souper::Inst::AddNSW: {
+    //   auto R0 = FindConstantRange(I->Ops[0], C);
+    //   auto R1 = FindConstantRange(I->Ops[1], C);
+    //   return R0.addNoSignedWrap(R1);
+    // }
+    case souper::Inst::Sub: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.sub(R1);
+    }
+    case souper::Inst::Mul: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.multiply(R1);
+    }
+    case souper::Inst::And: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.binaryAnd(R1);
+    }
+    case souper::Inst::Or: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.binaryOr(R1);
+    }
+    case souper::Inst::Shl: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.shl(R1);
+    }
+    case souper::Inst::AShr: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.ashr(R1);
+    }
+    case souper::Inst::LShr: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.lshr(R1);
+    }
+    case souper::Inst::UDiv: {
+      auto R0 = FindConstantRange(I->Ops[0], C);
+      auto R1 = FindConstantRange(I->Ops[1], C);
+      return R0.udiv(R1);
+    }
+    // TODO: Xor pattern for not, truncs and extends, etc
+    default: return result;
+  }
+}
 
-void printInst(Inst *I) {
-  ReplacementContext RC;
-  RC.printInst(I, llvm::errs(), true);
+bool souper::RangeAnalysis::IsInfeasible(souper::Inst* RHS) {
+  for (int i = 0; i < Inputs.size(); ++i) {
+    auto CR = FindConstantRange(RHS, Inputs[i]);
+    auto C = LHSValues[i];
+    if (!C.Unavailable) {
+      if (!CR.contains(C.Val)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
