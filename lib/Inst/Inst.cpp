@@ -1198,7 +1198,70 @@ llvm::ConstantRange souper::FindConstantRange(souper::Inst* I, souper::ValueCach
   }
 }
 
+class ExhaustConstants {
+public:
+  ExhaustConstants(std::vector<EvalValue> &LHSValues_,
+                   std::vector<ValueCache> &Inputs_, uint low_, uint high_)
+    : LHSValues(LHSValues_), Inputs(Inputs_), low(low_), high(high_) {
+
+  }
+  bool IsInfeasible(souper::Inst *RHS) {
+    // Think of ways to make this faster
+    std::vector<std::pair<Inst *, uint>> Consts;
+    GetPlaceholderConsts(RHS, Consts);
+
+    for (int i = 0; i < Inputs.size(); ++i) {
+      auto &Input = Inputs[i];
+      auto& LHSValue = LHSValues[i];
+
+      if (LHSValue.Unavailable)
+        continue; // could not evaluate LHS for some reason
+
+      do {
+        for (auto p : Consts) {
+          Input[p.first->Name] = {llvm::APInt(p.first->Width, p.second) , false, false};
+        }
+        auto RHSValue = Evaluate(RHS, Input);
+        if (!RHSValue.Unavailable) {
+          if (LHSValue.Val != RHSValue.Val) {
+            return true;
+          }
+        }
+
+      } while (increment(Consts));
+    }
+
+    return false;
+  }
+private:
+  bool increment(std::vector<std::pair<Inst *, uint>> &V) {
+    for (int i = 0; i < V.size(); ++i) {
+      if (V[i].second < high) {
+        V[i].second++;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void GetPlaceholderConsts(Inst *I, std::vector<std::pair<Inst *, uint>> &Result) {
+    // Maybe get this along with the guesses from synthesis?
+    if (I->K == souper::Inst::Reserved) {
+      Result.push_back({I, low});
+    } else {
+      for (auto Op : I->Ops) {
+        GetPlaceholderConsts(Op, Result);
+      }
+    }
+  }
+
+  std::vector<EvalValue> &LHSValues;
+  std::vector<ValueCache> &Inputs;
+  uint low, high;
+};
+
 bool souper::ValueAnalysis::IsInfeasible(souper::Inst* RHS) {
+  ExhaustConstants EC(LHSValues, Inputs, 0, 256);
   for (int i = 0; i < Inputs.size(); ++i) {
     auto C = LHSValues[i];
     if (!C.Unavailable) {
@@ -1210,6 +1273,10 @@ bool souper::ValueAnalysis::IsInfeasible(souper::Inst* RHS) {
       if ((KB.Zero & C.Val) != 0 || (KB.One & ~C.Val) != 0) {
         return true;
       }
+      if (EC.IsInfeasible(RHS)) {
+        return true;
+      }
+
     }
   }
   return false;
