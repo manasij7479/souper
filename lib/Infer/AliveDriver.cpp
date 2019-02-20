@@ -276,9 +276,11 @@ bool souper::AliveDriver::verify (Inst *RHS) {
   tools::TransformVerify tv(t, /*check_each_var=*/false);
 
   if (auto errs = tv.verify()) {
-    std::ostringstream os;
-    os << errs << "\n";
-    llvm::errs() << os.str();
+    if (DebugLevel > 2) {
+      std::ostringstream os;
+      os << errs << "\n";
+      llvm::errs() << os.str();
+    }
     return false; // TODO: Encode errs into ErrorCode
   } else {
     if (DebugLevel > 2)
