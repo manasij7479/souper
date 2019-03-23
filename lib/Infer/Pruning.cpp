@@ -26,20 +26,56 @@ std::string getUniqueName() {
 bool PruningManager::isInfeasible(souper::Inst *RHS,
                                  unsigned StatsLevel) {
   for (int I = 0; I < InputVals.size(); ++I) {
+
+    if (StatsLevel > 2) {
+      llvm::errs() << "  Input:\n";
+      for (auto &&p : InputVals[I]) {
+        if (p.second.hasValue()) {
+          llvm::errs() << "  Var " << p.first->Name << " : "
+                        << p.second.getValue() << "\n";
+        }
+      }
+    }
+
+    if (LHSHasPhi) {
+      auto LHSCR = LHSConstantRange[I];
+      auto RHSCR = findConstantRange(RHS, InputVals[I]);
+      if (LHSCR.intersectWith(RHSCR).isEmptySet()) {
+        if (StatsLevel > 2) {
+          llvm::errs() << "  LHS ConstantRange = " << LHSCR << "\n";
+          llvm::errs() << "  RHS ConstantRange = " << RHSCR << "\n";
+          llvm::errs() << "  pruned phi-LHS using CR! ";
+            if (!isConcrete(RHS, false, true)) {
+              llvm::errs() << "Inst had a hole.";
+            } else {
+              llvm::errs() << "Inst had a symbolic const.";
+            }
+        }
+        return true;
+      }
+
+      auto LHSKB = LHSKnownBits[I];
+      auto RHSKB = findKnownBits(RHS, InputVals[I]);
+      if ((LHSKB.Zero & RHSKB.One) != 0 || (LHSKB.One & RHSKB.Zero) != 0) {
+        if (StatsLevel > 2) {
+          llvm::errs() << "  LHS KnownBits = " << knownBitsString(LHSKB) << "\n";
+          llvm::errs() << "  RHS KnownBits = " << knownBitsString(RHSKB) << "\n";
+          llvm::errs() << "  pruned phi-LHS using KB! ";
+            if (!isConcrete(RHS, false, true)) {
+              llvm::errs() << "Inst had a hole.";
+            } else {
+              llvm::errs() << "Inst had a symbolic const.";
+            }
+        }
+        return true;
+      }
+
+    }
+
     auto C = LHSValues[I];
     if (C.hasValue()) {
       auto Val = C.getValue();
-      if (StatsLevel > 2) {
-        llvm::errs() << "  Input:\n";
-        for (auto &&p : InputVals[I]) {
-          if (p.second.hasValue()) {
-            llvm::errs() << "  Var " << p.first->Name << " : "
-                         << p.second.getValue() << "\n";
-          }
-        }
-        llvm::errs() << "  LHS value = " << Val << "\n";
-      }
-
+      llvm::errs() << "  LHS value = " << Val << "\n";
       if (!isConcrete(RHS)) {
         auto CR = findConstantRange(RHS, InputVals[I]);
         if (StatsLevel > 2)
@@ -174,8 +210,18 @@ void PruningManager::init() {
 
   InputVals = generateInputSets(InputVars);
 
-  for (auto &&Input : InputVals) {
-    LHSValues.push_back(evaluateInst(LHS, Input));
+  if (!hasGivenInst(LHS, [](Inst *I){ return I->K == Inst::Phi;})) {
+    // No phi nodes, can deterministically evaluate
+    for (auto &&Input : InputVals) {
+      LHSValues.push_back(evaluateInst(LHS, Input));
+    }
+  } else {
+    // Have to abstract interpret LHS because of phi
+    LHSHasPhi = true;
+    for (auto &&Input : InputVals) {
+      LHSKnownBits.push_back(findKnownBits(LHS, Input, true));
+      LHSConstantRange.push_back(findConstantRange(LHS, Input, true));
+    }
   }
 
   if (StatsLevel > 1) {
