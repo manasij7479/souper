@@ -297,6 +297,17 @@ void separatePCs(const std::vector<InstMapping> &PCs,
                  std::map<Inst *, llvm::APInt> *ConstMap,
                  bool CloneVars);
 
+class SMTLIBSolver;
+struct SynthesisContext {
+  InstContext &IC;
+  SMTLIBSolver *SMTSolver;
+  Inst *LHS;
+  Inst *LHSUB;
+  const std::vector<InstMapping> &PCs;
+  const BlockPCs &BPCs;
+  unsigned Timeout;
+};
+
 }
 
 #endif  // SOUPER_INST_INST_H

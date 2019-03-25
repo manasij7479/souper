@@ -37,6 +37,7 @@ public:
                              InstContext &IC, unsigned Timeout);
 
 };
+
 }
 
 #endif  // SOUPER_EXHAUSTIVE_SYNTHESIS_H
