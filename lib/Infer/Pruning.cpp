@@ -16,6 +16,7 @@
 #include "souper/Infer/Pruning.h"
 
 #include <cstdlib>
+#include <deque>
 
 namespace souper {
 
@@ -254,9 +255,47 @@ void PruningManager::init() {
 }
 
 // FIXME: Only generate inputs which obey PC
+#define MAX_INPUTS 10
 std::vector<ValueCache> PruningManager::generateInputSets(
   std::vector<Inst *> &Inputs) {
   std::vector<ValueCache> InputSets;
+//
+//   std::map<Inst *, std::vector<llvm::APInt>> TriedVars;
+//
+//   ValueCache Current;
+//   bool Continue = true;
+//   for (auto Var : Inputs) {
+//     auto Num = getNextInputVal(Var, SC, TriedVars, Continue);
+//     if (!Continue) {
+//       return InputSets;
+//     }
+//     Current[Var] = {Num};
+//   }
+//   InputSets.push_back(Current);
+//
+//   std::deque<Inst *> VarQueue;
+//   std::copy(Inputs.begin(), Inputs.end(), VarQueue.begin());
+//   while (!VarQueue.empty() && InputSets.size() < MAX_INPUT) {
+//     auto Var = VarQueue.front();
+//     VarQueue.pop_front();
+//
+//     auto Num = getNextInputVal(Var, SC, TriedVars, Continue);
+//     if (Continue) {
+//       VarQueue.push_back(Var);
+//     }
+//     Current[Var] = {Num};
+//     InputSets.push_back(Current);
+//   }
+//
+//   for (auto C : InputSets) {
+//     llvm::errs() << "START:\n";
+//     for (auto P : C) {
+//       llvm::errs() << P.first->Name << " " << P.second.getValue() << "\n";
+//     }
+//     llvm::errs() << "END\n";
+//   }
+//
+//   return InputSets;
 
   ValueCache Cache;
   int64_t Current = 0;

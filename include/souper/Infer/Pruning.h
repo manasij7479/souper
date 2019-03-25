@@ -44,6 +44,12 @@ private:
   std::vector<ValueCache> generateInputSets(std::vector<Inst *> &Inputs);
 };
 
+//FIXME Layering violation, refactor into independent file
+llvm::APInt getNextInputVal(Inst *Var, SynthesisContext &SC,
+                      std::map<Inst *, std::vector<llvm::APInt>> &TriedVars,
+                      bool &HasNextInputValue);
+
+
 }
 
 #endif

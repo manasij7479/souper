@@ -425,31 +425,25 @@ void getGuesses(std::vector<Inst *> &Guesses,
   }
 }
 
-APInt getNextInputVal(Inst *Var,
-                      Inst *LHSUB,
-                      const BlockPCs &BPCs,
-                      const std::vector<InstMapping> &PCs,
+APInt souper::getNextInputVal(Inst *Var, SynthesisContext &SC,
                       std::map<Inst *, std::vector<llvm::APInt>> &TriedVars,
-                      InstContext &IC,
-                      SMTLIBSolver *SMTSolver,
-                      unsigned Timeout,
                       bool &HasNextInputValue) {
 
   // TODO
   // Specialize input values respecting blockpcs
-  if (!BPCs.empty()) {
+  if (!SC.BPCs.empty()) {
     HasNextInputValue = false;
     return APInt(Var->Width, 0);
   }
 
   HasNextInputValue = true;
-  Inst *Ante = IC.getConst(APInt(1, true));
-  Ante = IC.getInst(Inst::And, 1, {Ante, LHSUB});
-  for (auto PC : PCs ) {
-    Inst* Eq = IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
-    Inst* PCUB = getUBInstCondition(IC, Eq);
-    Ante = IC.getInst(Inst::And, 1, {Ante, Eq});
-    Ante = IC.getInst(Inst::And, 1, {Ante, PCUB});
+  Inst *Ante = SC.IC.getConst(APInt(1, true));
+  Ante = SC.IC.getInst(Inst::And, 1, {Ante, SC.LHSUB});
+  for (auto PC : SC.PCs ) {
+    Inst* Eq = SC.IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
+    Inst* PCUB = getUBInstCondition(SC.IC, Eq);
+    Ante = SC.IC.getInst(Inst::And, 1, {Ante, Eq});
+    Ante = SC.IC.getInst(Inst::And, 1, {Ante, PCUB});
   }
 
   // If a variable is neither found in PCs or TriedVar, return APInt(0)
@@ -464,19 +458,19 @@ APInt getNextInputVal(Inst *Var,
   }
 
   for (auto Value : TriedVars[Var]) {
-    Inst* Ne = IC.getInst(Inst::Ne, 1, {Var, IC.getConst(Value)});
-    Ante = IC.getInst(Inst::And, 1, {Ante, Ne});
+    Inst* Ne = SC.IC.getInst(Inst::Ne, 1, {Var, SC.IC.getConst(Value)});
+    Ante = SC.IC.getInst(Inst::And, 1, {Ante, Ne});
   }
 
-  InstMapping Mapping(Ante, IC.getConst(APInt(1, true)));
+  InstMapping Mapping(Ante, SC.IC.getConst(APInt(1, true)));
 
   std::vector<Inst *> ModelInsts;
   std::vector<llvm::APInt> ModelVals;
-  std::string Query = BuildQuery(IC, {}, {}, Mapping, &ModelInsts, /*Negate=*/ true);
+  std::string Query = BuildQuery(SC.IC, {}, {}, Mapping, &ModelInsts, /*Negate=*/ true);
 
   bool PCQueryIsSat;
   std::error_code EC;
-  EC = SMTSolver->isSatisfiable(Query, PCQueryIsSat, ModelInsts.size(), &ModelVals, Timeout);
+  EC = SC.SMTSolver->isSatisfiable(Query, PCQueryIsSat, ModelInsts.size(), &ModelVals, SC.Timeout);
 
   if (EC || !PCQueryIsSat) {
     if (VarHasTried) {
@@ -484,8 +478,7 @@ APInt getNextInputVal(Inst *Var,
       // unsat, then clear the state and call the getNextInputVal() again to
       // get a new guess
       TriedVars.erase(Var);
-      return getNextInputVal(Var, LHSUB, BPCs, PCs, TriedVars, IC,
-                             SMTSolver, Timeout, HasNextInputValue);
+      return getNextInputVal(Var, SC, TriedVars, HasNextInputValue);
     } else {
       // No guess record for Var found and query tells unsat, we can conclude
       // that no possible guess there
@@ -764,9 +757,7 @@ findSatisfyingConstantMap(SynthesisContext &SC, InstConstList &BadConsts,
 
       std::map<Inst *, llvm::APInt> VarMap;
       for (auto Var: Vars) {
-        APInt NextInput = getNextInputVal(Var, SC.LHSUB, SC.BPCs, SC.PCs, TriedVars, SC.IC,
-                                          SC.SMTSolver, SC.Timeout,
-                                          HasNextInputValue);
+        APInt NextInput = getNextInputVal(Var, SC, TriedVars, HasNextInputValue);
         if (!HasNextInputValue)
           break;
         VarMap.insert(std::pair<Inst *, llvm::APInt>(Var, NextInput));
