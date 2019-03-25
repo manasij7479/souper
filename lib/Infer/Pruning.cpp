@@ -71,59 +71,59 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
         }
         return true;
       }
-
-    }
-
-    auto C = LHSValues[I];
-    if (C.hasValue()) {
-      auto Val = C.getValue();
-      llvm::errs() << "  LHS value = " << Val << "\n";
-      if (!isConcrete(RHS)) {
-        auto CR = findConstantRange(RHS, ConcreteInterpreters[I]);
-        if (StatsLevel > 2)
-          llvm::errs() << "  RHS ConstantRange = " << CR << "\n";
-        if (!CR.contains(Val)) {
-          if (StatsLevel > 2) {
-            llvm::errs() << "  pruned using CR! ";
-            if (!isConcrete(RHS, false, true)) {
-              llvm::errs() << "Inst had a hole.";
-            } else {
-              llvm::errs() << "Inst had a symbolic const.";
-            }
-            llvm::errs() << "\n";
-          }
-          return true;
-        }
-        auto KB = findKnownBits(RHS, ConcreteInterpreters[I]);
-        if (StatsLevel > 2)
-          llvm::errs() << "  RHS KnownBits = " << knownBitsString(KB) << "\n";
-        if ((KB.Zero & Val) != 0 || (KB.One & ~Val) != 0) {
-          if (StatsLevel > 2) {
-            llvm::errs() << "  pruned using KB! ";
-            if (!isConcrete(RHS, false, true)) {
-              llvm::errs() << "Inst had a hole.";
-            } else {
-              llvm::errs() << "Inst had a symbolic const.";
-            }
-            llvm::errs() << "\n";
-          }
-          return true;
-        }
-      } else {
-        auto RHSV = ConcreteInterpreters[I].evaluateInst(RHS);
-        if (RHSV.hasValue()) {
-          if (Val != RHSV.getValue()) {
+    } else {
+      auto C = LHSValues[I];
+      if (C.hasValue()) {
+        auto Val = C.getValue();
+        llvm::errs() << "  LHS value = " << Val << "\n";
+        if (!isConcrete(RHS)) {
+          auto CR = findConstantRange(RHS, ConcreteInterpreters[I]);
+          if (StatsLevel > 2)
+            llvm::errs() << "  RHS ConstantRange = " << CR << "\n";
+          if (!CR.contains(Val)) {
             if (StatsLevel > 2) {
-              llvm::errs() << "  RHS value = " << RHSV.getValue() << "\n";
-              llvm::errs() << "  pruned using concrete interpreter!\n";
+              llvm::errs() << "  pruned using CR! ";
+              if (!isConcrete(RHS, false, true)) {
+                llvm::errs() << "Inst had a hole.";
+              } else {
+                llvm::errs() << "Inst had a symbolic const.";
+              }
+              llvm::errs() << "\n";
             }
             return true;
           }
+          auto KB = findKnownBits(RHS, ConcreteInterpreters[I]);
+          if (StatsLevel > 2)
+            llvm::errs() << "  RHS KnownBits = " << knownBitsString(KB) << "\n";
+          if ((KB.Zero & Val) != 0 || (KB.One & ~Val) != 0) {
+            if (StatsLevel > 2) {
+              llvm::errs() << "  pruned using KB! ";
+              if (!isConcrete(RHS, false, true)) {
+                llvm::errs() << "Inst had a hole.";
+              } else {
+                llvm::errs() << "Inst had a symbolic const.";
+              }
+              llvm::errs() << "\n";
+            }
+            return true;
+          }
+        } else {
+          auto RHSV = ConcreteInterpreters[I].evaluateInst(RHS);
+          if (RHSV.hasValue()) {
+            if (Val != RHSV.getValue()) {
+              if (StatsLevel > 2) {
+                llvm::errs() << "  RHS value = " << RHSV.getValue() << "\n";
+                llvm::errs() << "  pruned using concrete interpreter!\n";
+              }
+              return true;
+            }
+          }
         }
       }
+      return isInfeasibleWithSolver(RHS, StatsLevel);
     }
   }
-  return isInfeasibleWithSolver(RHS, StatsLevel);
+  return false;
 }
 
 bool PruningManager::isInfeasibleWithSolver(Inst *RHS, unsigned StatsLevel) {
@@ -211,6 +211,7 @@ void PruningManager::init() {
   // construct a concrete interpreter that caches results for LHS for each input
   for (auto &&Input : InputVals) {
     ConcreteInterpreters.emplace_back(SC.LHS, Input);
+    LHSValues.push_back(ConcreteInterpreters.back().evaluateInst(SC.LHS));
     if (!hasGivenInst(SC.LHS, [](Inst *I){ return I->K == Inst::Phi;})) {
       // No phi nodes, deterministically evaluated
     } else {
@@ -259,88 +260,88 @@ void PruningManager::init() {
 std::vector<ValueCache> PruningManager::generateInputSets(
   std::vector<Inst *> &Inputs) {
   std::vector<ValueCache> InputSets;
-//
-//   std::map<Inst *, std::vector<llvm::APInt>> TriedVars;
-//
-//   ValueCache Current;
-//   bool Continue = true;
-//   for (auto Var : Inputs) {
-//     auto Num = getNextInputVal(Var, SC, TriedVars, Continue);
-//     if (!Continue) {
-//       return InputSets;
-//     }
-//     Current[Var] = {Num};
-//   }
-//   InputSets.push_back(Current);
-//
-//   std::deque<Inst *> VarQueue;
-//   std::copy(Inputs.begin(), Inputs.end(), VarQueue.begin());
-//   while (!VarQueue.empty() && InputSets.size() < MAX_INPUT) {
-//     auto Var = VarQueue.front();
-//     VarQueue.pop_front();
-//
-//     auto Num = getNextInputVal(Var, SC, TriedVars, Continue);
-//     if (Continue) {
-//       VarQueue.push_back(Var);
-//     }
-//     Current[Var] = {Num};
-//     InputSets.push_back(Current);
-//   }
-//
-//   for (auto C : InputSets) {
-//     llvm::errs() << "START:\n";
-//     for (auto P : C) {
-//       llvm::errs() << P.first->Name << " " << P.second.getValue() << "\n";
-//     }
-//     llvm::errs() << "END\n";
-//   }
-//
-//   return InputSets;
 
-  ValueCache Cache;
-  int64_t Current = 0;
-  for (auto &&I : Inputs) {
-    if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, Current++)};
-  }
-  InputSets.push_back(Cache);
+  std::map<Inst *, std::vector<llvm::APInt>> TriedVars;
 
-  for (auto &&I : Inputs) {
-    if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, 1)};
-  }
-  InputSets.push_back(Cache);
-
-  for (auto &&I : Inputs) {
-    if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, -1)};
-  }
-  InputSets.push_back(Cache);
-
-  for (auto &&I : Inputs) {
-    if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, 0xFFF)};
-  }
-  InputSets.push_back(Cache);
-
-  constexpr int NumLargeInputs = 5;
-  std::srand(0);
-  for (int i = 0 ; i < NumLargeInputs; ++i ) {
-    for (auto &&I : Inputs) {
-      if (I->K == souper::Inst::Var)
-        Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt(I->Width, -1).getLimitedValue())};
+  ValueCache Current;
+  bool Continue = true;
+  for (auto Var : Inputs) {
+    auto Num = getNextInputVal(Var, SC, TriedVars, Continue);
+    if (!Continue) {
+      return InputSets;
     }
-    InputSets.push_back(Cache);
+    Current[Var] = {Num};
+  }
+  InputSets.push_back(Current);
+
+  std::deque<Inst *> VarQueue;
+  std::copy(Inputs.begin(), Inputs.end(), VarQueue.begin());
+  while (!VarQueue.empty() && InputSets.size() < MAX_INPUT) {
+    auto Var = VarQueue.front();
+    VarQueue.pop_front();
+
+    auto Num = getNextInputVal(Var, SC, TriedVars, Continue);
+    if (Continue) {
+      VarQueue.push_back(Var);
+    }
+    Current[Var] = {Num};
+    InputSets.push_back(Current);
   }
 
-  constexpr int NumSmallInputs = 5;
-  for (int i = 0 ; i < NumSmallInputs; ++i ) {
-    for (auto &&I : Inputs) {
-      if (I->K == souper::Inst::Var)
-        Cache[I] = {llvm::APInt(I->Width, std::rand() % I->Width)};
+  for (auto C : InputSets) {
+    llvm::errs() << "START:\n";
+    for (auto P : C) {
+      llvm::errs() << P.first->Name << " " << P.second.getValue() << "\n";
     }
-    InputSets.push_back(Cache);
+    llvm::errs() << "END\n";
   }
+
+  return InputSets;
+
+//   ValueCache Cache;
+//   int64_t Current = 0;
+//   for (auto &&I : Inputs) {
+//     if (I->K == souper::Inst::Var)
+//       Cache[I] = {llvm::APInt(I->Width, Current++)};
+//   }
+//   InputSets.push_back(Cache);
+//
+//   for (auto &&I : Inputs) {
+//     if (I->K == souper::Inst::Var)
+//       Cache[I] = {llvm::APInt(I->Width, 1)};
+//   }
+//   InputSets.push_back(Cache);
+//
+//   for (auto &&I : Inputs) {
+//     if (I->K == souper::Inst::Var)
+//       Cache[I] = {llvm::APInt(I->Width, -1)};
+//   }
+//   InputSets.push_back(Cache);
+//
+//   for (auto &&I : Inputs) {
+//     if (I->K == souper::Inst::Var)
+//       Cache[I] = {llvm::APInt(I->Width, 0xFFF)};
+//   }
+//   InputSets.push_back(Cache);
+//
+//   constexpr int NumLargeInputs = 5;
+//   std::srand(0);
+//   for (int i = 0 ; i < NumLargeInputs; ++i ) {
+//     for (auto &&I : Inputs) {
+//       if (I->K == souper::Inst::Var)
+//         Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt(I->Width, -1).getLimitedValue())};
+//     }
+//     InputSets.push_back(Cache);
+//   }
+//
+//   constexpr int NumSmallInputs = 5;
+//   for (int i = 0 ; i < NumSmallInputs; ++i ) {
+//     for (auto &&I : Inputs) {
+//       if (I->K == souper::Inst::Var)
+//         Cache[I] = {llvm::APInt(I->Width, std::rand() % I->Width)};
+//     }
+//     InputSets.push_back(Cache);
+//   }
 
   return InputSets;
 }
