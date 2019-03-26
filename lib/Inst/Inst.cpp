@@ -88,7 +88,7 @@ bool Inst::operator<(const Inst &Other) const {
 
   if (HarvestFrom != Other.HarvestFrom)
     return HarvestFrom < Other.HarvestFrom;
-  llvm_unreachable("Should have found an unequal operand");
+  return false;
 }
 
 const std::vector<Inst *> &Inst::orderedOps() const {
