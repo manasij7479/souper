@@ -322,12 +322,28 @@ namespace souper {
 #define KB2 findKnownBits(I->Ops[2], CI, PartialEval)
 #define VAL(INST) getValue(INST, CI, PartialEval)
 
-  llvm::KnownBits mergeKnownBits(llvm::KnownBits A, llvm::KnownBits B) {
-    KnownBits Result(A.getBitWidth());
-    for (unsigned i = 0; i < A.getBitWidth(); i++) {
-      if (A.One[i] == B.One[i] && B.One[i])
+  llvm::KnownBits mergeKnownBits(std::vector<llvm::KnownBits> vec) {
+    assert(vec.size() > 0);
+
+    auto width = vec[0].getBitWidth();
+    for (unsigned i = 1; i < vec.size(); i++) {
+      if (width != vec[i].getBitWidth())
+	llvm::report_fatal_error("mergeKnownBits: bitwidth should be same of all inputs");
+    }
+
+    KnownBits Result(width);
+    for (unsigned i = 0; i < width; i++) {
+      bool one = vec[0].One[i];
+      bool zero = vec[0].Zero[i];
+      for (unsigned j = 1; j < vec.size(); j++) {
+	if (!one || !vec[j].One[i])
+	  one = false;
+	if (!zero || !vec[j].Zero[i])
+	  zero = false;
+      }
+      if (one)
         Result.One.setBit(i);
-      if (A.Zero[i] == B.Zero[i] && A.Zero[i])
+      if (zero)
         Result.Zero.setBit(i);
     }
     return Result;
@@ -350,8 +366,13 @@ namespace souper {
     }
 
     switch(I->K) {
-    case Inst::Phi:
-      return mergeKnownBits(KB1, KB2);
+    case Inst::Phi: {
+      std::vector<llvm::KnownBits> vec;
+      for (auto &Op : I->Ops) {
+	vec.emplace_back(findKnownBits(Op, CI, PartialEval));
+      }
+      return mergeKnownBits(vec);
+    }
     case Inst::AddNUW :
     case Inst::AddNW :
     case Inst::Add:
@@ -423,7 +444,7 @@ namespace souper {
 //   case AShrExact:
 //     return "ashrexact";
     case Inst::Select:
-      return mergeKnownBits(KB1, KB2);
+      return mergeKnownBits({KB1, KB2});
     case Inst::ZExt:
       return KB0.zext(I->Width);
     case Inst::SExt:
@@ -485,13 +506,17 @@ namespace souper {
       return Op0KB;
     }
     case Inst::Cttz: {
-      int activeBits = std::ceil(std::log2(KB0.countMaxTrailingZeros()));
-      Result.Zero.setHighBits(KB0.getBitWidth() - activeBits);
+      if (KB0.countMaxTrailingZeros()) {
+	int activeBits = std::ceil(std::log2(KB0.countMaxTrailingZeros()));
+	Result.Zero.setHighBits(KB0.getBitWidth() - activeBits);
+      }
       return Result;
     }
     case Inst::Ctlz: {
-      int activeBits = std::ceil(std::log2(KB0.countMaxLeadingZeros()));
-      Result.Zero.setHighBits(KB0.getBitWidth() - activeBits);
+      if (KB0.countMaxLeadingZeros()) {
+	int activeBits = std::ceil(std::log2(KB0.countMaxLeadingZeros()));
+	Result.Zero.setHighBits(KB0.getBitWidth() - activeBits);
+      }
       return Result;
     }
 //   case FShl:
@@ -666,7 +691,8 @@ namespace souper {
     case Inst::CtPop:
       return llvm::ConstantRange(llvm::APInt(I->Width, 0),
                                  llvm::APInt(I->Width, I->Ops[0]->Width + 1));
-    case Inst::Phi: LLVM_FALLTHROUGH;
+    case Inst::Phi:
+      return CR0.unionWith(CR1);
     case Inst::Select:
       return CR1.unionWith(CR2);
       //     case Inst::SDiv: {

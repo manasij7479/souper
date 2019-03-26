@@ -112,10 +112,12 @@ namespace souper {
         return EvalValue::ub();
 
     // phi and select only take poison from their chosen input
-    if (Inst->K != Inst::Phi && Inst->K != Inst::Select) {
+    if (Inst->K != Inst::Select) {
       for (auto &A : Args)
         if (A.K == EvalValue::ValueKind::Poison)
           return EvalValue::poison();
+    } else if (Args[0].K == EvalValue::ValueKind::Poison) {
+      return EvalValue::poison();
     }
 
     for (auto &A : Args)
@@ -140,7 +142,7 @@ namespace souper {
       // operands. If we ever want to deterministically interpret an LHS
       // containing a phi, this needs to start returning a list, or there needs
       // to be enough information in BlockPCs to interpret ARG0
-      return ARG1;;
+      return Args[1];
 
     case Inst::Add:
       return {ARG0 + ARG1};

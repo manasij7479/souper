@@ -75,7 +75,8 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
       auto C = ConcreteInterpreters[I].evaluateInst(LHS);
       if (C.hasValue()) {
         auto Val = C.getValue();
-        llvm::errs() << "  LHS value = " << Val << "\n";
+	if (StatsLevel > 2)
+	  llvm::errs() << "  LHS value = " << Val << "\n";
         if (!isConcrete(RHS)) {
           auto CR = findConstantRange(RHS, ConcreteInterpreters[I]);
           if (StatsLevel > 2)
@@ -216,12 +217,11 @@ void PruningManager::init() {
 
   InputVals = generateInputSets(InputVars);
 
-  if (!hasGivenInst(LHS, [](Inst *I){ return I->K == Inst::Phi;})) {
-    // No phi nodes, can deterministically evaluate
-    for (auto &&Input : InputVals) {
-      ConcreteInterpreters.emplace_back(LHS, Input);
-    }
-  } else {
+  for (auto &&Input : InputVals) {
+    ConcreteInterpreters.emplace_back(LHS, Input);
+  }
+
+  if (hasGivenInst(LHS, [](Inst *I){ return I->K == Inst::Phi;})) {
     // Have to abstract interpret LHS because of phi
     LHSHasPhi = true;
     for (unsigned I = 0; I < InputVals.size(); I++) {
