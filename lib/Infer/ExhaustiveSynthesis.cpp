@@ -862,9 +862,9 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   std::error_code EC;
   generateAndSortGuesses(SC, Guesses);
 
-  if (Guesses.empty()) {
+//   if (Guesses.empty()) {
     return EC;
-  }
+//   }
 
   std::map<Inst *, Inst *> InstCache;
   std::map<Block *, Block *> BlockCache;

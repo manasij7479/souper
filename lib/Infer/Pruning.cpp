@@ -27,6 +27,15 @@ std::string getUniqueName() {
 // TODO : Comment out debug stmts and conditions before benchmarking
 bool PruningManager::isInfeasible(souper::Inst *RHS,
                                  unsigned StatsLevel) {
+
+  bool CR_ = false;
+  bool KB_ = false;
+  bool Interp = false;
+  llvm::errs() << "expout START " << RHS->getKindName(RHS->K) << "\n";
+  llvm::errs() << "expout HOLE " << (!isConcrete(RHS, false, true) ? "TRUE" : "FALSE") << "\n";
+  llvm::errs() << "expout CONST " << (!isConcrete(RHS, true, false) ? "TRUE" : "FALSE") << "\n";
+  llvm::errs() << "expout PHI " << (LHSHasPhi ? "TRUE" : "FALSE") << "\n";
+
   for (int I = 0; I < InputVals.size(); ++I) {
     if (StatsLevel > 2) {
       llvm::errs() << "  Input:\n";
@@ -52,6 +61,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
               llvm::errs() << "Inst had a symbolic const.";
             }
         }
+        CR_ = true;
         return true;
       }
 
@@ -68,6 +78,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
               llvm::errs() << "Inst had a symbolic const.";
             }
         }
+        KB_ = true;
         return true;
       }
 
@@ -91,7 +102,8 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
               }
               llvm::errs() << "\n";
             }
-            return true;
+            CR_ = true;
+//             return true;
           }
           auto KB = KnownBitsAnalysis().findKnownBits(RHS, ConcreteInterpreters[I]);
           if (StatsLevel > 2)
@@ -106,7 +118,8 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
               }
               llvm::errs() << "\n";
             }
-            return true;
+            KB_ = true;
+//             return true;
           }
         } else {
           auto RHSV = ConcreteInterpreters[I].evaluateInst(RHS);
@@ -116,13 +129,29 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
                 llvm::errs() << "  RHS value = " << RHSV.getValue() << "\n";
                 llvm::errs() << "  pruned using concrete interpreter!\n";
               }
-              return true;
+              Interp = true;
+//               return true;
             }
           }
         }
       }
     }
   }
+
+  if (KB_)
+    llvm::errs() << "expout KB TRUE\n";
+  else
+    llvm::errs() << "expout KB FALSE\n";
+
+  if (CR_)
+    llvm::errs() << "expout CR TRUE\n";
+  else
+    llvm::errs() << "expout CR FALSE\n";
+
+  if (Interp)
+    llvm::errs() << "expout INTERP TRUE\n";
+  else
+    llvm::errs() << "expout INTERP FALSE\n";
 
   if (!LHSHasPhi) {
     return isInfeasibleWithSolver(RHS, StatsLevel);
@@ -132,11 +161,12 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
 }
 
 bool PruningManager::isInfeasibleWithSolver(Inst *RHS, unsigned StatsLevel) {
+  bool S_ = false;
   for (int I = 0; I < InputVals.size(); ++I) {
     auto C = ConcreteInterpreters[I].evaluateInst(SC.LHS);
     if (C.hasValue()) {
       auto Val = C.getValue();
-      if (!isConcrete(RHS, false, true)) {
+      if (!isConcrete(RHS, true, true)) {
         std::vector<Inst *> Holes, ModelVars;
         getReservedInsts(RHS, Holes);
         std::map<Inst *, Inst *> InstCache;
@@ -178,6 +208,7 @@ bool PruningManager::isInfeasibleWithSolver(Inst *RHS, unsigned StatsLevel) {
           continue;
         }
         if (!Result) {
+          S_ = true; break;
           if (StatsLevel > 2) {
             llvm::errs() << "  pruned using Solver! ";
             if (!isConcrete(RHS, false, true)) {
@@ -187,7 +218,7 @@ bool PruningManager::isInfeasibleWithSolver(Inst *RHS, unsigned StatsLevel) {
             }
             llvm::errs() << "\n";
           }
-          return true;
+//           return true;
         } else {
           if (StatsLevel > 2) {
             llvm::errs() << "Failed to prune using Solver, Solver returned SAT\n";
@@ -202,6 +233,11 @@ bool PruningManager::isInfeasibleWithSolver(Inst *RHS, unsigned StatsLevel) {
       }
     }
   }
+  if (S_)
+    llvm::errs() << "\nexpout SOLVER TRUE\n";
+  else
+    llvm::errs() << "expout SOLVER FALSE\n";
+  llvm::errs() << "expout END\n\n";
   return false;
 }
 
