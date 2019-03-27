@@ -239,6 +239,10 @@ if ($souper) {
       push @ARGV, ("-mllvm", "-souper-exhaustive-synthesis");
     }
 
+    if (exists $ENV{"SOUPER_DATAFLOW_PRUNING"}) {
+      push @ARGV, ("-mllvm", "-souper-dataflow-pruning");
+    }
+
     if (exists $ENV{"SOUPER_STATS"}) {
         push @ARGV, ("-mllvm", "-stats");
     }
