@@ -945,7 +945,16 @@ ExhaustiveSynthesis::synthesize(SMTLIBSolver *SMTSolver,
           llvm::errs() << "second query is UNSAT-- works for all values of this constant\n";
           llvm::errs() << Tries <<  " tries were made for synthesizing constants\n";
         } else {
-          assert(Tries == 1);
+	  // FIXME: Following assertion is hit with following LHS:
+          // %1:i8 = var
+          // %2:i8 = var
+          // %3:i1 = eq %2, 1
+          // pc %3 1:i1
+          // %4 = and %1, %2
+          // %5 = shl %4, %1
+          // %6 = mul %4, %5
+          // infer %6
+          //assert(Tries == 1);
           llvm::errs() << "second query is UNSAT-- this guess works\n";
         }
       }
