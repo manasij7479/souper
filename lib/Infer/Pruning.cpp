@@ -214,6 +214,14 @@ PruningManager::PruningManager(
 
 void PruningManager::init() {
 
+  Ante = SC.IC.getConst(llvm::APInt(1, true));
+  for (auto PC : SC.PCs ) {
+    Inst *Eq = SC.IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
+    Ante = SC.IC.getInst(Inst::And, 1, {Ante, Eq});
+  }
+
+  findVars(Ante, InputVars);
+
   InputVals = generateInputSets(InputVars);
 
   for (auto &&Input : InputVals) {
@@ -260,14 +268,8 @@ void PruningManager::init() {
   }
 }
 
-bool PruningManager::isInputValid(ValueCache Cache) {
+bool PruningManager::isInputValid(ValueCache &Cache) {
   ConcreteInterpreter CI(SC.LHS, Cache);
-
-  Inst *Ante = SC.IC.getConst(llvm::APInt(1, true));
-  for (auto PC : SC.PCs ) {
-    Inst *Eq = SC.IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
-    Ante = SC.IC.getInst(Inst::And, 1, {Ante, Eq});
-  }
 
   if (auto V = CI.evaluateInst(Ante); V.hasValue() && V.getValue().getLimitedValue() == 1)
     return true;

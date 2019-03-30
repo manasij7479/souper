@@ -42,7 +42,8 @@ private:
   std::vector<Inst *> &InputVars;
   std::vector<ValueCache> generateInputSets(std::vector<Inst *> &Inputs);
   // For the LHS contained in @SC, check if the given input in @Cache is valid.
-  bool isInputValid(ValueCache Cache);
+  bool isInputValid(ValueCache &Cache);
+  Inst *Ante;
 };
 
 }
