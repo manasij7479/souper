@@ -24,7 +24,7 @@
 
 static const unsigned MaxTries = 30;
 static const unsigned MaxInputSpecializationTries = 2;
-static const unsigned MaxLHSCands = 15;
+static const unsigned MaxLHSCands = 3;
 
 bool UseAlive;
 unsigned DebugLevel;

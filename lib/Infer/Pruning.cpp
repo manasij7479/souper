@@ -48,6 +48,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
     }
 
     if (LHSHasPhi) {
+      if (!CR_) {
       auto LHSCR = LHSConstantRange[I];
       auto RHSCR = ConstantRangeAnalysis().findConstantRange(RHS, ConcreteInterpreters[I]);
       if (LHSCR.intersectWith(RHSCR).isEmptySet()) {
@@ -62,9 +63,10 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
             }
         }
         CR_ = true;
-        return true;
+//         return true;
       }
-
+      }
+      if (!KB_) {
       auto LHSKB = LHSKnownBits[I];
       auto RHSKB = KnownBitsAnalysis().findKnownBits(RHS, ConcreteInterpreters[I]);
       if ((LHSKB.Zero & RHSKB.One) != 0 || (LHSKB.One & RHSKB.Zero) != 0) {
@@ -79,7 +81,8 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
             }
         }
         KB_ = true;
-        return true;
+//         return true;
+      }
       }
 
     } else {
@@ -89,6 +92,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
 	if (StatsLevel > 2)
 	  llvm::errs() << "  LHS value = " << Val << "\n";
         if (!isConcrete(RHS)) {
+          if (!CR_) {
           auto CR = ConstantRangeAnalysis().findConstantRange(RHS, ConcreteInterpreters[I]);
           if (StatsLevel > 2)
             llvm::errs() << "  RHS ConstantRange = " << CR << "\n";
@@ -105,6 +109,9 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
             CR_ = true;
 //             return true;
           }
+          }
+
+          if (!KB_) {
           auto KB = KnownBitsAnalysis().findKnownBits(RHS, ConcreteInterpreters[I]);
           if (StatsLevel > 2)
             llvm::errs() << "  RHS KnownBits = " << KnownBitsAnalysis::knownBitsString(KB) << "\n";
@@ -121,7 +128,9 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
             KB_ = true;
 //             return true;
           }
+          }
         } else {
+          if (!Interp) {
           auto RHSV = ConcreteInterpreters[I].evaluateInst(RHS);
           if (RHSV.hasValue()) {
             if (Val != RHSV.getValue()) {
@@ -132,6 +141,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
               Interp = true;
 //               return true;
             }
+          }
           }
         }
       }
@@ -156,6 +166,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
   if (!LHSHasPhi) {
     return isInfeasibleWithSolver(RHS, StatsLevel);
   } else {
+    llvm::errs() << "expout SOLVER FALSE\nexpout END\n\n";
     return false;
   }
 }
@@ -163,6 +174,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
 bool PruningManager::isInfeasibleWithSolver(Inst *RHS, unsigned StatsLevel) {
   bool S_ = false;
   for (int I = 0; I < InputVals.size(); ++I) {
+    if (S_) continue;
     auto C = ConcreteInterpreters[I].evaluateInst(SC.LHS);
     if (C.hasValue()) {
       auto Val = C.getValue();
