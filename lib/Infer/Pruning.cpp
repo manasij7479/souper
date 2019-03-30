@@ -260,36 +260,68 @@ void PruningManager::init() {
   }
 }
 
+bool PruningManager::isInputValid(ValueCache Cache) {
+  ConcreteInterpreter CI(SC.LHS, Cache);
+
+  Inst *Ante = SC.IC.getConst(llvm::APInt(1, true));
+  for (auto PC : SC.PCs ) {
+    Inst *Eq = SC.IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
+    Ante = SC.IC.getInst(Inst::And, 1, {Ante, Eq});
+  }
+
+  if (auto V = CI.evaluateInst(Ante); V.hasValue() && V.getValue().getLimitedValue() == 1)
+    return true;
+
+  if (StatsLevel > 2) {
+    llvm::errs() << "Input failed PC check: ";
+    for (auto &&p : Cache) {
+      if (p.first->K != Inst::Var)
+	continue;
+
+      if (p.second.hasValue()) {
+	llvm::errs() << "  Var " << p.first->Name << " : "
+		     << p.second.getValue() << ", ";
+      }
+    }
+    llvm::errs() << '\n';
+  }
+
+  return false;
+}
+
 // FIXME: Only generate inputs which obey PC
 std::vector<ValueCache> PruningManager::generateInputSets(
   std::vector<Inst *> &Inputs) {
   std::vector<ValueCache> InputSets;
 
   ValueCache Cache;
-  int64_t Current = 0;
   for (auto &&I : Inputs) {
     if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, Current++)};
+      Cache[I] = {llvm::APInt(I->Width, 0)};
   }
-  InputSets.push_back(Cache);
+  if (isInputValid(Cache))
+    InputSets.push_back(Cache);
 
   for (auto &&I : Inputs) {
     if (I->K == souper::Inst::Var)
       Cache[I] = {llvm::APInt(I->Width, 1)};
   }
-  InputSets.push_back(Cache);
+  if (isInputValid(Cache))
+    InputSets.push_back(Cache);
 
   for (auto &&I : Inputs) {
     if (I->K == souper::Inst::Var)
       Cache[I] = {llvm::APInt(I->Width, -1)};
   }
-  InputSets.push_back(Cache);
+  if (isInputValid(Cache))
+    InputSets.push_back(Cache);
 
   for (auto &&I : Inputs) {
     if (I->K == souper::Inst::Var)
       Cache[I] = {llvm::APInt(I->Width, 0xFFF)};
   }
-  InputSets.push_back(Cache);
+  if (isInputValid(Cache))
+    InputSets.push_back(Cache);
 
   constexpr int NumLargeInputs = 5;
   std::srand(0);
@@ -298,7 +330,8 @@ std::vector<ValueCache> PruningManager::generateInputSets(
       if (I->K == souper::Inst::Var)
         Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt(I->Width, -1).getLimitedValue())};
     }
-    InputSets.push_back(Cache);
+    if (isInputValid(Cache))
+      InputSets.push_back(Cache);
   }
 
   constexpr int NumSmallInputs = 5;
@@ -307,7 +340,8 @@ std::vector<ValueCache> PruningManager::generateInputSets(
       if (I->K == souper::Inst::Var)
         Cache[I] = {llvm::APInt(I->Width, std::rand() % I->Width)};
     }
-    InputSets.push_back(Cache);
+    if (isInputValid(Cache))
+      InputSets.push_back(Cache);
   }
 
   return InputSets;
