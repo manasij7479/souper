@@ -52,6 +52,7 @@ private:
   bool translateRoot(const Inst *I, const Inst *PC, IR::Function &F, Cache &ExprCache);
   bool translateAndCache(const Inst *I, IR::Function &F, Cache &ExprCache);
   bool translateDataflowFacts(const Inst *I, IR::Function &F, Cache &ExprCache);
+  IR::Value *getBlockPCConstraints(BlockPCs BPCs);
   IR::Function LHSF;
 
   int InstNumbers;

@@ -537,6 +537,29 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
       return true;
     }
 
+    case souper::Inst::Phi: {
+      auto V = Builder.var(t, Name);
+      if (!translateAndCache(I->Ops[0], F, ExprCache))
+        return false;
+
+      auto PhiConstraints =
+        Builder.iCmp(t, Name + "_" + std::to_string(0),
+                     IR::ICmp::EQ, V, ExprCache[I->Ops[0]]);
+      for (int i = 1; i < I->Ops.size(); ++i) {
+        if (!translateAndCache(I->Ops[i], F, ExprCache))
+          return false;
+
+        auto NewC =
+          Builder.iCmp(t, Name + "_" + std::to_string(i),
+                       IR::ICmp::EQ, V, ExprCache[I->Ops[i]]);
+        PhiConstraints =
+          Builder.binOp(t, Name + "_or_" + std::to_string(i),
+                        PhiConstraints, NewC, IR::BinOp::Or);
+      }
+      Builder.assume(PhiConstraints);
+      return true;
+    }
+
     #define BINOP(SOUPER, ALIVE) case souper::Inst::SOUPER: {    \
       ExprCache[I] = Builder.binOp(t, Name, ExprCache[I->Ops[0]],\
       ExprCache[I->Ops[1]], IR::BinOp::ALIVE);                   \
@@ -685,3 +708,8 @@ bool souper::isCandidateInfeasible(souper::Inst* RHS, souper::ValueCache& C,
 
   return !Pruner.verify(RHS, RHSAssume);
 }
+
+// IR::Value * souper::AliveDriver::getBlockPCConstraints(souper::BlockPCs BPCs) {
+//   FunctionBuilder B(LHSF);
+//   return B.val(getType(1), 1); // TRUE
+// }
