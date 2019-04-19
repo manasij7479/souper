@@ -88,7 +88,7 @@ public:
   template <typename T>
   void assume(T &&V) {
     auto AI =
-      std::make_unique<IR::Assume>(*std::move(V), /*if_non_poison=*/ true);
+      std::make_unique<IR::Assume>(*std::move(V), /*if_non_poison=*/ false);
       //TODO: FIgure out whether if_non_poison can be uconditionally true
     F.getBB("").addInstr(std::move(AI));
   }
@@ -538,18 +538,18 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
     }
 
     case souper::Inst::Phi: {
-      auto V = Builder.var(t, Name);
+      IR::Value *V = Builder.var(t, Name);
       if (!translateAndCache(I->Ops[0], F, ExprCache))
         return false;
 
-      auto PhiConstraints =
+      IR::Value *PhiConstraints =
         Builder.iCmp(t, Name + "_" + std::to_string(0),
                      IR::ICmp::EQ, V, ExprCache[I->Ops[0]]);
       for (int i = 1; i < I->Ops.size(); ++i) {
         if (!translateAndCache(I->Ops[i], F, ExprCache))
           return false;
 
-        auto NewC =
+        IR::Value *NewC =
           Builder.iCmp(t, Name + "_" + std::to_string(i),
                        IR::ICmp::EQ, V, ExprCache[I->Ops[i]]);
         PhiConstraints =
@@ -557,6 +557,8 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
                         PhiConstraints, NewC, IR::BinOp::Or);
       }
       Builder.assume(PhiConstraints);
+      F.print(std::cerr);
+      std::cerr << std::endl;
       return true;
     }
 
