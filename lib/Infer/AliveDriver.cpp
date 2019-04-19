@@ -306,6 +306,8 @@ souper::AliveDriver::AliveDriver(Inst *LHS_, Inst *PreCondition_, InstContext &I
   if (!translateRoot(LHS, PreCondition, LHSF, LExprCache)) {
     llvm::report_fatal_error("Failed to translate LHS.\n");
   }
+
+//   LHSF.print(std::cerr);
 }
 
 //TODO: Return an APInt when alive supports it
@@ -557,8 +559,9 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
                         PhiConstraints, NewC, IR::BinOp::Or);
       }
       Builder.assume(PhiConstraints);
-      F.print(std::cerr);
-      std::cerr << std::endl;
+//       F.print(std::cerr);
+//       std::cerr << std::endl;
+      ExprCache[I] = V;
       return true;
     }
 
