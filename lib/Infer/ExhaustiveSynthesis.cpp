@@ -576,7 +576,7 @@ std::error_code synthesizeWithAlive(SynthesisContext &SC, Inst *&RHS,
     Ante = SC.IC.getInst(Inst::And, 1, {Ante, Eq});
   }
 
-  AliveDriver Verifier(SC.LHS, Ante, SC.IC);
+  AliveDriver Verifier(SC.LHS, Ante, SC.BPCs, SC.IC);
   for (auto &&G : Guesses) {
     std::set<const Inst *> Visited;
     auto C = findConst(G, Visited);
@@ -719,114 +719,6 @@ void generateAndSortGuesses(SynthesisContext &SC,
 
 
 typedef std::map<Inst*, std::vector<llvm::APInt>> InstConstList;
-
-#if (false)
-std::map<Inst *, llvm::APInt>
-findSatisfyingConstantMap(SynthesisContext &SC, InstConstList &BadConsts,
-                          InstConstList &TriedVars,
-                          std::vector<Inst *> ConstList,
-                          std::vector<Inst *> Vars,
-                          Inst *RHSGuess,int &UnsatCounter) {
-  // this SAT query will give us possible constants
-
-  // avoid choices for constants that have not worked out in previous iterations
-  // ((R1 != C11 ) \/ (R2 != C21 )) /\ ((R1 != C12 ) \/ (R2 != C22 )) /\ ...
-  std::error_code EC;
-  std::map<Inst *, Inst *> InstCache;
-  std::map<Block *, Block *> BlockCache;
-  std::map<Inst *, llvm::APInt> ConstMap;
-
-  Inst *AvoidConsts = SC.IC.getConst(APInt(1, true));
-  if (!BadConsts.empty()) {
-    for (unsigned i = 0; i < BadConsts[ConstList[0]].size(); ++i) {
-      Inst *Ante = SC.IC.getConst(APInt(1, false));
-      for (auto C : ConstList) {
-        Inst *Ne = SC.IC.getInst(Inst::Ne, 1, {SC.IC.getConst(BadConsts[C][i]), C });
-        Ante = SC.IC.getInst(Inst::Or, 1, {Ante, Ne});
-      }
-      AvoidConsts = SC.IC.getInst(Inst::And, 1, {Ante, AvoidConsts});
-    }
-  }
-
-  Inst *Ante = SC.IC.getConst(APInt(1, true));
-  if (!Vars.empty()) {
-
-    // Currently MaxInputSpecializationTries can be set to any
-    // non-negative number. However, a limitation here is: since the current
-    // implementation of getNextInputVal() does not specialize a input
-    // variable with two same value, if some program has input type
-    // (i1, i32), because the type of the first argument is i1, there will
-    // be only two specialized input combinations, such as (false, C_1) and
-    // (true, C_2).
-    // TODO: getNextInputVal() need to be more flexible
-    for (unsigned It = 0; It < MaxInputSpecializationTries; It++) {
-      bool HasNextInputValue = false;
-
-      std::map<Inst *, llvm::APInt> VarMap;
-      for (auto Var: Vars) {
-        APInt NextInput = getNextInputVal(Var, SC.LHSUB, SC.BPCs, SC.PCs, TriedVars, SC.IC,
-                                          SC.SMTSolver, SC.Timeout,
-                                          HasNextInputValue);
-        if (!HasNextInputValue)
-          break;
-        VarMap.insert(std::pair<Inst *, llvm::APInt>(Var, NextInput));
-      }
-      if (!HasNextInputValue)
-        break;
-
-      std::map<Inst *, Inst *> InstCache;
-      std::map<Block *, Block *> BlockCache;
-      Inst *Eq =
-        SC.IC.getInst(Inst::Eq, 1,
-                    {getInstCopy(SC.LHS, SC.IC, InstCache, BlockCache, &VarMap, true),
-                    getInstCopy(RHSGuess, SC.IC, InstCache, BlockCache, &VarMap, true)});
-      Ante = SC.IC.getInst(Inst::And, 1, {Eq, Ante});
-    }
-  }
-  Ante = SC.IC.getInst(Inst::And, 1, {SC.IC.getInst(Inst::Eq, 1, {SC.LHS, RHSGuess}), Ante});
-  Ante = SC.IC.getInst(Inst::And, 1, {AvoidConsts, Ante});
-  if (DebugLevel > 3) {
-    ReplacementContext RC;
-    RC.printInst(RHSGuess, llvm::errs(), true);
-  }
-  InstMapping Mapping(Ante,
-                      SC.IC.getConst(APInt(1, true)));
-
-  std::vector<Inst *> ModelInsts;
-  std::vector<llvm::APInt> ModelVals;
-  std::string Query = BuildQuery(SC.IC, SC.BPCs, SC.PCs, Mapping, &ModelInsts, 0, /*Negate=*/true);
-
-  bool FirstSmallQueryIsSat;
-  EC = SC.SMTSolver->isSatisfiable(Query, FirstSmallQueryIsSat,
-                                ModelInsts.size(), &ModelVals, SC.Timeout);
-  if (EC) {
-    if (DebugLevel > 1)
-      llvm::errs() << "error!\n";
-    return {};
-  }
-  if (!FirstSmallQueryIsSat) {
-    UnsatCounter++;
-    if (DebugLevel > 2)
-      llvm::errs() << "first query is unsat, all done with this guess\n";
-    return {};
-  }
-  if (DebugLevel > 3)
-    llvm::errs() << "first query is sat\n";
-
-  for (unsigned J = 0; J != ModelInsts.size(); ++J) {
-    if (ModelInsts[J]->Name.find(ReservedConstPrefix) != std::string::npos) {
-      auto Const = SC.IC.getConst(ModelVals[J]);
-      BadConsts[ModelInsts[J]].push_back(Const->Val);
-      auto res = ConstMap.insert(std::pair<Inst *, llvm::APInt>(ModelInsts[J], Const->Val));
-      if (DebugLevel > 3)
-        llvm::errs() << "constant value = " << Const->Val << "\n";
-      if (!res.second)
-        llvm::report_fatal_error("constant already in map");
-    }
-  }
-  return ConstMap;
-}
-#endif
 
 std::error_code isConcreteCandidateSat(
   SynthesisContext &SC, std::map<Inst *, llvm::APInt> &ConstMap,

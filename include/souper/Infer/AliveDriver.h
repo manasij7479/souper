@@ -29,7 +29,7 @@ namespace souper {
 class AliveDriver {
   typedef std::unordered_map<const Inst *, IR::Value *> Cache;
 public:
-  AliveDriver(Inst *LHS_, Inst *PreCondition_, InstContext &IC_);
+  AliveDriver(Inst *LHS_, Inst *PreCondition_, BlockPCs BPCs_, InstContext &IC_);
 
   std::map<Inst *, llvm::APInt> synthesizeConstants(souper::Inst *RHS);
   std::map<Inst *, llvm::APInt> synthesizeConstantsWithCegis(souper::Inst *RHS, InstContext &IC);
@@ -42,6 +42,7 @@ public:
   }
 private:
   Inst *LHS, *PreCondition;
+  BlockPCs BPCs;
 
   Cache LExprCache, RExprCache;
 
@@ -52,7 +53,7 @@ private:
   bool translateRoot(const Inst *I, const Inst *PC, IR::Function &F, Cache &ExprCache);
   bool translateAndCache(const Inst *I, IR::Function &F, Cache &ExprCache);
   bool translateDataflowFacts(const Inst *I, IR::Function &F, Cache &ExprCache);
-  IR::Value *getBlockPCConstraints(BlockPCs BPCs);
+  IR::Value *getBlockPCConstraints(BlockPCs BPCs, Block *B, IR::Value *Var, Inst *Phi);
   IR::Function LHSF;
 
   int InstNumbers;

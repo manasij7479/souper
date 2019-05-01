@@ -133,7 +133,7 @@ public:
           Ante = IC.getInst(Inst::And, 1, {Ante, Eq});
         }
 
-        AliveDriver Synthesizer(LHS, Ante, IC);
+        AliveDriver Synthesizer(LHS, Ante, BPCs, IC);
         auto ConstantMap = Synthesizer.synthesizeConstants(C);
         if (ConstantMap.find(C) != ConstantMap.end()) {
           RHS = IC.getConst(ConstantMap[C]);

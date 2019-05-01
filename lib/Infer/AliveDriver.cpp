@@ -297,8 +297,9 @@ synthesizeConstantUsingSolver(tools::Transform &t,
   return SynthesisResult;
 }
 
-souper::AliveDriver::AliveDriver(Inst *LHS_, Inst *PreCondition_, InstContext &IC_)
-    : LHS(LHS_), PreCondition(PreCondition_), IC(IC_) {
+souper::AliveDriver::AliveDriver(Inst *LHS_, Inst *PreCondition_,
+                                 BlockPCs BPCs_, InstContext &IC_)
+    : LHS(LHS_), PreCondition(PreCondition_), BPCs(BPCs_), IC(IC_) {
   InstNumbers = 101;
   //FIXME: Magic number. 101 is chosen arbitrarily.
   //This should go away once non-input variable names are not discarded
@@ -686,7 +687,7 @@ bool souper::isTransformationValid(souper::Inst* LHS, souper::Inst* RHS,
     Inst *Eq = IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
     Ante = IC.getInst(Inst::And, 1, {Ante, Eq});
   }
-  AliveDriver Verifier(LHS, Ante, IC);
+  AliveDriver Verifier(LHS, Ante, {}, IC);
   return Verifier.verify(RHS);
 }
 
@@ -696,7 +697,7 @@ bool souper::isCandidateInfeasible(souper::Inst* RHS, souper::ValueCache& C,
 
   auto LHS = IC.getConst(LHSValue);
   // TODO: Use PC
-  AliveDriver Pruner(LHS, nullptr, IC);
+  AliveDriver Pruner(LHS, nullptr, {}, IC);
 
   Inst *RHSAssume = IC.getConst(llvm::APInt(1, true));
   for (auto P : C) {
@@ -714,7 +715,27 @@ bool souper::isCandidateInfeasible(souper::Inst* RHS, souper::ValueCache& C,
   return !Pruner.verify(RHS, RHSAssume);
 }
 
-// IR::Value * souper::AliveDriver::getBlockPCConstraints(souper::BlockPCs BPCs) {
-//   FunctionBuilder B(LHSF);
-//   return B.val(getType(1), 1); // TRUE
-// }
+IR::Value * souper::AliveDriver::getBlockPCConstraints(souper::BlockPCs BPCs,
+                                                       Block *B, IR::Value *Var,
+                                                       Inst *PHI) {
+  FunctionBuilder Builder(LHSF);
+  IR::Value *Result = Builder.val(getType(1), 1); // TRUE
+  for (auto BPC : BPCs) {
+    if (BPC.B != B) {
+      continue;
+    }
+    auto &t = getType(BPC.PC.LHS->Width);
+    if (!translateAndCache(BPC.PC.LHS, LHSF, LExprCache)) {
+      return nullptr;
+    }
+    if (!translateAndCache(BPC.PC.RHS, LHSF, LExprCache)) {
+      return nullptr;
+    }
+    IR::Value *Cond = Builder.iCmp(t, getUniqueName(), IR::ICmp::EQ,
+      LExprCache[BPC.PC.LHS], LExprCache[BPC.PC.RHS]);
+
+
+
+  }
+  return Result;
+}
