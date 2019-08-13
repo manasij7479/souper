@@ -262,8 +262,9 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
               KNOTB.One = ConstantKnownNotOne[C];
               if (KNOTB.hasConflict()) {
                 if (StatsLevel > 2) {
+                  llvm::errs() << KNOTB.Zero.toString(2, false) << "\t" << KNOTB.One.toString(2, false) << "\n";
                   llvm::errs() << "  pruned using KB refinement! ";
-                    llvm::errs() << "Inst had a symbolic const.";
+                  llvm::errs() << "Inst had a symbolic const.";
                   llvm::errs() << "\n";
                 }
                 return true;
