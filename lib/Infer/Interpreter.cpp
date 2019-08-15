@@ -122,6 +122,13 @@ namespace souper {
       if (A.K == EvalValue::ValueKind::Undef)
         llvm::report_fatal_error("undef not supported by interpreter");
 
+    if (Inst->Ops.size() == 2) {
+      if (!Args[0].hasValue() || !Args[1].hasValue())
+        return EvalValue();
+
+      // FIXME Hack for pruning with symbolic inputs
+    }
+
     switch (Inst->K) {
     case Inst::Const:
       return {Inst->Val};

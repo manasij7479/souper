@@ -25,17 +25,44 @@
 
 namespace souper {
 
+struct SymbolicValue {
+  Inst::Kind Op;
+  enum ResultKind {Zero, One, AllOnes, KnownLSBZero, KnownLSBOne};
+  ResultKind Result;
+  Inst *C;
+  bool commutative = true;
+  bool mustBeRHS = false;
+
+  // eg: K=Add, Op=Zero means C + this, this + C are both 0
+  // Not all combinations are valid
+  bool isValid() {
+    return true;
+    // TODO: enforce validity
+    // TODO(regehr?): Maybe precompute a table with a solver!
+  }
+
+};
+
 struct EvalValue {
-  enum class ValueKind {Val, Poison, Undef, UB, Unimplemented};
+  enum class ValueKind {Val, Symbolic, Poison, Undef, UB, Unimplemented};
 
   EvalValue() : K(ValueKind::Unimplemented) {}
   EvalValue(llvm::APInt Val) : Value{Val}, K(ValueKind::Val) {};
+  EvalValue(SymbolicValue SV) : SValue{SV}, K{ValueKind::Symbolic} {};
 
   llvm::APInt Value;
+  llvm::Optional<SymbolicValue> SValue;
   ValueKind K;
 
   bool hasValue() {
     return K == ValueKind::Val;
+  }
+
+  bool isSymbolic() {
+    return K == ValueKind::Symbolic;
+  }
+  SymbolicValue getSymbolicValue() {
+    return SValue.getValue();
   }
 
   llvm::APInt getValue() {
@@ -112,6 +139,13 @@ EvalValue evaluateAShr(llvm::APInt A, llvm::APInt B);
     }
 
     EvalValue evaluateInst(Inst *Root);
+    EvalValue fetchFromCache(Inst *Root) {
+      if (Cache.find(Root) != Cache.end()) {
+        return Cache[Root];
+      } else {
+        return EvalValue();
+      }
+    }
   };
 
 }

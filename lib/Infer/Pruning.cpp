@@ -118,6 +118,50 @@ std::pair<llvm::APInt, llvm::APInt> knownBitsNarrowing
 
   return {KnownNotZero, KnownNotOne};
 }
+std::unordered_map<Inst *, SymbolicValue> generateSymbolicInputs(Inst *RHS,
+                                            const std::set<Inst *> &Inputs,
+                                            const std::set<souper::Inst *> &Consts) {
+  std::unordered_map<Inst *, SymbolicValue> Result;
+  std::unordered_set<Inst *> Visited;
+
+  auto isInput = [&Inputs](Inst *I) {
+    return Inputs.find(I) != Inputs.end();
+  };
+
+  auto isConst = [&Consts](Inst *I) {
+    return Consts.find(I) != Consts.end();
+  };
+
+  std::vector<Inst *> Stack{RHS};
+  while (!Stack.empty()) {
+    auto I = Stack.back();
+    Stack.pop_back();
+
+    if (I->Ops.size() == 2) {
+      if (I->K == Inst::Add || I->K == Inst::Add || I->K == Inst::Or || I->K == Inst::Xor) {
+        if (isConst(I->Ops[0]) && isInput(I->Ops[1])) {
+          Result[I->Ops[1]] = SymbolicValue{I->K, SymbolicValue::ResultKind::Zero, I->Ops[0]};
+          Result[I->Ops[1]] = SymbolicValue{I->K, SymbolicValue::ResultKind::AllOnes, I->Ops[0]};
+          Result[I->Ops[1]] = SymbolicValue{I->K, SymbolicValue::ResultKind::One, I->Ops[0]};
+        }
+        if (isConst(I->Ops[1]) && isInput(I->Ops[0])) {
+          Result[I->Ops[0]] = SymbolicValue{I->K, SymbolicValue::ResultKind::Zero, I->Ops[1]};
+          Result[I->Ops[0]] = SymbolicValue{I->K, SymbolicValue::ResultKind::AllOnes, I->Ops[1]};
+          Result[I->Ops[0]] = SymbolicValue{I->K, SymbolicValue::ResultKind::One, I->Ops[1]};
+        }
+      }
+    }
+
+    Visited.insert(I);
+    for (auto Op : I->Ops) {
+      if (Visited.find(Op) == Visited.end()) {
+        Stack.push_back(Op);
+      }
+    }
+  }
+  return Result;
+}
+
 
 // TODO : Comment out debug stmts and conditions before benchmarking
 bool PruningManager::isInfeasible(souper::Inst *RHS,
@@ -316,7 +360,39 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
         C.first->RangeRefinement = Rs;
       }
     }
-}
+  }
+
+  if (!Constants.empty()) {
+    std::vector<Inst *> Inputs;
+    findVars(SC.LHS, Inputs);
+    std::set<Inst *> InputSet(Inputs.begin(), Inputs.end());
+    auto SymbolicInputs = generateSymbolicInputs(RHS, InputSet, Constants);
+
+    for (int I = 0; I < InputVals.size(); ++I) {
+      auto Cache = InputVals[I];
+      for (auto SymIn : SymbolicInputs) {
+        Cache[SymIn.first] = SymIn.second;
+        ConcreteInterpreter CI(Cache);
+
+        auto LHSKB = KnownBitsAnalysis().findKnownBits(SC.LHS, CI);
+        auto RHSKB = KnownBitsAnalysis().findKnownBits(RHS, CI);
+        if (StatsLevel > 2) {
+          llvm::errs() << "SPEC  LHS KnownBits = " << KnownBitsAnalysis::knownBitsString(LHSKB) << "\n";
+          llvm::errs() << "SPEC  RHS KnownBits = " << KnownBitsAnalysis::knownBitsString(RHSKB) << "\n";
+        }
+        if ((LHSKB.Zero & RHSKB.One) != 0 || (LHSKB.One & RHSKB.Zero) != 0) {
+          if (StatsLevel > 2) {
+            llvm::errs() << "  LHS KnownBits = " << KnownBitsAnalysis::knownBitsString(LHSKB) << "\n";
+            llvm::errs() << "  RHS KnownBits = " << KnownBitsAnalysis::knownBitsString(RHSKB) << "\n";
+            llvm::errs() << "  pruned using symbolic specialization! ";
+            llvm::errs() << "Inst had a symbolic const.";
+          }
+          return true;
+        }
+
+      }
+    }
+  }
 
   if (!LHSHasPhi) {
     return isInfeasibleWithSolver(RHS, StatsLevel);

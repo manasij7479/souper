@@ -451,13 +451,17 @@ namespace souper {
 
   // Tries to get the concrete value from @I
   EvalValue getValue(Inst *I, ConcreteInterpreter &CI) {
-    if (I->K == Inst::Const)
+    if (I->K == Inst::Const) {
       return {I->Val};
-    else if (I->K == Inst::Var && !isReservedConst(I))
+    }
+    else if (isReservedConst(I)) {
+      return CI.fetchFromCache(I);
+    }
+    else if (I->K == Inst::Var) {
       // evaluateInst will only give us input value of the variable; it doesn't
-      // evaluate anything.
+      // evaluate anything. //FIXME this comment seems incorrect/outdated
       return CI.evaluateInst(I);
-
+    }
     if (isConcrete(I))
       return CI.evaluateInst(I);
 
@@ -469,6 +473,8 @@ namespace souper {
 #define KB1 findKnownBits(I->Ops[1], CI)
 #define KB2 findKnownBits(I->Ops[2], CI)
 #define VAL(INST) getValue(INST, CI)
+#define VAL0(INST) getValue(INST->Ops[0], CI)
+#define VAL1(INST) getValue(INST->Ops[1], CI)
 
   llvm::KnownBits KnownBitsAnalysis::mergeKnownBits(std::vector<llvm::KnownBits> Vec) {
     assert(Vec.size() > 0);
@@ -511,6 +517,42 @@ namespace souper {
     return false;
   }
 
+  llvm::KnownBits symKindToKB(SymbolicValue::ResultKind R, size_t Width) {
+    llvm::KnownBits Result;
+    Result.Zero = llvm::APInt(Width, 0);
+    Result.One = llvm::APInt(Width, 0);
+    switch (R) {
+      case SymbolicValue::ResultKind::Zero: Result.setAllZero(); break;
+      case SymbolicValue::ResultKind::One: Result.One |= 1; Result.Zero = ~Result.One; break;
+      case SymbolicValue::ResultKind::AllOnes: Result.setAllOnes(); break;
+      case SymbolicValue::KnownLSBZero: Result.Zero |= 1; break;
+      case SymbolicValue::KnownLSBOne: Result.One |= 1; break;
+    }
+    return Result;
+  }
+
+  llvm::Optional<llvm::KnownBits> computeKBForSymbolic(Inst *I, ConcreteInterpreter &CI) {
+    if (I->Ops.size() != 2) {
+      return {};
+    }
+    auto V0 = VAL0(I);
+    auto V1 = VAL1(I);
+    // TODO: consider non-commutativity
+    if (V0.isSymbolic()) {
+      auto V0S = V0.getSymbolicValue();
+      if (V0S.C == I->Ops[1] && V0S.Op == I->K) {
+        return symKindToKB(V0S.Result, I->Width);
+      }
+    }
+    if (V1.isSymbolic()) {
+      auto V1S = V1.getSymbolicValue();
+      if (V1S.C == I->Ops[0] && V1S.Op == I->K) {
+        return symKindToKB(V1S.Result, I->Width);
+      }
+    }
+    return {};
+  }
+
   llvm::KnownBits KnownBitsAnalysis::findKnownBits(Inst *I, ConcreteInterpreter &CI) {
     llvm::KnownBits Result(I->Width);
 
@@ -526,6 +568,12 @@ namespace souper {
       KBCache.emplace(I, Result);
 
       return Result;
+    }
+
+    auto SymResult = computeKBForSymbolic(I, CI);
+    if (SymResult.hasValue()) {
+      KBCache.emplace(I, SymResult.getValue());
+      return SymResult.getValue();
     }
 
     switch(I->K) {
@@ -894,6 +942,8 @@ namespace souper {
 #undef CR1
 #undef CR2
 #undef VAL
+#undef VAL0
+#undef VAL1
 
   llvm::ConstantRange ConstantRangeAnalysis::findConstantRangeUsingSolver(Inst *I,
 									  Solver *S,
