@@ -133,6 +133,31 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
   getConstants(RHS, Constants);
 
   if (!Constants.empty()) {
+    auto RestrictedBits = RestrictedBitsAnalysis().findRestrictedBits(RHS);
+    if ((~RestrictedBits & (LHSKnownBitsNoSpec.Zero | LHSKnownBitsNoSpec.One)) != 0) {
+//     if (RestrictedBits == 0 && (LHSKB.Zero != 0 || LHSKB.One != 0)) {
+      if (StatsLevel > 2) {
+        llvm::errs() << "  pruned using restricted bits analysis.\n";
+        llvm::errs() << "  LHSKB : " << KnownBitsAnalysis::knownBitsString(LHSKnownBitsNoSpec) << "\n";
+        llvm::errs() << "  RB    : " << RestrictedBits.toString(2, false) << "\n";
+      }
+      return true;
+    }
+
+//     auto LHSCR = ConstantRangeAnalysis().findConstantRange(SC.LHS, BlankCI, false);
+//     if (StatsLevel > 2) {
+//         llvm::errs() << "  LHSCR : " << LHSCR << "\n";
+//         llvm::errs() << "  RB    : " << RestrictedBits.toString(2, false) << "\n";
+//     }
+//     if (RestrictedBits == 0 && !LHSCR.isFullSet()) {
+//       if (StatsLevel > 2) {
+//         llvm::errs() << "  pruned using restricted bits cr analysis.\n";
+//         llvm::errs() << "  LHSCR : " << LHSCR << "\n";
+//         llvm::errs() << "  RB    : " << RestrictedBits.toString(2, false) << "\n";
+//       }
+//       return true;
+//     }
+
     for (auto C : Constants) {
       auto CutOff = 0xFFFFFF;
       ConstantLimits[C].push_back(mkCR(C, 1, CutOff));
@@ -315,7 +340,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
         C.first->RangeRefinement = Rs;
       }
     }
-}
+  }
 
   if (!LHSHasPhi) {
     return isInfeasibleWithSolver(RHS, StatsLevel);
@@ -459,6 +484,9 @@ void PruningManager::init() {
       return !isInfeasible(I, StatsLevel);
     };
   }
+
+  ConcreteInterpreter BlankCI;
+  LHSKnownBitsNoSpec =  KnownBitsAnalysis().findKnownBits(SC.LHS, BlankCI, false);
 }
 
 bool PruningManager::isInputValid(ValueCache &Cache) {
