@@ -36,7 +36,7 @@ namespace {
 
 static llvm::cl::opt<bool> DisableUndefInput("alive-disable-undef-input",
   llvm::cl::desc("Assume inputs can not be undef (default = false)"),
-  llvm::cl::init(false));
+  llvm::cl::init(true));
 
 class FunctionBuilder {
 public:
@@ -143,7 +143,7 @@ private:
     if (auto It = identifiers.find(x); It != identifiers.end()) {
       return It->second;
     } else {
-      if (x.find("dummy") != std::string::npos) {
+      if (x.find(souper::ReservedConstPrefix) != std::string::npos) {
         auto i = std::make_unique<IR::ConstantInput>(t, std::move(x));
         auto ptr = i.get();
 //         F.addInput(std::move(i));
@@ -214,9 +214,7 @@ performCegisFirstQuery(tools::Transform &t,
   for (auto &[Var, Val] : TgtState.getValues()) {
     auto &Name = Var->getName();
     if (startsWith("%reservedconst", Name)) {
-      auto App = Val.first.value.isApp();
-      assert(App);
-      SMTConsts[Name] = (Z3_get_app_arg(smt::ctx(), App, 1));
+      SMTConsts[Name] = Val.first.value;
     }
   }
 
@@ -251,6 +249,7 @@ performCegisFirstQuery(tools::Transform &t,
 std::map<souper::Inst *, llvm::APInt>
 synthesizeConstantUsingSolver(tools::Transform &t,
   std::map<std::string, souper::Inst *> &SouperConsts) {
+  return {};
 
   IR::Value::reset_gbl_id();
   IR::State SrcState(t.src, true), tgt_state(t.tgt, false);

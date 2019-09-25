@@ -78,7 +78,7 @@ namespace {
     cl::init(false));
   static cl::opt<bool, /*ExternalStorage=*/true>
     AliveFlagParser("souper-use-alive", cl::desc("Use Alive2 as the backend"),
-    cl::Hidden, cl::location(UseAlive), cl::init(false));
+    cl::Hidden, cl::location(UseAlive), cl::init(true));
   static cl::opt<bool> LSBPruning("souper-lsb-pruning",
     cl::desc("Try to prune guesses by looking for a difference in LSB"),
     cl::init(false));
@@ -87,7 +87,7 @@ namespace {
     cl::init(false));
   static cl::opt<bool> SynthesisConstWithCegisLoop("souper-synthesis-const-with-cegis",
     cl::desc("Synthesis constants with CEGIS (default=false)"),
-    cl::init(true));
+    cl::init(false));
   static cl::opt<bool> DoubleCheckWithAlive("souper-double-check",
     cl::desc("Double check synthesis result with alive (default=false)"),
     cl::init(false));
