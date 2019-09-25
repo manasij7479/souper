@@ -55,6 +55,15 @@ public:
       (t, std::move(name), *toValue(t, a), *toValue(t, b), others...));
   }
 
+  template <typename A, typename B, typename C, typename ...Others>
+  IR::Value *ternaryOp(IR::Type &t, std::string name, A a, B b, C c,
+                       Others... others) {
+    return append
+      (std::make_unique<IR::TernaryOp>
+      (t, std::move(name), *toValue(t, a), *toValue(t, b), *toValue(t, c),
+       others...));
+  }
+
   template <typename A>
   IR::Value *conversionOp(IR::Type &t, std::string name, A a,
                           IR::ConversionOp::Op Op) {
@@ -615,6 +624,15 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
     BINOP(UAddSat, UAdd_Sat)
     BINOP(SSubSat, SSub_Sat)
     BINOP(USubSat, USub_Sat)
+
+    #define TERNOP(SOUPER, ALIVE) case souper::Inst::SOUPER: {   \
+      ExprCache[I] = Builder.ternaryOp(t, Name, ExprCache        \
+      [I->Ops[0]], ExprCache[I->Ops[1]], ExprCache[I->Ops[2]],   \
+      IR::TernaryOp::ALIVE); return true;                        \
+    }
+
+    TERNOP(FShl, FShl);
+    TERNOP(FShr, FShr);
 
     #define ICMP(SOUPER, ALIVE) case souper::Inst::SOUPER: {     \
       ExprCache[I] = Builder.iCmp(t, Name, IR::ICmp::ALIVE,      \
