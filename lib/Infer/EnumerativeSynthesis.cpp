@@ -784,6 +784,418 @@ std::error_code verify(SynthesisContext &SC, Inst *&RHS,
   }
 }
 
+struct SynthesisImpl {
+  SynthesisImpl(SynthesisContext &SC_) : SC(SC_) {
+    LHSCost = souper::cost(SC.LHS);
+    TooExpensive = LHSCost;
+    makeComps(SC.LHS->Width);
+    // usually this is all that's needed.
+    // Other widths are generated on the fly and cached
+
+    auto Hole = SC.IC.createHole(SC.LHS->Width);
+    Fringe.push({Hole, 0, Hole});
+  }
+
+  std::error_code operator()(Inst *&RHS) {
+    sortGuesses(Final);
+    auto EC = verify(SC, RHS, Final);
+    Final.clear();
+    return EC;
+  }
+
+  size_t getNumGuesses() {
+    return Final.size();
+  }
+
+  size_t getNumFringed() {
+    return Fringe.size();
+  }
+
+  void distribute(Inst *Guess) {
+    static int count = 0;
+    std::vector<Inst *> Holes;
+    getHoles(Guess, Holes);
+
+    auto Count = countHelper(Guess, Comps);
+    llvm::errs() << "\n\nGuess number = " << ++count << " , InstCount =  "
+    << Count << " , MaxCount = " << MaxNumInstructions <<  "\n";
+    ReplacementContext RC;
+    RC.printInst(Guess, llvm::errs(), true);
+
+    //TODO Add pruning here, both dataflow and cost
+    if (Holes.empty()) {
+      Final.push_back(process(Guess));
+    } else {
+//         llvm::errs () << "ABC\n";
+      if (souper::cost(Guess) < LHSCost && Count <= MaxNumInstructions) {
+
+//                   llvm::errs () << "XYZ\n";
+        Fringe.push({Guess, 0, Holes[0]});
+      }
+      // Is it always a good idea to choose Holes[0]?
+      // Probably not. Investigate heuristics to choose this index
+    }
+  }
+
+  bool instantiateAll() {
+    while (!Fringe.empty()) {
+      auto Current = Fringe.top();
+      Fringe.pop();
+      for (auto &&Part : getPartial(Current.Slot->Width)) {
+        std::map<Inst *, Inst *> InstCache;
+        distribute(instJoin(Current.I, Current.Slot, Part, InstCache, SC.IC));
+      }
+    }
+    return false;
+  }
+
+  bool instantiate() {
+//     llvm::outs() << "STAN\n";
+    QEntry Current{nullptr, 0, nullptr};
+    do {
+      if (Fringe.empty()) {
+        return false;
+      }
+      Current = Fringe.top();
+//       llvm::errs() << "FOO " << Current.Pos << '\t' << Fringe.size() << "\n";
+      if (Current.Pos >= getPartial(Current.Slot->Width).size()) {
+//         Fringe.erase(Fringe.begin());
+        Fringe.pop();
+        Current = {nullptr, 0, nullptr};
+        continue;
+      } else {
+        Fringe.top().Pos++;
+      }
+    } while (!Current.I);
+
+    if (!Current.I) {
+      return false;
+    } else {
+
+      std::map<Inst *, Inst *> InstCache;
+      auto Part = getPartial(Current.Slot->Width)[Current.Pos];
+      distribute(instJoin(Current.I, Current.Slot, Part, InstCache, SC.IC));
+    }
+    return true;
+  }
+
+
+private:
+  struct QEntry {
+    Inst *I;
+    mutable size_t Pos;
+    Inst *Slot;
+  };
+
+  struct CostCmp {
+    bool operator()(const QEntry &A, const QEntry &B) const {
+      return souper::cost(A.I) < souper::cost(B.I);
+    }
+  };
+
+  void makeComps(size_t Width) {
+    // generate and sort partial guesses for specific bitwidth
+
+    std::vector<Inst *> Inputs;
+    findCands(SC.LHS, Inputs, /*WidthMustMatch=*/false, /*FilterVars=*/false, MaxLHSCands);
+    std::vector<Inst *> PartialGuesses;
+
+//     std::copy(Inputs.begin(), Inputs.end(), Comps.begin());
+    for (auto &&Comp : Inputs) {
+      Comps.insert(Comp);
+    }
+
+    std::vector<Inst *> Comps(Inputs.begin(), Inputs.end());
+
+    // Conversion Operators
+    for (auto Comp : Comps) {
+      if (Comp->Width == Width)
+        continue;
+
+      addGuess(Comp, Width, SC.IC, LHSCost, PartialGuesses, TooExpensive);
+    }
+
+    Inst *I1 = SC.IC.getReservedInst();
+    Comps.push_back(I1);
+
+    // Unary Operators
+    if (Width > 1) {
+      for (auto K : UnaryOperators) {
+        for (auto Comp : Comps) {
+//           if (std::find(unaryExclList.begin(), unaryExclList.end(), K) != unaryExclList.end())
+//             continue;
+          // TODO replicate this logic somewhere else
+
+          if (K == Inst::BSwap && Width % 16 != 0)
+            continue;
+
+          if (Comp->K == Inst::ReservedInst) {
+            auto V = SC.IC.createHole(Width);
+            auto N = SC.IC.getInst(K, Width, { V });
+            addGuess(N, Width, SC.IC, LHSCost, PartialGuesses, TooExpensive);
+            continue;
+          }
+
+          if (Comp->Width != Width)
+            continue;
+
+          // Prune: unary operation on constant
+          if (Comp->K == Inst::ReservedConst)
+            continue;
+
+          auto N = SC.IC.getInst(K, Width, { Comp });
+          addGuess(N, Width, SC.IC, LHSCost, PartialGuesses, TooExpensive);
+        }
+      }
+    }
+
+    // reservedinst and reservedconsts starts with width 0
+    Inst *C1 = SC.IC.getReservedConst();
+    Comps.push_back(C1);
+    Inst *I2 = SC.IC.getReservedInst();
+    Comps.push_back(I2);
+
+    for (auto K : BinaryOperators) {
+      // PRUNE: one-bit shifts don't make sense
+      if (Inst::isShift(K) && Width == 1)
+        continue;
+
+      for (auto I = Comps.begin(); I != Comps.end(); ++I) {
+        // Prune: only one of (mul x, C), (mul C, x) is allowed
+        if ((Inst::isCommutative(K) || Inst::isOverflowIntrinsicMain(K) || Inst::isOverflowIntrinsicSub(K)) &&
+            (*I)->K == Inst::ReservedConst)
+          continue;
+
+        // Prune: I1 should only be the first argument
+        if ((*I)->K == Inst::ReservedInst && (*I) != I1)
+          continue;
+
+        // PRUNE: don't try commutative operators both ways
+        auto Start = (Inst::isCommutative(K) ||
+                Inst::isOverflowIntrinsicMain(K) ||
+                Inst::isOverflowIntrinsicSub(K)) ? I : Comps.begin();
+        for (auto J = Start; J != Comps.end(); ++J) {
+          // Prune: I2 should only be the second argument
+          if ((*J)->K == Inst::ReservedInst && (*J) != I2)
+            continue;
+
+          // PRUNE: never useful to cmp, sub, and, or, xor, div, rem,
+          // usub.sat, ssub.sat, ashr, lshr a value against itself
+          // Also do it for sub.overflow -- no sense to check for overflow when results = 0
+          if ((*I == *J) && (Inst::isCmp(K) || K == Inst::And || K == Inst::Or ||
+                            K == Inst::Xor || K == Inst::Sub || K == Inst::UDiv ||
+                            K == Inst::SDiv || K == Inst::SRem || K == Inst::URem ||
+                            K == Inst::USubSat || K == Inst::SSubSat ||
+                            K == Inst::AShr || K == Inst::LShr || K == Inst::SSubWithOverflow ||
+                            K == Inst::USubWithOverflow || K == Inst::SSubO || K == Inst::USubO))
+            continue;
+
+          // PRUNE: never operate on two constants
+          if ((*I)->K == Inst::ReservedConst && (*J)->K == Inst::ReservedConst)
+            continue;
+
+          // see if we need to make a var representing a constant
+          // that we don't know yet
+
+          Inst *V1, *V2;
+          if (Inst::isCmp(K)) {
+
+            if ((*I)->Width == 0 && (*J)->Width == 0) {
+              // TODO: support (cmp hole, hole);
+              continue;
+            }
+
+            if ((*I)->Width == 0) {
+              if ((*I)->K == Inst::ReservedConst) {
+                // (cmp const, comp)
+                V1 = SC.IC.createSynthesisConstant((*J)->Width, (*I)->SynthesisConstID);
+              } else if ((*I)->K == Inst::ReservedInst) {
+                // (cmp hole, comp)
+                V1 = SC.IC.createHole((*J)->Width);
+              }
+            } else {
+              V1 = *I;
+            }
+
+            if ((*J)->Width == 0) {
+              if ((*J)->K == Inst::ReservedConst) {
+                // (cmp comp, const)
+                V2 = SC.IC.createSynthesisConstant((*I)->Width, (*J)->SynthesisConstID);
+              } else if ((*J)->K == Inst::ReservedInst) {
+                // (cmp comp, hole)
+                V2 = SC.IC.createHole((*I)->Width);
+              }
+            } else {
+              V2 = *J;
+            }
+          } else {
+            if ((*I)->K == Inst::ReservedConst) {
+              // (binop const, comp)
+              V1 = SC.IC.createSynthesisConstant(Width, (*I)->SynthesisConstID);
+            } else if ((*I)->K == Inst::ReservedInst) {
+              // (binop hole, comp)
+              V1 = SC.IC.createHole(Width);
+            } else {
+              V1 = *I;
+            }
+
+            if ((*J)->K == Inst::ReservedConst) {
+              // (binop comp, const)
+              V2 = SC.IC.createSynthesisConstant(Width, (*J)->SynthesisConstID);
+            } else if ((*J)->K == Inst::ReservedInst) {
+              // (binop comp, hole)
+              V2 = SC.IC.createHole(Width);
+            } else {
+              V2 = *J;
+            }
+          }
+
+          if (V1->Width != V2->Width)
+            continue;
+
+          if (!(Inst::isCmp(K) || Inst::isOverflowIntrinsicSub(K)) && V1->Width != Width)
+            continue;
+
+          // PRUNE: don't synthesize sub x, C since this is covered by add x, -C
+          if (K == Inst::Sub && V2->SynthesisConstID != 0)
+            continue;
+
+          Inst *N = nullptr;
+          if (Inst::isOverflowIntrinsicMain(K)) {
+            auto Comp0 = SC.IC.getInst(Inst::getBasicInstrForOverflow(K), V1->Width, {V1, V2});
+            auto Comp1 = SC.IC.getInst(Inst::getOverflowComplement(K), 1, {V1, V2});
+            auto Orig = SC.IC.getInst(K, V1->Width + 1, {Comp0, Comp1});
+            N = SC.IC.getInst(Inst::ExtractValue, V1->Width, {Orig, SC.IC.getConst(llvm::APInt(32, 0))});
+          }
+          else if (Inst::isOverflowIntrinsicSub(K)) {
+            auto Comp0 = SC.IC.getInst(Inst::getBasicInstrForOverflow(Inst::getOverflowComplement(K)), V1->Width, {V1, V2});
+            auto Comp1 = SC.IC.getInst(K, 1, {V1, V2});
+            auto Orig = SC.IC.getInst(Inst::getOverflowComplement(K), V1->Width + 1, {Comp0, Comp1});
+            N = SC.IC.getInst(Inst::ExtractValue, 1, {Orig, SC.IC.getConst(llvm::APInt(32, 1))});
+          }
+          else {
+            N = SC.IC.getInst(K, Inst::isCmp(K) ? 1 : Width, {V1, V2});
+          }
+
+          addGuess(N, Width, SC.IC, LHSCost, PartialGuesses, TooExpensive);
+        }
+      }
+    }
+
+    // Deal with ternary instructions separately, since some guesses might
+    // need two reserved per instruction
+    Inst *C2 = SC.IC.getReservedConst();
+    Comps.push_back(C2);
+    Inst *C3 = SC.IC.getReservedConst();
+    Comps.push_back(C3);
+    Inst *I3 = SC.IC.getReservedInst();
+    Comps.push_back(I3);
+
+    for (auto Op : TernaryOperators) {
+      for (auto I : Comps) {
+        if (I->K == Inst::ReservedInst && I != I1)
+          continue;
+        if (I->K == Inst::ReservedConst && I != C1)
+          continue;
+
+        // (select c, x, y)
+        // PRUNE: a select's control input should never be constant
+        if (Op == Inst::Select && I->K == Inst::ReservedConst)
+          continue;
+
+        Inst *V1;
+        if (I->K == Inst::ReservedConst) {
+          V1 = SC.IC.createSynthesisConstant(Width, I->SynthesisConstID);
+        } else if (I->K == Inst::ReservedInst) {
+          V1 = SC.IC.createHole(Op == Inst::Select ? 1 : Width);
+        } else {
+          V1 = I;
+        }
+
+        if (Op == Inst::Select && V1->Width != 1)
+          continue;
+        if (Op != Inst::Select && V1->Width != Width)
+          continue;
+
+        for (auto J : Comps) {
+          if (J->K == Inst::ReservedInst && J != I2)
+            continue;
+          if (J->K == Inst::ReservedConst && J != C2)
+            continue;
+
+          Inst *V2;
+          if (J->K == Inst::ReservedConst) {
+            V2 = SC.IC.createSynthesisConstant(Width, J->SynthesisConstID);
+          } else if (J->K == Inst::ReservedInst) {
+            V2 = SC.IC.createHole(Width);
+          } else {
+            V2 = J;
+          }
+
+          if (V2->Width != Width)
+            continue;
+
+          for (auto K : Comps) {
+            if (K->K == Inst::ReservedInst && K != I3)
+              continue;
+            if (K->K == Inst::ReservedConst && K != C3)
+              continue;
+
+            // PRUNE: ter-op c, c, c
+            if (I->K == Inst::ReservedConst && J->K == Inst::ReservedConst && K->K == Inst::ReservedConst)
+              continue;
+
+            // PRUNE: (select cond, x, x)
+            if (Op == Inst::Select && J == K)
+              continue;
+
+            Inst *V3;
+            if (K->K == Inst::ReservedConst) {
+              V3 = SC.IC.createSynthesisConstant(Width, K->SynthesisConstID);
+            } else if (K->K == Inst::ReservedInst) {
+              V3 = SC.IC.createHole(Width);
+            } else {
+              V3 = K;
+            }
+
+            if (V2->Width != V3->Width)
+              continue;
+
+            auto N = SC.IC.getInst(Op, Width, {V1, V2, V3});
+            addGuess(N, Width, SC.IC, LHSCost, PartialGuesses, TooExpensive);
+          }
+        }
+      }
+    }
+    sortGuesses(PartialGuesses);
+    Partial[Width] = PartialGuesses;
+  }
+  std::vector<Inst *> &getPartial(size_t Width) {
+    if (Partial.find(Width) == Partial.end()) {
+      makeComps(Width);
+    }
+    return Partial[Width];
+  }
+
+  Inst *process(Inst *I) { // unique reserved consts. anything else?
+    return I;
+  }
+
+
+  using Queue = std::priority_queue<QEntry, std::vector<QEntry>, CostCmp>;
+
+  Queue Fringe;
+  std::vector<Inst *> Final;
+
+  std::map<size_t, std::vector<Inst *>> Partial; // bitwidth -> partial guess list
+
+  std::set<Inst *> Comps;
+
+  size_t LHSCost;
+  int TooExpensive;
+  SynthesisContext &SC;
+};
+
 std::error_code
 EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
                                 const BlockPCs &BPCs,
@@ -791,65 +1203,9 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
                                 Inst *LHS, Inst *&RHS,
                                 InstContext &IC, unsigned Timeout) {
   SynthesisContext SC{IC, SMTSolver, LHS, getUBInstCondition(SC.IC, SC.LHS), PCs, BPCs, Timeout};
+
+  SynthesisImpl Generate(SC);
   std::error_code EC;
-  std::vector<Inst *> Cands;
-  findCands(SC.LHS, Cands, /*WidthMustMatch=*/false, /*FilterVars=*/false, MaxLHSCands);
-  if (DebugLevel > 1)
-    llvm::errs() << "got " << Cands.size() << " candidates from LHS\n";
-
-  int LHSCost = souper::cost(SC.LHS, /*IgnoreDepsWithExternalUses=*/true);
-
-  int TooExpensive = 0;
-
-  std::vector<Inst *> Inputs;
-  findVars(SC.LHS, Inputs);
-  PruningManager DataflowPruning(SC, Inputs, DebugLevel);
-
-  std::set<Inst*> Visited(Cands.begin(), Cands.end());
-
-  // Cheaper tests go first
-  std::vector<PruneFunc> PruneFuncs = { [&Visited](Inst *I, std::vector<Inst*> &ReservedInsts)  {
-    return CountPrune(I, ReservedInsts, Visited);
-  }};
-  if (EnableDataflowPruning) {
-    DataflowPruning.init();
-    PruneFuncs.push_back(DataflowPruning.getPruneFunc());
-  }
-  auto PruneCallback = MkPruneFunc(PruneFuncs);
-
-
-  std::vector<Inst *> Guesses;
-  uint64_t GuessCount = 0;
-
-  auto Generate = [&SC, &Guesses, &RHS, &EC, &GuessCount](Inst *Guess) {
-    GuessCount++;
-    Guesses.push_back(Guess);
-    if (Guesses.size() >= MaxV && !SkipSolver) {
-      sortGuesses(Guesses);
-      EC = verify(SC, RHS, Guesses);
-      Guesses.clear();
-      return RHS == nullptr; // Continue if no RHS
-    }
-    return true;
-  };
-
-  // add nops guesses separately
-  for (auto I : Inputs) {
-    addGuess(I, SC.LHS->Width, SC.IC, LHSCost, Guesses, TooExpensive);
-  }
-
-  getGuesses(Cands, SC.LHS->Width,
-             LHSCost, SC.IC, nullptr, nullptr, TooExpensive, PruneCallback, Generate);
-
-  if (!Guesses.empty() && !SkipSolver) {
-    EC = verify(SC, RHS, Guesses);
-  }
-
-  if (DebugLevel >= 1) {
-    DataflowPruning.printStats(llvm::errs());
-  }
-
-  if (DebugLevel > 1)
-    llvm::errs() << "There are " << GuessCount << " Guesses\n";
-  return EC;
+  Generate.instantiateAll();
+  return Generate(RHS);
 }
