@@ -20,6 +20,8 @@
 #include "souper/Infer/EnumerativeSynthesis.h"
 #include "souper/Infer/Pruning.h"
 
+#include <fstream>
+
 #include <queue>
 #include <functional>
 #include <set>
@@ -103,6 +105,10 @@ namespace {
   static cl::opt<unsigned> MaxLHSCands("souper-max-lhs-cands",
     cl::desc("Gather at most this many inputs from a LHS to use as synthesis inputs (default=8)"),
     cl::init(8));
+
+  static cl::opt<std::string> ResultDir("souper-result-dir",
+    cl::desc("One ring to rule them all"),
+    cl::init("NULL")); // bad idea don't commit
 }
 
 // TODO
@@ -797,6 +803,21 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
         RHS = nullptr;
       }
     }
+
+    // BEGIN HACK
+    if (ResultDir != "NULL") {
+      ReplacementContext RC;
+      std::string result;
+      llvm::raw_string_ostream out(result);
+      RC.printInst(RHS, out, true);
+      out.flush();
+      auto filename = std::to_string(std::hash<std::string>()(result));
+      std::ofstream fout(ResultDir + "/" + filename);
+      fout << result;
+      fout.close();
+      // END HACKMessengerMark
+    }
+
     if (RHS) {
       RHSs.emplace_back(RHS);
       if (!SC.CheckAllGuesses) {
@@ -829,6 +850,13 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
                                 const std::vector<InstMapping> &PCs,
                                 Inst *LHS, std::vector<Inst *> &RHSs,
                                 bool CheckAllGuesses, InstContext &IC, unsigned Timeout) {
+
+//   if (ResultDir != "NULL") {
+//     std::ofstream out(ResultDir + "/init");
+//     out << ".";
+//     out.close();
+//   }
+
   SynthesisContext SC{IC, SMTSolver, LHS, getUBInstCondition(SC.IC, SC.LHS),
                       PCs, BPCs, CheckAllGuesses, Timeout};
   std::error_code EC;
