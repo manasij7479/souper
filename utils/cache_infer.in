@@ -55,14 +55,17 @@ END
 my $solver = $ENV{"SOUPER_SOLVER"};
 die $need_solver unless $solver;
 
+my $result_dir = $ENV{"SOUPER_RESULT_DIR"};
+my $num_insts = $ENV{"SOUPER_NUM_INSTS"};
+
 my $OPTS = "";
-$OPTS .= "-souper-infer-iN " if $ENV{"SOUPER_INFER_INT"};
+$OPTS .= "-souper-dataflow-pruning " if $ENV{"SOUPER_DATAFLOW_PRUNING"};
+$OPTS .= "-souper-enumerative-synthesis -souper-check-all-guesses ";
+$OPTS .= "-souper-enumerative-synthesis-num-instructions=${num_insts} ";
+$OPTS .= "-souper-max-lhs-cands=4 ";
+$OPTS .= "-souper-result-dir=${result_dir}";
 
-$OPTS .= "-souper-synthesis-wiring-iterations=30 ";
-$OPTS .= "-souper-infer-inst ";
-$OPTS .= "-souper-synthesis-comps=mul,select,const,const,shl,lshr,ashr,and,or,xor,add,sub,slt,ult,sle,ule,eq,ne";
-
-my $check = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=15 ${solver}";
+my $check = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=10 ${solver}";
 
 my $r = Redis->new();
 $r->ping || die "no server?";
@@ -72,7 +75,7 @@ sub infer($) {
     (my $k) = @_;
     (my $fh, my $tmpfn) = File::Temp::tempfile();
     print $fh $k;
-    my $cmd = "${check} -infer-rhs $OPTS";
+    my $cmd = "timeout 120 ${check} -infer-rhs $OPTS";
     print STDERR "\n$k\n\n";
     print STDERR "$cmd\n";
     $fh->flush();
@@ -202,9 +205,9 @@ foreach my $k (sort byrank @keys) {
     my $pid = fork();
     die unless $pid >= 0;
     if ($pid == 0) {
-	die "setrlimit CPU" unless setrlimit(RLIMIT_CPU, $CPU_LIMIT, $CPU_LIMIT);
-	die "setrlimit RSS" unless setrlimit(RLIMIT_RSS, $RAM_LIMIT, $RAM_LIMIT);
-	die "setrlimit VMEM" unless setrlimit(RLIMIT_VMEM, $RAM_LIMIT, $RAM_LIMIT);
+#	die "setrlimit CPU" unless setrlimit(RLIMIT_CPU, $CPU_LIMIT, $CPU_LIMIT);
+#	die "setrlimit RSS" unless setrlimit(RLIMIT_RSS, $RAM_LIMIT, $RAM_LIMIT);
+#	die "setrlimit VMEM" unless setrlimit(RLIMIT_VMEM, $RAM_LIMIT, $RAM_LIMIT);
 	infer ($k);
 	# not reachable
     }
