@@ -804,25 +804,28 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
       }
     }
 
-    // BEGIN HACK
-    if (ResultDir != "NULL") {
-      ReplacementContext RC;
-      std::string result;
-      llvm::raw_string_ostream out(result);
-      RC.printInst(RHS, out, true);
-      out.flush();
-      auto filename = std::to_string(std::hash<std::string>()(result));
-      std::ofstream fout(ResultDir + "/" + filename);
-      fout << result;
-      fout.close();
-      // END HACKMessengerMark
-    }
+
 
     if (RHS) {
       RHSs.emplace_back(RHS);
       if (!SC.CheckAllGuesses) {
         return EC;
       }
+
+      // BEGIN HACK
+      if (ResultDir != "NULL") {
+        ReplacementContext RC;
+        std::string result;
+        llvm::raw_string_ostream out(result);
+        RC.printInst(RHS, out, true);
+        out.flush();
+        auto filename = std::to_string(std::hash<std::string>()(result));
+        std::ofstream fout(ResultDir + "/" + filename);
+        fout << result;
+        fout.close();
+        // END HACK
+      }
+
       if (DebugLevel > 3) {
         llvm::outs() << "; result " << RHSs.size() << ":\n";
         ReplacementContext RC;
