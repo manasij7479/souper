@@ -68,7 +68,7 @@ $OPTS .= "-souper-result-dir=${result_dir}";
 
 my $check = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=10 ${solver}";
 
-my $r = Redis->new($redis_port);
+my $r = Redis->new(server => "127.0.0.1:${redis_port}");
 $r->ping || die "no server?";
 my @keys = $r->keys('*');
 

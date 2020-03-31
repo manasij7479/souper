@@ -61,7 +61,7 @@ END
 }
 
 my $RAW = 0;
-my $REDISPORT = 6379;
+my $REDISPORT = 17479;
 my $NOOPTS = 0;
 my $SORT = "size";
 my $REDUCE = 0;
