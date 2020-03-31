@@ -57,6 +57,7 @@ die $need_solver unless $solver;
 
 my $result_dir = $ENV{"SOUPER_RESULT_DIR"};
 my $num_insts = $ENV{"SOUPER_NUM_INSTS"};
+my $redis_port = $ENV{"SOUPER_REDIS_PORT"};
 
 my $OPTS = "";
 $OPTS .= "-souper-dataflow-pruning " if $ENV{"SOUPER_DATAFLOW_PRUNING"};
@@ -67,7 +68,7 @@ $OPTS .= "-souper-result-dir=${result_dir}";
 
 my $check = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=10 ${solver}";
 
-my $r = Redis->new();
+my $r = Redis->new($redis_port);
 $r->ping || die "no server?";
 my @keys = $r->keys('*');
 
