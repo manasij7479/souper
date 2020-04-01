@@ -66,7 +66,7 @@ $OPTS .= "-souper-enumerative-synthesis-num-instructions=${num_insts} ";
 $OPTS .= "-souper-max-lhs-cands=4 ";
 $OPTS .= "-souper-result-dir=${result_dir}";
 
-my $check = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=10 ${solver}";
+my $check = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=30 ${solver}";
 
 my $r = Redis->new(server => "localhost:" . $redis_port);
 $r->ping || die "no server?";
@@ -76,7 +76,7 @@ sub infer($) {
     (my $k) = @_;
     (my $fh, my $tmpfn) = File::Temp::tempfile();
     print $fh $k;
-    my $cmd = "timeout 120 ${check} -infer-rhs $OPTS";
+    my $cmd = "timeout 600 ${check} -infer-rhs $OPTS";
     print STDERR "\n$k\n\n";
     print STDERR "$cmd\n";
     $fh->flush();
