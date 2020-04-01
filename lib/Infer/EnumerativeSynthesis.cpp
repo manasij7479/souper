@@ -21,6 +21,7 @@
 #include "souper/Infer/Pruning.h"
 
 #include <fstream>
+#include <ctime>
 
 #include <queue>
 #include <functional>
@@ -171,6 +172,8 @@ PruneFunc MkPruneFunc(std::vector<PruneFunc> Funcs) {
     return true;
   };
 }
+
+static std::time_t starttime;
 
 bool CountPrune(Inst *I, std::vector<Inst *> &ReservedInsts, std::set<Inst*> Visited) {
   if (souper::countHelper(I, Visited) > MaxNumInstructions)
@@ -821,6 +824,7 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
         out.flush();
         auto filename = std::to_string(std::hash<std::string>()(result));
         std::ofstream fout(ResultDir + "/" + filename);
+        result = std::to_string(starttime) + "\n" + result;
         fout << result;
         fout.close();
         // END HACK
@@ -859,6 +863,7 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 //     out << ".";
 //     out.close();
 //   }
+  starttime = std::time(nullptr);
 
   SynthesisContext SC{IC, SMTSolver, LHS, getUBInstCondition(SC.IC, SC.LHS),
                       PCs, BPCs, CheckAllGuesses, Timeout};

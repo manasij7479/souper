@@ -575,6 +575,12 @@ void PruningManager::init() {
       RC.printInst(SC.LHS, llvm::errs(), true);
       llvm::errs() << "=>?\n";
       RC.printInst(I, llvm::errs(), true);
+      llvm::errs() << "\nsorry\n";
+      ReplacementContext RC2;
+      RC2.printInst(I, llvm::errs(), true);
+
+
+
       if (isInfeasible(I, StatsLevel)) {
         NumPruned++;
         llvm::errs() << "Tally: "
