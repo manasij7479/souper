@@ -172,9 +172,6 @@ PruneFunc MkPruneFunc(std::vector<PruneFunc> Funcs) {
     return true;
   };
 }
-
-static std::time_t starttime;
-
 bool CountPrune(Inst *I, std::vector<Inst *> &ReservedInsts, std::set<Inst*> Visited) {
   if (souper::countHelper(I, Visited) > MaxNumInstructions)
     return false;
@@ -820,12 +817,12 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
         ReplacementContext RC;
         std::string result;
         llvm::raw_string_ostream out(result);
-        RC.printInst(RHS, out, true);
+        RC.printInst(SC.LHS, out, true);
         out.flush();
         auto filename = std::to_string(std::hash<std::string>()(result));
-        std::ofstream fout(ResultDir + "/" + filename);
-        result = std::to_string(starttime) + "\n" + result;
-        fout << result;
+        std::ofstream fout(ResultDir + "/" + filename, std::ios::app);
+
+        fout << std::to_string(std::time(nullptr)) << "\n";
         fout.close();
         // END HACK
       }
@@ -863,10 +860,25 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 //     out << ".";
 //     out.close();
 //   }
-  starttime = std::time(nullptr);
+
+    // BEGIN HACK
+    if (ResultDir != "NULL") {
+      ReplacementContext RC;
+      std::string result;
+      llvm::raw_string_ostream out(result);
+      RC.printInst(LHS, out, true);
+      out.flush();
+      auto filename = std::to_string(std::hash<std::string>()(result));
+      std::ofstream fout(ResultDir + "/" + filename, std::ios::app);
+      fout << std::to_string(std::time(nullptr)) << "\n";
+      fout.close();
+      // END HACK
+    }
 
   SynthesisContext SC{IC, SMTSolver, LHS, getUBInstCondition(SC.IC, SC.LHS),
                       PCs, BPCs, CheckAllGuesses, Timeout};
+
+
   std::error_code EC;
   std::vector<Inst *> Cands;
   findCands(SC.LHS, Cands, /*WidthMustMatch=*/false, /*FilterVars=*/false, MaxLHSCands);
@@ -942,6 +954,20 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   // RHSs count, after duplication
   if (DebugLevel > 3)
     llvm::errs() << "There are " << RHSs.size() << " RHSs after deduplication\n";
+
+  // BEGIN HACK
+  if (ResultDir != "NULL") {
+    ReplacementContext RC;
+    std::string result;
+    llvm::raw_string_ostream out(result);
+    RC.printInst(LHS, out, true);
+    out.flush();
+    auto filename = std::to_string(std::hash<std::string>()(result));
+    std::ofstream fout(ResultDir + "/" + filename, std::ios::app);
+    fout << std::to_string(std::time(nullptr)) << "\n";
+    fout.close();
+    // END HACK
+  }
 
   return EC;
 }
