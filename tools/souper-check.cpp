@@ -50,6 +50,11 @@ static cl::opt<bool> InferConst("infer-const",
     cl::desc("Try to infer constants for a Souper replacement (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> InferAP("infer-abstract-precondition",
+    cl::desc("Try to infer an abstract precondition which makes the given"
+             "transformation valid. (default=false)"),
+    cl::init(false));
+
 static cl::opt<bool> ReInferRHS("reinfer-rhs",
     cl::desc("Try to infer a new RHS and compare its cost with the existing RHS (default=false)"),
     cl::init(false));
@@ -297,19 +302,26 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         }
       }
     } else if (TryDataflowPruning) {
-      SynthesisContext SC{IC, /*Solver(UNUSED)*/nullptr, Rep.Mapping.LHS,
-        /*LHSUB(UNUSED)*/nullptr, Rep.PCs, Rep.BPCs,
-        /*CheckAllGuesses(UNUSED)*/true, /*Timeout(UNUSED)*/100};
-      std::vector<Inst *> Inputs;
-      findVars(SC.LHS, Inputs);
-      PruningManager P(SC, Inputs, /*StatsLevel=*/3);
-      P.init();
-      if (P.isInfeasible(Rep.Mapping.RHS, /*StatsLevel=*/3)) {
-        llvm::outs() << "Pruning succeeded.\n";
+        SynthesisContext SC{IC, /*Solver(UNUSED)*/nullptr, Rep.Mapping.LHS,
+          /*LHSUB(UNUSED)*/nullptr, Rep.PCs, Rep.BPCs,
+          /*CheckAllGuesses(UNUSED)*/true, /*Timeout(UNUSED)*/100};
+        std::vector<Inst *> Inputs;
+        findVars(SC.LHS, Inputs);
+        PruningManager P(SC, Inputs, /*StatsLevel=*/3);
+        P.init();
+        if (P.isInfeasible(Rep.Mapping.RHS, /*StatsLevel=*/3)) {
+          llvm::outs() << "Pruning succeeded.\n";
+        } else {
+          llvm::outs() << "Pruning failed.\n";
+        }
+      } else if (InferAP) {
+        bool FoundWeakest = false;
+        S->abstractPrecondition(Rep.BPCs, Rep.PCs, Rep.Mapping, IC, FoundWeakest);
+        if (!FoundWeakest) {
+          llvm::outs() << "Failed to find WP.\n";
+        }
+
       } else {
-        llvm::outs() << "Pruning failed.\n";
-      }
-    } else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;
       if (std::error_code EC = S->isValid(IC, Rep.BPCs, Rep.PCs,
