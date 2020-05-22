@@ -93,7 +93,7 @@ namespace {
     cl::init(true));
   static cl::opt<bool> DoubleCheckWithAlive("souper-double-check",
     cl::desc("Double check synthesis result with alive (default=false)"),
-    cl::init(false));
+    cl::init(true));
   static cl::opt<bool> SkipSolver("souper-enumerative-synthesis-skip-solver",
     cl::desc("Skip refinement check after generating guesses.(default=false)"),
     cl::init(false));
