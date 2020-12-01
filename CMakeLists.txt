@@ -11,7 +11,7 @@ endif()
 if (NOT LLVM_BUILD_TYPE)
   set(LLVM_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 endif()
-set(LLVM_CONFIG_EXECUTABLE ${CMAKE_SOURCE_DIR}/third_party/llvm-${LLVM_BUILD_TYPE}-install/bin/llvm-config)
+set(LLVM_CONFIG_EXECUTABLE ${CMAKE_SOURCE_DIR}/third_party/llvm-Release-install/bin/llvm-config)
 if(NOT EXISTS ${LLVM_CONFIG_EXECUTABLE})
   message(FATAL_ERROR "llvm-config could not be found!")
 endif()
@@ -204,10 +204,21 @@ set(SOUPER_INFER_FILES
   include/souper/Infer/Interpreter.h
   lib/Infer/Preconditions.cpp
   include/souper/Infer/Preconditions.h
+  lib/Infer/SynthUtils.cpp
+  include/souper/Infer/SynthUtils.h
 )
 
 add_library(souperInfer STATIC
   ${SOUPER_INFER_FILES}
+)
+
+set(SOUPER_GENERALIZE_FILES
+  lib/Generalize/Reducer.cpp
+  include/souper/Generalize/Reducer.h
+)
+
+add_library(souperGeneralize STATIC
+  ${SOUPER_GENERALIZE_FILES}
 )
 
 set(SOUPER_INST_FILES
@@ -265,6 +276,7 @@ set(SOUPER_SOURCES
   ${SOUPER_SMTLIB2_FILES}
   ${SOUPER_TOOL_FILES}
   ${SOUPER_INFER_FILES}
+  ${SOUPER_GENERALIZE_FILES}
   ${SOUPER_CODEGEN_FILES})
 
 add_library(souperPass SHARED
@@ -299,6 +311,14 @@ add_executable(parser-test
 
 add_executable(souper-check
   tools/souper-check.cpp
+)
+
+add_executable(generalize
+  tools/generalize.cpp
+)
+
+add_executable(matcher-gen
+  tools/matcher-gen.cpp
 )
 
 add_executable(souper-interpret
@@ -372,8 +392,8 @@ configure_file(
 )
 
 foreach(target souper internal-solver-test lexer-test parser-test souper-check count-insts
-               souper2llvm souper-interpret
-               souperExtractor souperInfer souperInst souperKVStore souperParser
+               souper2llvm souper-interpret generalize matcher-gen
+               souperExtractor souperInfer souperGeneralize souperInst souperKVStore souperParser
                souperSMTLIB2 souperTool souperPass souperPassProfileAll kleeExpr
                souperCodegen)
   set_target_properties(${target} PROPERTIES COMPILE_FLAGS "${LLVM_CXXFLAGS}")
@@ -388,6 +408,7 @@ endforeach()
 target_link_libraries(kleeExpr ${LLVM_LIBS} ${LLVM_LDFLAGS})
 target_link_libraries(souperExtractor souperParser souperKVStore souperInfer souperInst kleeExpr souperCodegen)
 target_link_libraries(souperInfer souperExtractor ${LLVM_LIBS} ${LLVM_LDFLAGS} ${Z3_LIBRARY})
+target_link_libraries(souperGeneralize souperInfer ${LLVM_LIBS} ${LLVM_LDFLAGS} ${Z3_LIBRARY})
 target_link_libraries(souperInst ${LLVM_LIBS} ${LLVM_LDFLAGS})
 target_link_libraries(souperKVStore ${HIREDIS_LIBRARY} ${LLVM_LIBS} ${LLVM_LDFLAGS})
 target_link_libraries(souperParser souperInst ${LLVM_LIBS} ${LLVM_LDFLAGS} ${ALIVE_LIBRARY})
@@ -406,6 +427,8 @@ target_link_libraries(internal-solver-test souperSMTLIB2)
 target_link_libraries(lexer-test souperParser)
 target_link_libraries(parser-test souperParser)
 target_link_libraries(souper-check souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+target_link_libraries(generalize souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser souperInfer souperGeneralize ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+target_link_libraries(matcher-gen souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(souper-interpret souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(count-insts souperParser)
 target_link_libraries(souper2llvm souperParser souperCodegen)
@@ -461,5 +484,7 @@ configure_file(${CMAKE_SOURCE_DIR}/utils/redis-unix-socket.conf.in ${CMAKE_BINAR
 
 configure_file(${CMAKE_SOURCE_DIR}/utils/sclang.in ${CMAKE_BINARY_DIR}/sclang @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/utils/sclang.in ${CMAKE_BINARY_DIR}/sclang++ @ONLY)
+# configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang @ONLY)
+# configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang++ @ONLY)
 
 add_subdirectory(docs)
