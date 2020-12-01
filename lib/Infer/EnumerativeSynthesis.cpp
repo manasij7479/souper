@@ -32,8 +32,8 @@ extern unsigned DebugLevel;
 using namespace souper;
 using namespace llvm;
 
-static const std::vector<Inst::Kind> UnaryOperators = {
-  Inst::CtPop, Inst::BSwap, Inst::BitReverse, Inst::Cttz, Inst::Ctlz, Inst::Freeze
+static std::vector<Inst::Kind> UnaryOperators = {
+  Inst::CtPop, Inst::BSwap, Inst::BitReverse, Inst::Cttz, Inst::Ctlz
 };
 
 static const std::vector<Inst::Kind> BinaryOperators = {
@@ -89,6 +89,12 @@ namespace {
     cl::init(false));
   static cl::opt<bool> IgnoreCost("souper-enumerative-synthesis-ignore-cost",
     cl::desc("Ignore cost of RHSs -- just generate them (default=false)"),
+    cl::init(false));
+  static cl::opt<bool> SynFreeze("souper-synthesize-freeze",
+    cl::desc("Generate Freeze (default=true)"),
+    cl::init(true));
+  static cl::opt<bool> SynLog("souper-synthesize-log",
+    cl::desc("Generate LogB (default=false)"),
     cl::init(false));
   static cl::opt<unsigned> MaxLHSCands("souper-max-lhs-cands",
     cl::desc("Gather at most this many values from a LHS to use as synthesis inputs (default=10)"),
@@ -905,3 +911,49 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 
   return EC;
 }
+
+EnumerativeSynthesis::EnumerativeSynthesis() {
+  if (SynFreeze) {
+    UnaryOperators.push_back(Inst::Freeze);
+  }
+  if (SynLog) {
+    UnaryOperators.push_back(Inst::LogB);
+  }
+}
+
+std::vector<Inst *>
+EnumerativeSynthesis::generateExprs(InstContext &IC, size_t CountLimit,
+                                    std::vector<Inst *> Vars, size_t Width) {
+  MaxNumInstructions = CountLimit;
+
+  std::set<Inst*> Visited;
+  std::vector<PruneFunc> PruneFuncs = { [&Visited](Inst *I, std::vector<Inst*> &ReservedInsts)  {
+    return CountPrune(I, ReservedInsts, Visited);
+  }};
+  auto PruneCallback = MkPruneFunc(PruneFuncs);
+
+  std::vector<Inst *> Guesses;
+
+  int TooExpensive = CountLimit + 1;
+
+  for (auto I : Vars) {
+    if (I->Width == Width)
+      addGuess(I, Width, IC, TooExpensive, Guesses, TooExpensive);
+  }
+
+  auto Generate = [&Guesses](Inst *Guess) {
+    Guesses.push_back(Guess);
+    return true;
+  };
+
+  std::set<Inst *> VarSet;
+  for (auto &&V : Vars) {
+    VarSet.insert(V);
+  }
+
+  getGuesses(VarSet, Width, TooExpensive, IC, nullptr,
+             nullptr, TooExpensive, PruneCallback, Generate);
+
+  return Guesses;
+}
+

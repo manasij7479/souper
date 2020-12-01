@@ -14,7 +14,7 @@
 
 #include "souper/Tool/CandidateMapUtils.h"
 #include "souper/Util/DfaUtils.h"
-
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
@@ -24,11 +24,122 @@
 #include "llvm/Support/raw_ostream.h"
 #include "souper/KVStore/KVStore.h"
 #include "souper/SMTLIB2/Solver.h"
-
+#include "souper/Infer/SynthUtils.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
 
 void souper::AddToCandidateMap(CandidateMap &M,
                                const CandidateReplacement &CR) {
   M.emplace_back(CR);
+}
+
+// limited implementation to filter out specific buggy harvests
+bool isWellTyped(souper::Inst *I) {
+  if (I->K == souper::Inst::Kind::Select) {
+    return I->Ops[0]->Width == 1
+    && (I->Ops[1]->Width == I->Ops[2]->Width)
+    && isWellTyped(I->Ops[1])
+    && isWellTyped(I->Ops[2]);
+  }
+
+  if (I->Ops.size() == 2) {
+    return (I->Ops[0]->Width == I->Ops[1]->Width)
+    && isWellTyped(I->Ops[0])
+    && isWellTyped(I->Ops[1]);
+  }
+  return true;
+}
+
+bool isProfitable(souper::ParsedReplacement &R) {
+  if (R.Mapping.LHS->Width == 1 || R.Mapping.RHS->K == souper::Inst::Select) {
+    return true;
+    // TODO: Improved cost model for Select
+  } else {
+    return souper::benefit(R.Mapping.LHS, R.Mapping.RHS, false) >= 0;
+  }
+}
+
+void souper::HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm::Module *M, Solver *S) {
+  legacy::FunctionPassManager P(M);
+  P.add(createInstructionCombiningPass());
+  P.doInitialization();
+  for (auto &F : *M) {
+    std::vector<Inst *> LHSs, RHSs;
+    FunctionCandidateSet CS1 = ExtractCandidates(&F, IC, EBC);
+    for (auto &B : CS1.Blocks) {
+      for (auto &R : B->Replacements) {
+        LHSs.push_back(R.Mapping.LHS);
+      }
+    }
+
+//    F.dump();
+    P.run(F);
+//    F.dump();
+
+    FunctionCandidateSet CS2 = ExtractCandidates(&F, IC, EBC);
+    for (auto &B : CS2.Blocks) {
+      for (auto &R : B->Replacements) {
+        RHSs.push_back(R.Mapping.LHS);
+      }
+    }
+
+    for (auto LHS : LHSs) {
+      std::vector<Inst *> LHSVars;
+      findVars(LHS, LHSVars);
+      std::set<Inst *> LHSVarSet;
+      for (auto V : LHSVars) {
+        LHSVarSet.insert(V);
+      }
+
+      if (!isWellTyped(LHS)) {
+        continue;
+      }
+
+      for (auto RHS : RHSs) {
+        if (!isWellTyped(RHS)) {
+          continue;
+        }
+
+        if (LHS != RHS && LHS->Width == RHS->Width) {
+          if ((RHS->K == Inst::ZExt || RHS->K == Inst::Freeze)
+              && RHS->Ops[0] == LHS) {
+            continue;
+          }
+
+          std::vector<Inst *> RHSVars;
+          findVars(RHS, RHSVars);
+          std::set<Inst *> RHSVarSet;
+          for (auto RV : RHSVars) {
+            if (LHSVarSet.find(RV) == LHSVarSet.end()) {
+              continue;
+            }
+            RHSVarSet.insert(RV);
+          }
+          if (LHSVarSet.size() != RHSVarSet.size()) {
+            continue;
+          }
+          ParsedReplacement Rep;
+          Rep.Mapping.LHS = LHS;
+          Rep.Mapping.RHS = RHS;
+
+//          Rep.print(llvm::outs(), true);
+
+          if (Verify(Rep, IC, S)) {
+            if (isProfitable(Rep)) {
+              BlockPCs BPCs;
+              std::vector<InstMapping> PCs;
+              ReplacementContext RC;
+              souper::PrintReplacementLHS(llvm::outs(), BPCs, PCs, Rep.Mapping.LHS, RC, true);
+              souper::PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, RC, true);
+              llvm::outs() << "\n";
+              llvm::outs().flush();
+            }
+          }
+        }
+      }
+    }
+  }
+  P.doFinalization();
 }
 
 void souper::AddModuleToCandidateMap(InstContext &IC, ExprBuilderContext &EBC,
@@ -41,6 +152,7 @@ void souper::AddModuleToCandidateMap(InstContext &IC, ExprBuilderContext &EBC,
       }
     }
   }
+
 }
 
 namespace souper {

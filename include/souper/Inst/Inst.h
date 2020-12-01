@@ -100,6 +100,8 @@ struct Inst : llvm::FoldingSetNode {
     BSwap,
     Cttz,
     Ctlz,
+    LogB,
+    BitWidth,
     BitReverse,
     FShl,
     FShr,
@@ -124,6 +126,11 @@ struct Inst : llvm::FoldingSetNode {
 
     ReservedConst,
     ReservedInst,
+
+    KnownOnesP,
+    KnownZerosP,
+    RangeP,
+    DemandedMask,
 
     None,
 } Kind;
@@ -283,11 +290,11 @@ struct SynthesisContext {
   unsigned Timeout;
 };
 
-int cost(Inst *I, bool IgnoreDepsWithExternalUses = false);
+int cost(Inst *I, bool IgnoreDepsWithExternalUses = false, std::set<Inst *> Ignore = {});
 int backendCost(Inst *I, bool IgnoreDepsWithExternalUses = false);
 int countHelper(Inst *I, std::set<Inst *> &Visited);
 int instCount(Inst *I);
-int benefit(Inst *LHS, Inst *RHS);
+int benefit(Inst *LHS, Inst *RHS, bool IgnoreDepsWithExternalUses = true);
 
 void PrintReplacement(llvm::raw_ostream &Out, const BlockPCs &BPCs,
                       const std::vector<InstMapping> &PCs, InstMapping Mapping,

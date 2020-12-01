@@ -43,7 +43,7 @@ Inst *getUBConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
   case Inst::AShr:
     // right operand has to be < Width
     return (OpNum == 0) ?
-      IC.getConst(llvm::APInt(1, true)) : 
+      IC.getConst(llvm::APInt(1, true)) :
       IC.getInst(Inst::Ult, 1, { C, IC.getConst(llvm::APInt(C->Width, C->Width)) });
 
   case Inst::UDiv:
@@ -81,7 +81,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
   case Inst::USubSat:
     // left operand cannot be 0, right operand cannot be 0 or -1
     return (OpNum == 0) ?
-      IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C }) : 
+      IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C }) :
       IC.getInst(Inst::And, 1, {
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C }),
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getAllOnesValue(C->Width)), C })
@@ -94,6 +94,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 1)), C })
       });
 
+  case Inst::DemandedMask:
   case Inst::And:
   case Inst::Or:
     // neither operand can be 0 or -1
@@ -147,7 +148,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
         IC.getInst(Inst::Ult, 1, { IC.getConst(llvm::APInt(C->Width, 2)), C }),
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getAllOnesValue(C->Width)), C })
       });
-    
+
   case Inst::SDiv:
   case Inst::SRem:
   case Inst::URem:
@@ -193,7 +194,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
       IC.getInst(Inst::And, 1, {
           IC.getInst(Inst::Ult, 1, { C, IC.getConst(llvm::APInt::getAllOnesValue(C->Width) - 1) }),
           IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C })
-      });    
+      });
 
   case Inst::Slt:
     // we don't want:
@@ -231,20 +232,9 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
           IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getSignedMinValue(C->Width)), C })
       });
 
-  case Inst::Eq:
-  case Inst::Ne:
-  case Inst::SAddO:
-  case Inst::UAddO:
-  case Inst::SSubO:
-  case Inst::USubO:
-  case Inst::SMulO:
-  case Inst::UMulO:
   case Inst::Select: // handled elsewhere: 2nd and 3rd arguments can't be same constant
-    // no constraint
-    return IC.getConst(llvm::APInt(1, true));
-
   default:
-    llvm::report_fatal_error(("unmatched: " + (std::string)Inst::getKindName(K)).c_str());
+    return IC.getConst(llvm::APInt(1, true));
   }
 }
 
@@ -256,7 +246,7 @@ void addComplexConstraints(Inst *I,
   // --x
   // ~~x
   // 2 * x / 2
-  
+
   // first and second arguments to funnel shift can't both be zero
   if (I->K == Inst::FShl || I->K == Inst::FShr) {
     if (ConstSet.find(I->Ops[0]) != ConstSet.end() &&
@@ -345,6 +335,7 @@ ConstantSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 
   auto ConstConstraints = TrueConst;
   std::set<Inst *> Visited;
+  visitConstants(Mapping.LHS, Visited, ConstConstraints, ConstSet, IC, AvoidNops);
   visitConstants(Mapping.RHS, Visited, ConstConstraints, ConstSet, IC, AvoidNops);
 
   for (int I = 0; I < MaxTries; ++I)  {
@@ -409,6 +400,7 @@ ConstantSynthesis::synthesize(SMTLIBSolver *SMTSolver,
     std::map<Inst *, Inst *> InstCache;
     std::map<Block *, Block *> BlockCache;
     Inst *RHSCopy = getInstCopy(Mapping.RHS, IC, InstCache, BlockCache, &ConstMap, false);
+    Inst *LHSCopy = getInstCopy(Mapping.LHS, IC, InstCache, BlockCache, &ConstMap, false);
 
     std::vector<Block *> Blocks = getBlocksFromPhis(Mapping.LHS);
     for (auto Block : Blocks) {
@@ -426,7 +418,7 @@ ConstantSynthesis::synthesize(SMTLIBSolver *SMTSolver,
     std::vector<Inst *> ModelInstsSecondQuery;
     std::vector<llvm::APInt> ModelValsSecondQuery;
 
-    Query = BuildQuery(IC, BPCs, PCs, InstMapping(Mapping.LHS, RHSCopy),
+    Query = BuildQuery(IC, BPCs, PCs, InstMapping(LHSCopy, RHSCopy),
                        &ModelInstsSecondQuery, 0);
 
     if (Query.empty())

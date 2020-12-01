@@ -38,7 +38,7 @@ namespace {
 
   static llvm::cl::opt<bool> EnableFB("souper-dataflow-pruning-fb",
     llvm::cl::desc("Prune with forced-bits analysis (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
 
   static llvm::cl::opt<bool> EnableRB("souper-dataflow-pruning-rb",
     llvm::cl::desc("Prune with required-bits analysis (default=true)"),
@@ -46,7 +46,7 @@ namespace {
 
   static llvm::cl::opt<bool> EnableBB("souper-dataflow-pruning-bb",
     llvm::cl::desc("Prune with bivalent-bits analysis (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
 }
 
 namespace souper {
@@ -302,7 +302,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
       if (C.hasValue()) {
         auto Val = C.getValue();
         if (StatsLevel > 2)
-          llvm::errs() << "  LHS value = " << Val << "\n";
+          llvm::errs() << "  LHS value = " << Val <<" - " <<RHSIsConcrete<< "\n";
         if (!RHSIsConcrete) {
           auto CR = ConstantRangeAnalysis().findConstantRange(RHS, ConcreteInterpreters[I]);
           if (StatsLevel > 2)
@@ -616,7 +616,8 @@ void PruningManager::init() {
     };
   }
 
-  ConcreteInterpreter BlankCI;
+  ValueCache C;
+  ConcreteInterpreter BlankCI(C);
   LHSKnownBitsNoSpec =  KnownBitsAnalysis().findKnownBits(SC.LHS, BlankCI, false);
   LHSMustDemandedBits = MustDemandedBitsAnalysis().findMustDemandedBits(SC.LHS);
   improveMustDemandedBits(LHSMustDemandedBits);
