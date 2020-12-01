@@ -444,6 +444,27 @@ namespace souper {
       return Args[0];
     }
 
+    case Inst::LogB: {
+      return {llvm::APInt(Inst->Width, ARG0.logBase2())};
+    }
+
+    case Inst::BitWidth: {
+      return {llvm::APInt(Inst->Width, Inst->Width)};
+      // Is the result always of this width?
+    }
+
+    case Inst::KnownOnesP: {
+      auto A = ARG0;
+      return A & ARG1 == A;
+    }
+    case Inst::KnownZerosP: {
+      auto Z = ARG1;
+      return ARG0 | ~Z == Z;
+    }
+    case Inst::DemandedMask: {
+      return ARG0 & ARG1;
+    }
+
     default:
       llvm::report_fatal_error(("unimplemented instruction kind " +
                                std::string(Inst::getKindName(Inst->K)) +
@@ -459,6 +480,10 @@ namespace souper {
     if (Cache.find(Root) != Cache.end())
       return Cache[Root];
 
+    if (Root->K == Inst::BitWidth) {
+      return {llvm::APInt(Root->Width, Root->Width)};
+    }
+
     // TODO SmallVector
     std::vector<EvalValue> EvaluatedArgs;
     for (auto &&I : Root->Ops)
@@ -468,4 +493,11 @@ namespace souper {
       Cache[Root] = Result;
     return Result;
   }
+
+  void ConcreteInterpreter::printCache(llvm::raw_ostream &Out) {
+    for (auto &&KV : Cache) {
+      Out << KV.first->Name << " = " << KV.second.getValue() << '\n';
+    }
+  }
+
 }

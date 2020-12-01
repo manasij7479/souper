@@ -20,6 +20,7 @@
 
 #include <queue>
 #include <set>
+#include <iostream>
 
 using namespace souper;
 
@@ -116,6 +117,9 @@ std::string ReplacementContext::printInst(Inst *I, llvm::raw_ostream &Out,
 std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
                                               bool printNames, Inst *OrigI) {
 
+  if (printNames && I->Name.length() != 0 && std::isdigit(I->Name[0])) {
+    I->Name = "v" + I->Name;
+  }
   std::string Str;
   llvm::raw_string_ostream SS(Str);
 
@@ -168,7 +172,12 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
     }
   }
 
-  std::string InstName = std::to_string(InstNames.size() + BlockNames.size());
+  std::string InstName;
+  if (printNames && !I->Name.empty()) {
+    InstName = I->Name;
+  } else {
+    InstName = std::to_string(InstNames.size() + BlockNames.size());
+  }
   assert(InstNames.find(I) == InstNames.end());
   assert(NameToBlock.find(InstName) == NameToBlock.end());
   setInst(InstName, I);
@@ -189,6 +198,7 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
         if (I->KnownZeros.getBoolValue() || I->KnownOnes.getBoolValue())
           Out << " (knownBits=" << Inst::getKnownBitsString(I->KnownZeros, I->KnownOnes)
               << ")";
+
         if (I->NonNegative)
           Out << " (nonNegative)";
         if (I->Negative)
@@ -418,6 +428,18 @@ const char *Inst::getKindName(Kind K) {
     return "cttz";
   case Ctlz:
     return "ctlz";
+  case LogB:
+    return "logb";
+  case BitWidth:
+    return "width";
+  case KnownOnesP:
+    return "knownones";
+  case KnownZerosP:
+    return "knownzeros";
+  case RangeP:
+    return "range";
+  case DemandedMask:
+    return "demandedmask";
   case FShl:
     return "fshl";
   case FShr:
@@ -512,6 +534,12 @@ Inst::Kind Inst::getKind(std::string Name) {
                    .Case("bitreverse", Inst::BitReverse)
                    .Case("cttz", Inst::Cttz)
                    .Case("ctlz", Inst::Ctlz)
+                   .Case("logb", Inst::LogB)
+                   .Case("width", Inst::BitWidth)
+                   .Case("knownones", Inst::KnownOnesP)
+                   .Case("knownzeros", Inst::KnownZerosP)
+                   .Case("range", Inst::RangeP)
+                   .Case("demandedmask", Inst::DemandedMask)
                    .Case("fshl", Inst::FShl)
                    .Case("fshr", Inst::FShr)
                    .Case("sadd.with.overflow", Inst::SAddWithOverflow)
@@ -966,8 +994,8 @@ static int costHelper(Inst *I, Inst *Root, std::set<Inst *> &Visited,
   return Cost;
 }
 
-int souper::cost(Inst *I, bool IgnoreDepsWithExternalUses) {
-  std::set<Inst *> Visited;
+int souper::cost(Inst *I, bool IgnoreDepsWithExternalUses, std::set<Inst *> Ignore) {
+  std::set<Inst *> Visited = Ignore;
   return costHelper(I, I, Visited, IgnoreDepsWithExternalUses);
 }
 
@@ -995,8 +1023,8 @@ int souper::instCount(Inst *I) {
   return countHelper(I, Visited);
 }
 
-int souper::benefit(Inst *LHS, Inst *RHS) {
-  return cost(LHS, /*IgnoreDepsWithExternalUses=*/true) - cost(RHS);
+int souper::benefit(Inst *LHS, Inst *RHS, bool IgnoreDepsWithExternalUses) {
+  return cost(LHS, IgnoreDepsWithExternalUses) - cost(RHS);
 }
 
 void souper::PrintReplacement(llvm::raw_ostream &Out,
@@ -1061,7 +1089,7 @@ std::string souper::GetReplacementLHSString(const BlockPCs &BPCs,
     Inst *LHS, ReplacementContext &Context, bool printNames) {
   std::string Str;
   llvm::raw_string_ostream SS(Str);
-  PrintReplacementLHS(SS, BPCs, PCs, LHS, Context);
+  PrintReplacementLHS(SS, BPCs, PCs, LHS, Context, printNames);
   return SS.str();
 }
 
@@ -1141,7 +1169,7 @@ void souper::findInsts(Inst *Root, std::vector<Inst *> &Insts, std::function<boo
 
 void hasConstantHelper(Inst *I, std::set<Inst *> &Visited,
                        std::set<Inst *> &ConstSet) {
-  if (I->K == Inst::Var && I->SynthesisConstID != 0) {
+  if (I->K == Inst::Var && (I->SynthesisConstID != 0 || I->Name.starts_with("reserved"))) {
     ConstSet.insert(I);
   } else {
     if (Visited.insert(I).second)
@@ -1213,12 +1241,13 @@ Inst *souper::getInstCopy(Inst *I, InstContext &IC,
       }
     }
     if (!Copy) {
-      if (CloneVars && I->SynthesisConstID == 0)
+      if (CloneVars && I->SynthesisConstID == 0) {
         Copy = IC.createVar(I->Width, I->Name, I->Range, I->KnownZeros,
                             I->KnownOnes, I->NonZero, I->NonNegative,
                             I->PowOfTwo, I->Negative, I->NumSignBits,
                             I->DemandedBits,
                             I->SynthesisConstID);
+      }
       else {
         Copy = I;
       }
@@ -1242,6 +1271,7 @@ Inst *souper::getInstCopy(Inst *I, InstContext &IC,
   }
   assert(Copy);
   InstCache[I] = Copy;
+  Copy->Name = I->Name;
   return Copy;
 }
 
