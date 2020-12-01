@@ -94,6 +94,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 1)), C })
       });
 
+  case Inst::DemandedMask:
   case Inst::And:
   case Inst::Or:
     // neither operand can be 0 or -1
@@ -230,7 +231,9 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
           IC.getInst(Inst::Slt, 1, { C, IC.getConst(llvm::APInt::getSignedMaxValue(C->Width) - 1) }),
           IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getSignedMinValue(C->Width)), C })
       });
-  default: // no constraint
+
+  case Inst::Select: // handled elsewhere: 2nd and 3rd arguments can't be same constant
+  default:
     return IC.getConst(llvm::APInt(1, true));
   }
 }
@@ -332,6 +335,7 @@ ConstantSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 
   auto ConstConstraints = TrueConst;
   std::set<Inst *> Visited;
+  visitConstants(Mapping.LHS, Visited, ConstConstraints, ConstSet, IC, AvoidNops);
   visitConstants(Mapping.RHS, Visited, ConstConstraints, ConstSet, IC, AvoidNops);
 
   for (int I = 0; I < MaxTries; ++I)  {
@@ -396,6 +400,7 @@ ConstantSynthesis::synthesize(SMTLIBSolver *SMTSolver,
     std::map<Inst *, Inst *> InstCache;
     std::map<Block *, Block *> BlockCache;
     Inst *RHSCopy = getInstCopy(Mapping.RHS, IC, InstCache, BlockCache, &ConstMap, false);
+    Inst *LHSCopy = getInstCopy(Mapping.LHS, IC, InstCache, BlockCache, &ConstMap, false);
 
     std::vector<Block *> Blocks = getBlocksFromPhis(Mapping.LHS);
     for (auto Block : Blocks) {
@@ -413,7 +418,7 @@ ConstantSynthesis::synthesize(SMTLIBSolver *SMTSolver,
     std::vector<Inst *> ModelInstsSecondQuery;
     std::vector<llvm::APInt> ModelValsSecondQuery;
 
-    Query = BuildQuery(IC, BPCs, PCs, InstMapping(Mapping.LHS, RHSCopy),
+    Query = BuildQuery(IC, BPCs, PCs, InstMapping(LHSCopy, RHSCopy),
                        &ModelInstsSecondQuery, 0);
 
     if (Query.empty())
