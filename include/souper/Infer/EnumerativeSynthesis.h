@@ -38,7 +38,11 @@ public:
                              bool CheckAllGuesses,
                              InstContext &IC, unsigned Timeout);
 
+std::vector<Inst *> generateGuesses(const std::set<Inst *> &Inputs,
+                int Width, InstContext &IC);
+
 };
 }
+
 
 #endif  // SOUPER_ENUMERATIVE_SYNTHESIS_H

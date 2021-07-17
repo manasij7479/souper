@@ -88,6 +88,10 @@ static cl::opt<bool> CheckAllGuesses("souper-check-all-guesses",
     cl::desc("Continue even after a valid RHS is found. (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> GenBiasingData("gen-biasing-data",
+    cl::desc("Generate biasing data. (default=false)"),
+    cl::init(false));
+
 int SolveInst(const MemoryBufferRef &MB, Solver *S) {
   InstContext IC;
   std::string ErrStr;
@@ -330,6 +334,8 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
           llvm::outs() << "Failed to find WP.\n";
         }
 
+    } else if (GenBiasingData) {
+      llvm::outs() << "Hello world.\n";
     } else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;

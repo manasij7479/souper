@@ -905,3 +905,22 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 
   return EC;
 }
+
+std::vector<Inst *> EnumerativeSynthesis::generateGuesses(const std::set<Inst *> &Inputs,
+                int Width, InstContext &IC) {
+  std::vector<Inst *> Result;
+
+  auto Callback = [&Result](Inst *Guess) {
+    Result.push_back(Guess);
+    return true;
+  };
+
+  int TooExpensive = MaxNumInstructions + 1;
+
+  getGuesses(Inputs, Width, MaxNumInstructions + 10, IC, nullptr, nullptr, TooExpensive,
+    [&Inputs](Inst *I, std::vector<Inst*> &ReservedInsts)  {
+      return CountPrune(I, ReservedInsts, Inputs);
+  }, Callback);
+
+  return Result;
+}
