@@ -24,6 +24,11 @@
 #include <functional>
 #include <set>
 
+#include <fstream>
+#include <iostream>
+
+unsigned ts;
+
 static const unsigned MaxTries = 30;
 
 bool UseAlive;
@@ -57,6 +62,28 @@ static const std::vector<Inst::Kind> BinaryOperators = {
   Inst::SAddO, Inst::UAddO, Inst::SSubO,
   Inst::USubO, Inst::SMulO, Inst::UMulO
 };
+
+//static const std::vector<Inst::Kind> BinaryOperators = {
+//  Inst::Or, Inst::Xor, Inst::Add, Inst::Sub, Inst::Mul,
+//  Inst::UDiv, Inst::SDiv,
+//  Inst::URem, Inst::SRem,
+//  Inst::And,
+//  Inst::Shl, Inst::AShr, Inst::LShr,
+//  Inst::Eq, Inst::Ne, Inst::Ult,
+//  Inst::Slt, Inst::Ule, Inst::Sle,
+//  Inst::SAddSat, Inst::UAddSat,
+//  Inst::SSubSat, Inst::USubSat,
+
+//  /* Overflow intrinsics are synthesized always with `extractvalue`.
+//   * Main overflow intrinsics like {S,U}{Add,Sub,Mul}WithOverflow below means synthesizing
+//   * extractvalue with index 0. On the other hand, synthesizing suboperations like {U,S}{Add,Sub,Mul}O
+//   * means synthesizing extractvalue with index 1. */
+//  Inst::SAddWithOverflow, Inst::UAddWithOverflow,
+//  Inst::SSubWithOverflow, Inst::USubWithOverflow,
+//  Inst::SMulWithOverflow, Inst::UMulWithOverflow,
+//  Inst::SAddO, Inst::UAddO, Inst::SSubO,
+//  Inst::USubO, Inst::SMulO, Inst::UMulO
+//};
 
 static const std::vector<Inst::Kind> TernaryOperators = {
   Inst::Select, Inst::FShl, Inst::FShr
@@ -105,6 +132,13 @@ namespace {
   static cl::opt<bool> TryShrinkConsts("souper-shrink-consts",
     cl::desc("Try to shrink constants (defaults=false)"),
     cl::init(false));
+  static cl::opt<bool> EnableBiasing("souper-semantic-biasing",
+    cl::desc("Enable semantic biasing (defaults=false)"),
+    cl::init(false));
+  static cl::opt<std::string> BiasingData("souper-biasing-data",
+    cl::desc("Location of biasing data file"),
+    cl::init(""));
+
 }
 
 // TODO
@@ -188,7 +222,7 @@ bool getGuesses(const std::set<Inst *> &Inputs,
                 int Width, int LHSCost,
                 InstContext &IC, Inst *PrevInst, Inst *PrevSlot,
                 int &TooExpensive,
-                PruneFunc prune, CallbackType Generate) {
+                PruneFunc prune, CallbackType Generate, std::map<Inst::Kind, float> *BiasingData = nullptr) {
 
   std::vector<Inst *> unaryHoleUsers;
   findInsts(PrevInst, unaryHoleUsers, [PrevSlot](Inst *I) {
@@ -250,13 +284,31 @@ bool getGuesses(const std::set<Inst *> &Inputs,
     }
   }
 
+  std::vector<Inst::Kind> BinOps = BinaryOperators;
+  if (BiasingData) {
+//    for (auto P : *BiasingData) {
+//      llvm::outs() << Inst::getKindName(P.first) << '\t' << P.second << '\n';
+//    }
+
+    auto &Foo = *BiasingData;
+
+    std::sort(BinOps.begin(), BinOps.end(), [&Foo](Inst::Kind A, Inst::Kind B) {
+      return Foo[B] < Foo[A];
+    });
+//    for (auto k : BinOps) {
+//      llvm::outs() << Inst::getKindName(k)  << "\n";
+//    }
+//    int foo;
+//    std::cin >> foo;
+  }
+
   // reservedinst and reservedconsts starts with width 0
   Inst *C1 = IC.getReservedConst();
   Comps.push_back(C1);
   Inst *I2 = IC.getReservedInst();
   Comps.push_back(I2);
 
-  for (auto K : BinaryOperators) {
+  for (auto K : BinOps) {
 
     // PRUNE: i1 is a special case for a number of operators
     if (Width == 1 &&
@@ -769,6 +821,8 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
     }
 
     if (RHS) {
+      std::ofstream out("timestamps.txt", std::ios::app);
+      out << std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) - ts << "\n" << std::flush;
       RHSs.emplace_back(RHS);
       if (!SC.CheckAllGuesses) {
         if (DebugLevel > 2)
@@ -811,6 +865,9 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   if (OnlyInferI1 && OnlyInferIN)
     llvm::report_fatal_error("Sorry, it is an error to specify synthesizing both only "
                              "i1 and only iN values");
+
+  ts = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
   SynthesisContext SC{IC, SMTSolver, LHS, getUBInstCondition(SC.IC, SC.LHS),
       PCs, BPCs, CheckAllGuesses, Timeout};
   std::error_code EC;
@@ -877,9 +934,50 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   if (DebugLevel > 1)
     llvm::errs() << "There are " << Guesses.size() << " guesses before enumeration\n";
 
+
+
+  std::map<Inst::Kind, float> Map;
+  if (EnableBiasing) {
+    KBHistogramCollection KBHC(BiasingData);
+    for (int i = 0; i < KBHC.InputVals.size(); ++i) {
+
+      ValueCache VC;
+      std::vector<Inst *> Inputs;
+      findVars(SC.LHS, Inputs);
+      assert(Inputs.size() == 1);
+
+      VC[Inputs[0]] = EvalValue(KBHC.InputVals[i]);
+
+      ConcreteInterpreter CI(VC);
+
+      auto Result = CI.evaluateInst(SC.LHS);
+
+      if (Result.hasValue()) {
+        auto Val = Result.getValue();
+
+        for (auto &&Pair : KBHC.Data[i]) {
+          auto &&KBH = Pair.second;
+          // TODO Make sure to manage widths properly later
+          for (auto j = 0; j < Val.getBitWidth(); ++j) {
+            if (Val[i]) {
+              Map[Pair.first] += KBH.One[i];
+            } else {
+              Map[Pair.first] += KBH.Zero[i];
+            }
+          }
+        }
+      }
+    }
+  }
+  auto Cmpr = &Map;
+  if (!EnableBiasing) {
+    Cmpr = nullptr;
+  }
+
+
   if (MaxNumInstructions > 0)
     getGuesses(Cands, SC.LHS->Width,
-               LHSCost, SC.IC, nullptr, nullptr, TooExpensive, PruneCallback, Generate);
+               LHSCost, SC.IC, nullptr, nullptr, TooExpensive, PruneCallback, Generate, Cmpr);
 
   if (DebugLevel > 1) {
     DataflowPruning.printStats(llvm::errs());
@@ -923,4 +1021,33 @@ std::vector<Inst *> EnumerativeSynthesis::generateGuesses(const std::set<Inst *>
   }, Callback);
 
   return Result;
+}
+
+
+KBHistogramCollection::KBHistogramCollection(std::string File) {
+  // not a great idea to parse inside a construction..
+  std::ifstream in("data.txt");
+  size_t Width;
+  in >> Width;
+  size_t count, input;
+  while (in >> count >> input) {
+    std::string kind;
+    std::unordered_map<Inst::Kind, KBHistogram<float>> Map;
+    while (in >> kind) {
+      KBHistogram<float> KBH;
+      Inst::Kind K = Inst::getKind(kind);
+      float val;
+      for (int i = 0; i < Width; ++i) {
+        in >> val;
+        KBH.Zero.push_back(val);
+      }
+      for (int i = 0; i < Width; ++i) {
+        in >> val;
+        KBH.One.push_back(val);
+      }
+      Map[K] = KBH;
+    }
+    Data.push_back(Map);
+    InputVals.push_back(llvm::APInt(32, input));
+  }
 }

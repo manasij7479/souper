@@ -16,6 +16,7 @@
 #define SOUPER_ENUMERATIVE_SYNTHESIS_H
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/KnownBits.h"
 #include "souper/Extractor/Solver.h"
 #include "souper/Inst/Inst.h"
 
@@ -42,6 +43,54 @@ std::vector<Inst *> generateGuesses(const std::set<Inst *> &Inputs,
                 int Width, InstContext &IC);
 
 };
+
+template<typename T = int>
+struct KBHistogram {
+KBHistogram() {
+  Counter = 0;
+}
+void add(llvm::KnownBits KB) {
+  Counter++;
+  auto Width = KB.Zero.getBitWidth();
+  if (Zero.size() < Width) {
+    for (int i = Zero.size(); i < Width; ++i) {
+      Zero.push_back(0);
+      One.push_back(0);
+    }
+  }
+
+  for(int i = 0; i < Width; ++i) {
+    if (KB.Zero[i]) {
+      Zero[i]++;
+    }
+    if (KB.One[i]) {
+      One[i]++;
+    }
+  }
+}
+
+template<typename Stream>
+void print(Stream& Out) {
+  Out << '[';
+  for (int i = 0; i < Zero.size(); ++i) {
+    Out << Zero[i] << ' ' << One[i] << ",";
+  }
+  Out << "\b]";
+}
+
+// size_t Width;
+std::vector<T> Zero;
+std::vector<T> One;
+// keeping it int because ? might be considered negative at some point
+size_t Counter;
+};
+
+struct KBHistogramCollection {
+  KBHistogramCollection(std::string File);
+  std::vector<std::unordered_map<Inst::Kind, KBHistogram<float>>> Data;
+  std::vector<llvm::APInt> InputVals;
+};
+
 }
 
 

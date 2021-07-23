@@ -83,6 +83,18 @@ namespace souper {
     llvm::KnownBits findKnownBits(Inst *I,
                                   ConcreteInterpreter &CI, bool UsePartialEval = true);
 
+    llvm::KnownBits findKnownBits(Inst *I, std::unordered_map<Inst*, llvm::KnownBits> Cache,
+                                  ConcreteInterpreter &CI,  bool UsePartialEval = true) {
+      auto OldCache = KBCache;
+      for (auto P : Cache) {
+        KBCache[P.first] = P.second;
+      }
+      auto Result = findKnownBits(I, CI, UsePartialEval);
+      KBCache = OldCache;
+      return Result;
+    }
+
+
     static llvm::KnownBits findKnownBitsUsingSolver(Inst *I,
                                                     Solver *S,
                                                     std::vector<InstMapping> &PCs);
