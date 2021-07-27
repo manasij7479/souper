@@ -944,9 +944,13 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
       ValueCache VC;
       std::vector<Inst *> Inputs;
       findVars(SC.LHS, Inputs);
-      assert(Inputs.size() == 1);
+      assert(Inputs.size() >= 1);
 
       VC[Inputs[0]] = EvalValue(KBHC.InputVals[i]);
+
+      for (int i = 1; i < Inputs.size(); ++i) {
+        VC[Inputs[i]] = EvalValue(llvm::APInt(Inputs[i]->Width, 0));
+      }
 
       ConcreteInterpreter CI(VC);
 
