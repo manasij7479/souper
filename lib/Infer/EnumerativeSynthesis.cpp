@@ -953,6 +953,7 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
       }
 
       ConcreteInterpreter CI(VC);
+      CI.setEvalPhiFirstBranch();
 
       auto Result = CI.evaluateInst(SC.LHS);
 
