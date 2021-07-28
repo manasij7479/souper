@@ -950,7 +950,7 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
       auto W = Inputs[0]->Width;
       if (V.getValue().getBitWidth() > W) {
         V = EvalValue(V.getValue().trunc(W));
-      } else if (V.getValue().getBitWidth() > W) {
+      } else if (V.getValue().getBitWidth() < W) {
         V = EvalValue(V.getValue().zext(W));
       }
 
