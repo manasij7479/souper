@@ -946,7 +946,15 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
       findVars(SC.LHS, Inputs);
       assert(Inputs.size() >= 1);
 
-      VC[Inputs[0]] = EvalValue(KBHC.InputVals[i]);
+      EvalValue V(KBHC.InputVals[i]);
+      auto W = Inputs[0]->Width;
+      if (V.getValue().getBitWidth() > W) {
+        V = EvalValue(V.getValue().trunc(W));
+      } else if (V.getValue().getBitWidth() > W) {
+        V = EvalValue(V.getValue().zext(W));
+      }
+
+      VC[Inputs[0]] = V;
 
       for (int i = 1; i < Inputs.size(); ++i) {
         VC[Inputs[i]] = EvalValue(llvm::APInt(Inputs[i]->Width, 0));
@@ -963,7 +971,8 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
         for (auto &&Pair : KBHC.Data[i]) {
           auto &&KBH = Pair.second;
           // TODO Make sure to manage widths properly later
-          for (auto j = 0; j < Val.getBitWidth(); ++j) {
+          auto min = Val.getBitWidth() < KBH.One.size() ? Val.getBitWidth() : KBH.One.size();
+          for (auto j = 0; j < min; ++j) {
             if (Val[i]) {
               Map[Pair.first] += KBH.One[i];
             } else {

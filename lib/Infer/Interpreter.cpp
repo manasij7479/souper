@@ -158,7 +158,7 @@ namespace souper {
 
     switch (Inst->K) {
     case Inst::Const:
-      return {Inst->Val};
+      return EvalValue(Inst->Val);
 
     case Inst::UntypedConst:
       return {Inst->Val};
