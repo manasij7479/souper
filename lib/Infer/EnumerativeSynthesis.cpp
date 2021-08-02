@@ -295,9 +295,11 @@ bool getGuesses(const std::set<Inst *> &Inputs,
     std::sort(BinOps.begin(), BinOps.end(), [&Foo](Inst::Kind A, Inst::Kind B) {
       return Foo[B] < Foo[A];
     });
-//    for (auto k : BinOps) {
-//      llvm::outs() << Inst::getKindName(k)  << "\n";
-//    }
+    std::ofstream out("order.txt");
+    for (auto k : BinOps) {
+      out << Inst::getKindName(k)  << "\n";
+    }
+
 //    int foo;
 //    std::cin >> foo;
   }
