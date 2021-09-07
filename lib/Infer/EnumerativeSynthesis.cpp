@@ -135,9 +135,9 @@ namespace {
   static cl::opt<bool> EnableBiasing("souper-semantic-biasing",
     cl::desc("Enable semantic biasing (defaults=false)"),
     cl::init(false));
-  static cl::opt<std::string> BiasingData("souper-biasing-data",
-    cl::desc("Location of biasing data file"),
-    cl::init(""));
+//  static cl::opt<std::string> BiasingData("souper-biasing-data",
+//    cl::desc("Location of biasing data file"),
+//    cl::init(""));
 
 }
 
@@ -940,7 +940,8 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
 
   std::map<Inst::Kind, float> Map;
   if (EnableBiasing) {
-    KBHistogramCollection KBHC(BiasingData);
+    auto EffW = LHS->Width == 1 ? 1 : 32;
+    KBHistogramCollection KBHC("data" + std::to_string(EffW) + ".txt");
     for (int i = 0; i < KBHC.InputVals.size(); ++i) {
 
       ValueCache VC;
@@ -1042,7 +1043,7 @@ std::vector<Inst *> EnumerativeSynthesis::generateGuesses(const std::set<Inst *>
 
 KBHistogramCollection::KBHistogramCollection(std::string File) {
   // not a great idea to parse inside a construction..
-  std::ifstream in("data.txt");
+  std::ifstream in(File);
   size_t Width;
   in >> Width;
   size_t count, input;
