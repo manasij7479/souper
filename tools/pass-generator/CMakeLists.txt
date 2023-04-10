@@ -5,7 +5,8 @@ cmake_policy(SET CMP0074 NEW)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
-find_package(LLVM 14.0 REQUIRED CONFIG)
+find_package(LLVM 15.0 REQUIRED CONFIG)
+
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(HandleLLVMOptions)
 include(AddLLVM)
