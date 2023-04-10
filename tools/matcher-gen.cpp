@@ -358,7 +358,7 @@ struct SymbolTable {
       }
     case Inst::Const :
       if (I->Width <= 64) {
-        return {llvm::toString(I->Val, 10, false), true};
+        return {"llvm::APInt(" + std::to_string(I->Width) + ", " + llvm::toString(I->Val, 10, false) + ")", true};
       } else {
         return {"util::V(" + std::to_string(I->Width)
           + ", \"" + llvm::toString(I->Val, 10, false) + "\")", true};
@@ -686,10 +686,13 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
         Out << "&" << Syms.T[Child] << " <<= ";
       }
       auto Str = llvm::toString(Child->Val, 10, false);
+      if (Child->Width > 64) {
+        Str = "\"" + Str + "\"";
+      }
       if (OnlyExplicitWidths) {
         Out << "m_ExtInt(\"" << Str << "\", " << Child->Width << ")";
       } else {
-        Out << "m_SpecificInt( " << Child->Width << ", \"" << Str << "\")";
+        Out << "m_SpecificInt( " << Child->Width << "," << Str << ")";
       }
     } else if (Child->K == Inst::Var) {
       if (Child->Name.starts_with("symconst")) {
