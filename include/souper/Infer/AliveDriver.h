@@ -40,6 +40,9 @@ public:
     for (auto &&p : TypeCache) {
       delete(p.second);
     }
+    for (auto &&t : SymTypes) {
+      delete(t);
+    }
   }
 
   std::vector<std::map<const Inst *, size_t>> getValidTypings() {
@@ -56,6 +59,7 @@ private:
   void copyInputs(Cache &To, IR::Function &RHS);
 
   std::unordered_map<std::string, IR::Type*> TypeCache;
+  std::vector<IR::Type *> SymTypes;
 
   IR::Type &getType(int n);
   IR::Type &getOverflowType(int n);
