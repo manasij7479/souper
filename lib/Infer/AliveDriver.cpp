@@ -829,16 +829,18 @@ souper::AliveDriver::translateDemandedBits(const souper::Inst* I,
 }
 
 IR::Type &souper::AliveDriver::getType(int Width) {
+  if (WidthIndependentMode) {
+    if (SymTypes.empty()) {
+      SymTypes.push_back(new IR::SymbolicType("symty_", (1 << IR::SymbolicType::Int)));
+    }
+    return *SymTypes.back();
+  }
+
   std::string n = "i" + std::to_string(Width);
   if (TypeCache.find(n) == TypeCache.end()) {
-    if (WidthIndependentMode) {
-      auto t = new IR::SymbolicType("symty_", (1 << IR::SymbolicType::Int));
-      TypeCache[""] = t;
-    } else {
-      TypeCache[n] = new IR::IntType(std::move(n), Width);
-    }
+    TypeCache[n] = new IR::IntType(std::move(n), Width);
   }
-  return WidthIndependentMode ? *TypeCache[""] : *TypeCache[n];
+  return *TypeCache[n];
 }
 
 IR::Type &souper::AliveDriver::getOverflowType(int Width) {
