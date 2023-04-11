@@ -20,4 +20,4 @@ for i in `ls -v $indir/*`; do echo "timeout 300" $cmd $i " > " ${indir}t/`basena
 
 # for i in `ls -v $indir/*`; do echo "timeout 300" $cmd $i " > " ${indir}r/`basename $i`;done > /tmp/cmdfile.txt
 
-parallel --will-cite < /tmp/cmdfile.txt
+#parallel --will-cite < /tmp/cmdfile.txt
