@@ -868,7 +868,7 @@ souper::AliveDriver::translateDemandedBits(const souper::Inst* I,
 }
 
 IR::Type &souper::AliveDriver::getType(int Width) {
-  if (WidthIndependentMode) {
+  if (WidthIndependentMode && Width != 1) {
     if (SymTypes.empty()) {
       SymTypes.push_back(new IR::SymbolicType("symty_", (1 << IR::SymbolicType::Int)));
     }
