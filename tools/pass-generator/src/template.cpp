@@ -1,4 +1,6 @@
 #include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/PatternMatch.h"
@@ -678,9 +680,9 @@ llvm::APInt shl(int A, llvm::APInt B) {
   return llvm::APInt(B.getBitWidth(), A).shl(B);
 }
 
-struct SouperCombine : public FunctionPass {
+struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
   static char ID;
-  SouperCombine() : FunctionPass(ID) {
+  SouperCombinePass() {
     if (ListFile != "") {
       std::ifstream in(ListFile);
       size_t num;
@@ -688,33 +690,41 @@ struct SouperCombine : public FunctionPass {
         F.insert(num);
       }
     }
+    W = std::make_shared<InstructionWorklist>();
   }
-  ~SouperCombine() {
+  ~SouperCombinePass() {
     St.print();
   }
-
+/*
   virtual void getAnalysisUsage(AnalysisUsage &Info) const override {
-//    Info.addRequired<LoopInfoWrapperPass>();
+   Info.addRequired<LoopInfoWrapperPass>();
     Info.addRequired<DominatorTreeWrapperPass>();
     Info.addRequired<DemandedBitsWrapperPass>();
     Info.addRequired<LazyValueInfoWrapperPass>();
-//    Info.addRequired<ScalarEvolutionWrapperPass>();
-//    Info.addRequired<TargetLibraryInfoWrapperPass>();
+   Info.addRequired<ScalarEvolutionWrapperPass>();
+   Info.addRequired<TargetLibraryInfoWrapperPass>();
   }
+*/
 
-
-  bool runOnFunction(Function &F) override {
+  bool runOnFunction(Function &F, FunctionAnalysisManager &FAM) {
     llvm::errs() << "SouperCombine: " << F.getName() << "\n";
     AssumptionCache AC(F);
 
-    DT = new DominatorTree(F);
-    DB = new DemandedBits(F, AC, *DT);
+//     DT = new DominatorTree(F);
+//     DB = new DemandedBits(F, AC, *DT);
 ////    LVI =
 //    auto DL = new DataLayout(F.getParent());
 //    auto TLI = new TargetLibraryInfo();
 //    new LazyValueInfo
 
-    W.reserve(F.getInstructionCount());
+//     auto &LI = FAM.getResult<llvm::LoopAnalysis>(F);
+    DT = &FAM.getResult<DominatorTreeAnalysis>(F);
+    DB = &FAM.getResult<DemandedBitsAnalysis>(F);
+//     auto &LVI = FAM.getResult<LazyValueAnalysis>(F);
+//     auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+//     auto &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
+
+    W->reserve(F.getInstructionCount());
     for (auto &BB : F) {
       for (auto &&I : BB) {
         if (I.getNumOperands() &&
@@ -723,13 +733,13 @@ struct SouperCombine : public FunctionPass {
             !isa<GetElementPtrInst>(&I) &&
             !isa<CallInst>(&I) &&
             I.getType()->isIntegerTy()) {
-          W.push(&I);
+          W->push(&I);
         }
       }
     }
     IRBuilder Builder(F.getContext());
     // llvm::errs() << "Before:\n" << F;
-    auto r = run(Builder);
+    auto r = runThroughWorklist(Builder);
     // llvm::errs() << "After:\n" << F;
 //    delete DB;
 //    delete DT;
@@ -749,18 +759,35 @@ struct SouperCombine : public FunctionPass {
     return false;
   }
   void replace(Instruction *I, Value *V, IRBuilder &Builder) {
-    W.pushUsersToWorkList(*I);
+    W->pushUsersToWorkList(*I);
     I->replaceAllUsesWith(V);
   }
-  bool run(IRBuilder &Builder) {
+  bool runThroughWorklist(IRBuilder &Builder) {
     bool Changed = false;
-    while (auto I = W.removeOne()) {
+    while (auto I = W->removeOne()) {
 //      llvm::errs() << "FOO\n";
 //      I->print(llvm::errs());
       Changed = processInst(I, Builder) || Changed;
     }
     return Changed;
   }
+
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
+
+//     if (Verify && verifyFunction(F))
+//       llvm::report_fatal_error(("function " + F.getName() + " broken before Souper").str().c_str());
+//
+    // TODO ENABLE Verification
+    bool res;
+    do {
+      res = runOnFunction(F, FAM);
+//       if (res && verifyFunction(F))
+//         llvm::report_fatal_error("function broken after Souper changed it");
+    } while (res);
+
+    return PreservedAnalyses::none();
+  }
+
 
   Value *getReplacement(llvm::Instruction *I, IRBuilder *B) {
 //    if (!I->hasOneUse()) {
@@ -814,7 +841,7 @@ struct SouperCombine : public FunctionPass {
     return V->getType();
   }
 
-  InstructionWorklist W;
+  std::shared_ptr<InstructionWorklist> W;
   util::Stats St;
   DominatorTree *DT;
   DemandedBits *DB;
@@ -823,33 +850,39 @@ struct SouperCombine : public FunctionPass {
 };
 }
 
-char SouperCombine::ID = 0;
 namespace llvm {
 void initializeSouperCombinePass(llvm::PassRegistry &);
 }
 
-INITIALIZE_PASS_BEGIN(SouperCombine, "souper-combine", "Souper super-optimizer pass",
-                      false, false)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(DemandedBitsWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LazyValueInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
-INITIALIZE_PASS_END(SouperCombine, "souper-combine", "Souper super-optimizer pass", false,
-                    false)
+char SouperCombinePass::ID = 0;
 
-static struct Register {
-  Register() {
-    initializeSouperCombinePass(*llvm::PassRegistry::getPassRegistry());
+bool pipelineParsingCallback(StringRef Name, FunctionPassManager &FPM,
+                             ArrayRef<PassBuilder::PipelineElement>) {
+  if (Name == "soupercombine") {
+    FPM.addPass(SouperCombinePass());
+    return true;
+  } else {
+    return false;
   }
-} X;
-
-static void registerSouperCombine(
-    const llvm::PassManagerBuilder &Builder, llvm::legacy::PassManagerBase &PM) {
-  PM.add(new SouperCombine);
 }
 
-static llvm::RegisterStandardPasses
-RegisterSouperOptimizer(llvm::PassManagerBuilder::EP_Peephole,
-                        registerSouperCombine);
+void passBuilderCallback(PassBuilder &PB) {
+  PB.registerPipelineParsingCallback(pipelineParsingCallback);
+  PB.registerPeepholeEPCallback(
+        [](llvm::FunctionPassManager &FPM, llvm::OptimizationLevel Level) {
+        FPM.addPass(SouperCombinePass());
+      });
+}
+
+PassPluginLibraryInfo getSouperCombinePassPluginInfo() {
+  llvm::PassPluginLibraryInfo Res;
+  Res.APIVersion = LLVM_PLUGIN_API_VERSION;
+  Res.PluginName = "soupercombine";
+  Res.PluginVersion = LLVM_VERSION_STRING;
+  Res.RegisterPassBuilderCallbacks = passBuilderCallback;
+  return Res;
+}
+
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+  return getSouperCombinePassPluginInfo();
+}
