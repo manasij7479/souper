@@ -778,12 +778,13 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
 //       llvm::report_fatal_error(("function " + F.getName() + " broken before Souper").str().c_str());
 //
     // TODO ENABLE Verification
-    bool res;
-    do {
-      res = runOnFunction(F, FAM);
+    //bool res;
+    //do {
+      //int n = 2;
+      runOnFunction(F, FAM);
 //       if (res && verifyFunction(F))
 //         llvm::report_fatal_error("function broken after Souper changed it");
-    } while (res);
+    //} while (res && --n);
 
     return PreservedAnalyses::none();
   }
@@ -858,7 +859,7 @@ char SouperCombinePass::ID = 0;
 
 bool pipelineParsingCallback(StringRef Name, FunctionPassManager &FPM,
                              ArrayRef<PassBuilder::PipelineElement>) {
-  if (Name == "soupercombine") {
+  if (Name == "souper-combine") {
     FPM.addPass(SouperCombinePass());
     return true;
   } else {
@@ -877,7 +878,7 @@ void passBuilderCallback(PassBuilder &PB) {
 PassPluginLibraryInfo getSouperCombinePassPluginInfo() {
   llvm::PassPluginLibraryInfo Res;
   Res.APIVersion = LLVM_PLUGIN_API_VERSION;
-  Res.PluginName = "soupercombine";
+  Res.PluginName = "souper-combine";
   Res.PluginVersion = LLVM_VERSION_STRING;
   Res.RegisterPassBuilderCallbacks = passBuilderCallback;
   return Res;
