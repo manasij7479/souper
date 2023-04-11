@@ -484,7 +484,7 @@ configure_file(${CMAKE_SOURCE_DIR}/utils/redis-unix-socket.conf.in ${CMAKE_BINAR
 
 configure_file(${CMAKE_SOURCE_DIR}/utils/sclang.in ${CMAKE_BINARY_DIR}/sclang @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/utils/sclang.in ${CMAKE_BINARY_DIR}/sclang++ @ONLY)
-# configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang @ONLY)
-# configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang++ @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang++ @ONLY)
 
 add_subdirectory(docs)
