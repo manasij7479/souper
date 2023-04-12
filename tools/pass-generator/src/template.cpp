@@ -95,6 +95,17 @@ public:
   llvm::Value *CreateSDivExact(llvm::Value *A, llvm::Value *B) {
     return llvm::BinaryOperator::CreateExact(Instruction::SDiv, A, B);
   }
+
+  llvm::Value *CreateAddNW(llvm::Value *A, llvm::Value *B) {
+    return llvm::IRBuilder<NoFolder>::CreateAdd(A, B, "", true, true);
+  }
+
+  llvm::Value *CreateSubNW(llvm::Value *A, llvm::Value *B) {
+    return llvm::IRBuilder<NoFolder>::CreateSub(A, B, "", true, true);
+  }
+
+
+
 };
 
 
