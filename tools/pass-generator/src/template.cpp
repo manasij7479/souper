@@ -112,7 +112,7 @@ public:
   }
 
   llvm::Value *CreateCmp(llvm::CmpInst::Predicate Pred, llvm::Value *LHS, llvm::Value *RHS) {
-    if (!eqWD(LHS, RHS)) return nullptr;
+    if (!LHS || !RHS || !eqWD(LHS, RHS)) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateCmp(Pred, LHS, RHS);
   }
 };
@@ -278,6 +278,10 @@ struct constant_matcher {
   llvm::Value** Captured;
   constant_matcher(llvm::Value** C) : Captured(C) {}
   template <typename OpTy> bool match(OpTy *V) {
+    if (!V) {
+      // FIXME : Should never happen.
+      return false;
+    }
     if (isa<ConstantInt>(V)) {
       *Captured = dyn_cast<ConstantInt>(V);
       return *Captured != nullptr;
@@ -321,6 +325,10 @@ struct Capture {
   explicit Capture(Value **V, CArgs ...C) : Captured(V), M(C...) {}
 
   template <typename OpTy> bool match(OpTy *V) {
+    if (!V || !Captured) {
+      // FIXME: Should never happen
+      return false;
+    }
     if (M.match(V)) {
       *Captured = dyn_cast<Value>(V);
       if (!*Captured) {
@@ -473,6 +481,9 @@ bool ne(llvm::APInt A, llvm::APInt B) {
 
 namespace util {
   bool dc(llvm::DominatorTree *DT, llvm::Instruction *I, llvm::Value *V) {
+    if (!I || !V) {
+      return false;
+    }
     if (auto Def = dyn_cast<Instruction>(V)) {
       if (I->getParent() == Def->getParent()) {
         return true;
@@ -799,9 +810,17 @@ namespace util {
   }
 
   llvm::APInt W(llvm::Value *Ctx) {
+    if (!Ctx) {
+      // FIXME Should never happen.
+      return llvm::APInt(32, 128);
+    }
     return llvm::APInt(Ctx->getType()->getIntegerBitWidth(), Ctx->getType()->getIntegerBitWidth());
   }
   llvm::APInt W(llvm::Value *Ctx, size_t WidthOfWidth) {
+    if (!Ctx) {
+      // FIXME Should never happen.
+      return llvm::APInt(WidthOfWidth, 128);
+    }
     return llvm::APInt(WidthOfWidth, Ctx->getType()->getIntegerBitWidth());
   }
 }
