@@ -327,20 +327,130 @@ Capture<Matcher> operator<<=(Value **V, Matcher &&M) {
   return Capture<Matcher>(V, M);
 }
 
-template <typename OpTy>
-inline CastClass_match_width<OpTy, Instruction::ZExt> m_ZExt(size_t W, const OpTy &Op) {
-  return CastClass_match_width<OpTy, Instruction::ZExt>(W, Op);
+// template <typename OpTy>
+// inline CastClass_match_width<OpTy, Instruction::ZExt> m_ZExt(size_t W, const OpTy &Op) {
+//   return CastClass_match_width<OpTy, Instruction::ZExt>(W, Op);
+// }
+//
+// template <typename OpTy>
+// inline CastClass_match_width<OpTy, Instruction::SExt> m_SExt(size_t W, const OpTy &Op) {
+//   return CastClass_match_width<OpTy, Instruction::SExt>(W, Op);
+// }
+//
+// template <typename OpTy>
+// inline CastClass_match_width<OpTy, Instruction::Trunc> m_Trunc(size_t W, const OpTy &Op) {
+//   return CastClass_match_width<OpTy, Instruction::Trunc>(W, Op);
+// }
+
+void m(llvm::APInt &A, llvm::APInt &B) {
+  auto WA = A.getBitWidth(), WB = B.getBitWidth();
+  if (WA == WB) {
+    return;
+  }
+  if (WA < WB) {
+    if (A.isSignBitSet()) {
+      A = A.sext(WB);
+    } else {
+      A = A.zext(WB);
+    }
+  }
+
+  if (WA > WB) {
+    if (B.isSignBitSet()) {
+      B = B.sext(WA);
+    } else {
+      B = B.zext(WA);
+    }
+  }
+
 }
 
-template <typename OpTy>
-inline CastClass_match_width<OpTy, Instruction::SExt> m_SExt(size_t W, const OpTy &Op) {
-  return CastClass_match_width<OpTy, Instruction::SExt>(W, Op);
+llvm::APInt xor_(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A ^ B;
 }
 
-template <typename OpTy>
-inline CastClass_match_width<OpTy, Instruction::Trunc> m_Trunc(size_t W, const OpTy &Op) {
-  return CastClass_match_width<OpTy, Instruction::Trunc>(W, Op);
+llvm::APInt and_(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A & B;
 }
+
+llvm::APInt or_(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A | B;
+}
+
+llvm::APInt add(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A + B;
+}
+
+llvm::APInt sub(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A - B;
+}
+
+llvm::APInt mul(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A * B;
+}
+
+llvm::APInt shl(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.shl(B);
+}
+
+llvm::APInt urem(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.urem(B);
+}
+
+llvm::APInt srem(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.srem(B);
+}
+
+llvm::APInt udiv(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.udiv(B);
+}
+
+llvm::APInt sdiv(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.sdiv(B);
+}
+
+bool slt(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.slt(B);
+}
+
+bool sle(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.sle(B);
+}
+
+bool ult(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.ult(B);
+}
+
+bool ule(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.ule(B);
+}
+
+bool eq(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.eq(B);
+}
+
+bool ne(llvm::APInt A, llvm::APInt B) {
+  m(A, B);
+  return A.ne(B);
+}
+
+
 
 namespace util {
   bool dc(llvm::DominatorTree *DT, llvm::Instruction *I, llvm::Value *V) {
@@ -362,7 +472,8 @@ namespace util {
   }
 
   bool check_width(llvm::Value *V, Instruction *I) {
-    if (V && V->getType() && V->getType()->isIntegerTy()) {
+    if (V && V->getType() && V->getType()->isIntegerTy() &&
+        I && I->getType() && I->getType()->isIntegerTy()) {
       return V->getType()->getScalarSizeInBits() == I->getType()->getScalarSizeInBits();
     } else {
       return false;
@@ -577,7 +688,7 @@ namespace util {
       return false;
     }
     V = B->getInt(ComputedDB);
-    llvm::errs() << "SymDB: " << llvm::toString(ComputedDB, 2, false) << "\n";
+// //     llvm::errs() << "SymDB: " << llvm::toString(ComputedDB, 2, false) << "\n";
     return true;
   }
 
@@ -652,6 +763,10 @@ namespace util {
   }
 
   llvm::APInt V(llvm::Value *V) {
+    if (!V || !isa<ConstantInt>(V)) {
+      // FIXME This should ideally never happen, please fix
+      return llvm::APInt(1, 0);
+    }
     return llvm::dyn_cast<ConstantInt>(V)->getValue();
   }
   llvm::APInt V(size_t Width, size_t Val) {
@@ -707,7 +822,7 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
 */
 
   bool runOnFunction(Function &F, FunctionAnalysisManager &FAM) {
-    llvm::errs() << "SouperCombine: " << F.getName() << "\n";
+//     llvm::errs() << "SouperCombine: " << F.getName() << "\n";
     AssumptionCache AC(F);
 
 //     DT = new DominatorTree(F);
@@ -807,6 +922,7 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
 
   struct SymConst {
     SymConst(size_t Width, size_t Value, IRBuilder *B) : Width(Width), Value(Value), B(B) {}
+
     size_t Width;
     size_t Value; // TODO: APInt
     IRBuilder *B;
