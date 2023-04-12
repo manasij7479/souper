@@ -273,7 +273,7 @@ struct SymbolTable {
 
   std::map<Inst *, std::string> Preds;
   std::vector<Inst *> Vars;
-  std::set<Inst *> Consts, ConstRefs;
+  std::set<Inst *> ConstRefs;
 
   std::set<Inst *> Used;
 
@@ -319,6 +319,10 @@ struct SymbolTable {
     std::vector<std::pair<std::string, bool>> Children;
 
     if (I->K == Inst::BitWidth) {
+      if (I->Ops[0]->K != Inst::Var) {
+        llvm::errs() << "Width of a non var.\n";
+        return {"", false};
+      }
       if (T.at(I->Ops[0]).empty()) {
         return {"", false};
       }
@@ -335,6 +339,10 @@ struct SymbolTable {
 
     auto MET = [&](auto Str) {
       return Children[0].first + "." + Str + "(" + Children[1].first + ")";
+    };
+
+    auto WC64_HACK = [&](auto Str) {
+      return Children[0].first + "." + Str + "(64)";
     };
 
     auto WC = [&](auto Str) {
@@ -356,92 +364,111 @@ struct SymbolTable {
       } else {
         return {"", false};
       }
-    case Inst::Const :
+    case Inst::Const : {
+
+      std::string W = std::to_string(I->Width);
+
       if (I->Width <= 64) {
-        return {"llvm::APInt(" + std::to_string(I->Width) + ", " + llvm::toString(I->Val, 10, false) + ")", true};
+        return {"llvm::APInt(" + W + ", " + llvm::toString(I->Val, 10, false) + ")", true};
       } else {
-        return {"util::V(" + std::to_string(I->Width)
+        return {"util::V(" + W
           + ", \"" + llvm::toString(I->Val, 10, false) + "\")", true};
       }
+    }
 
     case Inst::AddNW :
     case Inst::AddNUW :
     case Inst::AddNSW :
-    case Inst::Add : return {OP("+"), true};
+    case Inst::Add : return {FUN("add"), true};
 
     case Inst::SubNW :
     case Inst::SubNUW :
     case Inst::SubNSW :
-    case Inst::Sub : return {OP("-"), true};
+    case Inst::Sub : return {FUN("sub"), true};
 
     case Inst::MulNW :
     case Inst::MulNUW :
     case Inst::MulNSW :
-    case Inst::Mul : return {OP("*"), true};
+    case Inst::Mul : return {FUN("mul"), true};
 
     case Inst::Shl : {
       if (isdigit(Children[0].first[0])) {
         return {FUN("shl"), true};
       } else {
-        return {MET("shl"), true};
+        return {FUN("shl"), true};
       }
     }
     case Inst::LShr : return {MET("lshr"), true};
     case Inst::AShr : return {MET("ashr"), true};
 
-    case Inst::And : return {OP("&"), true};
-    case Inst::Or : return {OP("|"), true};
-    case Inst::Xor : return {OP("^"), true};
+    case Inst::And : {
+      if (I->Width == 1) {
+        return {OP("&"), true};
+      }
+      return {FUN("and_"), true};
+    }
+    case Inst::Or : {
+      if (I->Width == 1) {
+        return {OP("|"), true};
+      }
+      return {FUN("or_"), true};
+    }
+    case Inst::Xor : {
+      if (I->Width == 1) {
+        return {OP("^"), true};
+      }
+      return {FUN("xor_"), true};
+    }
 
-    case Inst::URem : return {MET("urem"), true};
-    case Inst::SRem : return {MET("srem"), true};
-    case Inst::UDiv : return {MET("udiv"), true};
-    case Inst::SDiv : return {MET("sdiv"), true};
+    case Inst::URem : return {FUN("urem"), true};
+    case Inst::SRem : return {FUN("srem"), true};
+    case Inst::UDiv : return {FUN("udiv"), true};
+    case Inst::SDiv : return {FUN("sdiv"), true};
 
     case Inst::Slt : {
       if (isdigit(Children[0].first[0])) {
         return {OP("<"), true};
       } else {
-        return {MET("slt"), true};
+        return {FUN("slt"), true};
       }
     }
     case Inst::Sle : {
       if (isdigit(Children[0].first[0])) {
         return {OP("<="), true};
       } else {
-        return {MET("sle"), true};
+        return {FUN("sle"), true};
       }
     }
     case Inst::Ult : {
       if (isdigit(Children[0].first[0])) {
         return {OP("<"), true};
       } else {
-        return {MET("ult"), true};
+        return {FUN("ult"), true};
       }
     }
     case Inst::Ule : {
       if (isdigit(Children[0].first[0])) {
         return {OP("<="), true};
       } else {
-        return {MET("ule"), true};
+        return {FUN("ule"), true};
       }
     }
     case Inst::Eq : {
       if (isdigit(Children[0].first[0])) {
         return {OP("=="), true};
       } else {
-        return {MET("eq"), true};
+        return {FUN("eq"), true};
       }
     }
     case Inst::Ne : {
       if (isdigit(Children[0].first[0])) {
         return {OP("!="), true};
       } else {
-        return {MET("ne"), true};
+        return {FUN("ne"), true};
       }
     }
-    case Inst::ZExt : return {WC("zext"), true};
-    case Inst::SExt : return {WC("sext"), true};
+    case Inst::ZExt : return {WC64_HACK("zext"), true};
+    case Inst::SExt : return {WC64_HACK("sext"), true};
     case Inst::Trunc : return {WC("trunc"), true};
 
     default: {
@@ -735,6 +762,14 @@ Inst *getSibling(Inst *Child, Inst *Parent) {
 
 template <typename Stream>
 bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullptr) {
+//   if (!Parent && I->K == Inst::Const) {
+//     Out << Syms.T[I];
+//     if (Syms.T[I].starts_with("C")) {
+//       Out << "(I)";
+//     }
+//     return true;
+//   }
+
   auto It = CreateOps.find(I->K);
   if (It == CreateOps.end()) {
     llvm::errs() << "\nUnimplemented creator:" << Inst::getKindName(I->K) << "\n";
@@ -813,9 +848,9 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
         // llvm::errs() << "Var1: " << I->Name << " -> " << Syms.T[I] << "\n";
       }
     }
-    if (I->K == Inst::Const) {
-      Syms.Consts.insert(I);
-    }
+//     if (I->K == Inst::Const) {
+//       Syms.Consts.insert(I);
+//     }
     for (int i = 0; i < I->Ops.size(); ++i) {
       if (Visited.find(I->Ops[i]) == Visited.end()) {
         Stack.push_back(I->Ops[i]);
@@ -951,6 +986,8 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
 
   Syms.PrintConstDecls(Out);
 
+
+
   Out << "  auto ret";
 
   if (Syms.T.find(Input.Mapping.RHS) != Syms.T.end()) {
@@ -959,9 +996,14 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
       Out << "(I)";
     }
     Out << ";";
+
   } else if (Input.Mapping.RHS->K == Inst::DemandedMask && Syms.T.find(Input.Mapping.RHS->Ops[0]) != Syms.T.end()) {
     assert(DemandedMask == Input.Mapping.RHS->Ops[1] && "DemandedMask mismatch");
-    Out << " = " << Syms.T[Input.Mapping.RHS->Ops[0]] << ";";
+    Out << " = " << Syms.T[Input.Mapping.RHS->Ops[0]];
+    if (Syms.T[Input.Mapping.RHS->Ops[0]].starts_with("C")) {
+      Out << "(I)";
+    }
+    Out << ";";
   } else if (Input.Mapping.RHS->K == Inst::Const) {
     Out << " APInt Result("
         << Input.Mapping.RHS->Width <<", "
@@ -971,6 +1013,7 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
     Out << " = ";
     if (Input.Mapping.RHS->K == Inst::DemandedMask) {
       assert(DemandedMask == Input.Mapping.RHS->Ops[1] && "DemandedMask mismatch");
+
       if (!GenRHSCreator(Input.Mapping.RHS->Ops[0], Out, Syms)) {
         return false;
       }
