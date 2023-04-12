@@ -70,7 +70,14 @@ public:
     }
   }
 
-
+  bool eqWD(llvm::Value *A, llvm::Value *B) {
+    if (A && A->getType() && A->getType()->isIntegerTy() &&
+        B && B->getType() && B->getType()->isIntegerTy()) {
+      return A->getType()->getScalarSizeInBits() == B->getType()->getScalarSizeInBits();
+    } else {
+      return false; 
+    }
+  }
 
   // TODO Verify that these work, the mangling argument is weird
   llvm::Value *CreateFShl(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
@@ -104,10 +111,11 @@ public:
     return llvm::IRBuilder<NoFolder>::CreateSub(A, B, "", true, true);
   }
 
-
-
+  llvm::Value *CreateCmp(llvm::CmpInst::Predicate Pred, llvm::Value *LHS, llvm::Value *RHS) {
+    if (!eqWD(LHS, RHS)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateCmp(Pred, LHS, RHS);
+  }
 };
-
 
 // Custom Matchers
 
