@@ -146,6 +146,23 @@ public:
     return llvm::IRBuilder<NoFolder>::CreateCmp(Pred, LHS, RHS);
   }
 
+  llvm::Value *CreateSExt(llvm::Value *A, llvm::Type *T) {
+    if (!A || !A->getType() || !A->getType()->isIntegerTy() || 
+         A->getType()->getScalarSizeInBits() >= T->getScalarSizeInBits()) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateSExt(A, T);
+  }
+
+  llvm::Value *CreateZExt(llvm::Value *A, llvm::Type *T) {
+    if (!A || !A->getType() || !A->getType()->isIntegerTy() || 
+         A->getType()->getScalarSizeInBits() >= T->getScalarSizeInBits()) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateZExt(A, T);
+  }
+
+  llvm::Value *CreateTrunc(llvm::Value *A, llvm::Type *T) {
+    if (!A || !A->getType() || !A->getType()->isIntegerTy() || 
+         A->getType()->getScalarSizeInBits() <= T->getScalarSizeInBits()) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateTrunc(A, T);
+  }
 
 };
 
