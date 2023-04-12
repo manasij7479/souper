@@ -126,7 +126,7 @@ public:
     return llvm::IRBuilder<NoFolder>::CreateXor(A, B);
   }
 
-    llvm::Value *CreateAdd(llvm::Value *A, llvm::Value *B) {
+  llvm::Value *CreateAdd(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateAdd(A, B);
   }
@@ -139,6 +139,41 @@ public:
   llvm::Value *CreateMul(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateMul(A, B);
+  }
+
+  llvm::Value *CreateShl(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateShl(A, B);
+  }
+
+  llvm::Value *CreateAShr(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateAShr(A, B);
+  }
+
+  llvm::Value *CreateLShr(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateLShr(A, B);
+  }
+
+  llvm::Value *CreateUDiv(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateUDiv(A, B);
+  }
+
+  llvm::Value *CreateSDiv(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateSDiv(A, B);
+  }
+
+  llvm::Value *CreateURem(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateURem(A, B);
+  }
+
+  llvm::Value *CreateSRem(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateSRem(A, B);
   }
 
   llvm::Value *CreateCmp(llvm::CmpInst::Predicate Pred, llvm::Value *LHS, llvm::Value *RHS) {
@@ -163,6 +198,8 @@ public:
          A->getType()->getScalarSizeInBits() <= T->getScalarSizeInBits()) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateTrunc(A, T);
   }
+
+
 
 };
 
