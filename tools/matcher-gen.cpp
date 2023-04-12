@@ -54,6 +54,11 @@ static llvm::cl::opt<std::string> ListFile("listfile",
     llvm::cl::desc("List of optimization indexes to include.\n"
                    "(default=empty-string)"),
     llvm::cl::init(""));
+  
+static llvm::cl::opt<std::string> ListOutFile("listoutfile",
+    llvm::cl::desc("List of optimization indexes to include.\n"
+                   "(default=empty-string)"),
+    llvm::cl::init(""));
 
 
 static const std::map<Inst::Kind, std::string> MatchOps = {
@@ -1296,7 +1301,17 @@ int main(int argc, char **argv) {
         llvm::errs() << "Opt " << current <<  " skipped on demand.\n";
         SKIP("SKIP Filtered.");
         continue;
+      } else {
+        if (ListOutFile != "") {
+          std::ofstream O(ListOutFile, std::ios::app);
+          ReplacementContext RC;
+          std::string IRComment =
+          Input.getLHSString(RC, true) +
+          Input.getRHSString(RC, true) + "\n";
+          O << IRComment << std::flush;
+        }
       }
+
       ReplacementContext RC;
       std::string IRComment =
         "/* Opt : " +
