@@ -914,7 +914,7 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
       } else {
         Out << ", ";
       }
-      Out << "*" << S.second;
+      Out << "*" << S.second << " = nullptr";
     }
     Out << ";\n";
   }
@@ -1312,7 +1312,7 @@ int main(int argc, char **argv) {
       SKIP("SKIP Failed to generate matcher.");
     }
   }
-  if (outputs) {
+  if (outputs && !NoDispatch) {
     llvm::outs() << "}\n";
   }
 
