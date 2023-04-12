@@ -81,9 +81,11 @@ public:
 
   // TODO Verify that these work, the mangling argument is weird
   llvm::Value *CreateFShl(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
+    if (!eqWD(A, B) || ~eqWD(B, C)) return nullptr;
     return CreateIntrinsic(Intrinsic::fshl, {A->getType()}, {A, B, C});
   }
   llvm::Value *CreateFShr(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
+    if (!eqWD(A, B) || ~eqWD(B, C)) return nullptr;
     return CreateIntrinsic(Intrinsic::fshr, {A->getType()}, {A, B, C});
   }
   llvm::Value *CreateBSwap(llvm::Value *A) {
