@@ -604,10 +604,17 @@ namespace util {
   }
 
   bool cr(llvm::Value *V, std::string L, std::string H) {
+
     if (!V || !V->getType() || !V->getType()->isIntegerTy()) {
       return false;
     }
     auto W = V->getType()->getIntegerBitWidth();
+
+    if (((L.length()-1)*64)/22 > W || ((H.length()-1)*64)/22 > W) {
+      return false;
+      // FIXME: should never happen
+    }
+
     llvm::ConstantRange R(llvm::APInt(W, L, 10), llvm::APInt(W, H, 10));
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return R.contains(Con->getUniqueInteger());
