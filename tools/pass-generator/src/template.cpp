@@ -111,10 +111,42 @@ public:
     return llvm::IRBuilder<NoFolder>::CreateSub(A, B, "", true, true);
   }
 
+  llvm::Value *CreateAnd(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateAnd(A, B);
+  }
+
+  llvm::Value *CreateOr(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateOr(A, B);
+  }
+
+  llvm::Value *CreateXor(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateXor(A, B);
+  }
+
+    llvm::Value *CreateAdd(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateAdd(A, B);
+  }
+
+  llvm::Value *CreateSub(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateSub(A, B);
+  }
+
+  llvm::Value *CreateMul(llvm::Value *A, llvm::Value *B) {
+    if (!A || !B || !eqWD(A, B)) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateMul(A, B);
+  }
+
   llvm::Value *CreateCmp(llvm::CmpInst::Predicate Pred, llvm::Value *LHS, llvm::Value *RHS) {
     if (!LHS || !RHS || !eqWD(LHS, RHS)) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateCmp(Pred, LHS, RHS);
   }
+
+
 };
 
 // Custom Matchers
