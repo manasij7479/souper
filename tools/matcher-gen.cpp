@@ -79,6 +79,8 @@ static const std::map<Inst::Kind, std::string> MatchOps = {
   {Inst::And, "m_c_And("}, {Inst::Or, "m_c_Or("},
   {Inst::Xor, "m_c_Xor("},
 
+  {Inst::Freeze, "m_Freeze("},
+
   {Inst::Eq, "m_c_ICmp("},
   {Inst::Ne, "m_c_ICmp("},
   {Inst::Ule, "m_ICmp("},
@@ -101,6 +103,7 @@ static const std::map<Inst::Kind, std::string> CreateOps = {
   {Inst::Or, "CreateOr("}, {Inst::And, "CreateAnd("}, {Inst::Xor, "CreateXor("},
   {Inst::AShrExact, "CreateAShrExact("},// {Inst::LShrExact, "CreateExactLShr("},
   // {Inst::UDivExact, "CreateExactUDiv("}, {Inst::SDivExact, "CreateExactSDiv("},
+  //{Inst::AddNW, "CreateAddNW("}, {Inst::SubNW, "CreateSubNW("},
 
   // FakeOps
   {Inst::LogB, "CreateLogB("},
@@ -115,6 +118,7 @@ static const std::map<Inst::Kind, std::string> CreateOps = {
   {Inst::Trunc, "CreateTrunc("},
   {Inst::SExt, "CreateSExt("},
   {Inst::ZExt, "CreateZExt("},
+  {Inst::Freeze, "CreateFreeze("},
 
   {Inst::Select, "CreateSelect("},
 
@@ -785,6 +789,10 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
     } else {
       Out << ", ";
     }
+    // if (Child->K == Inst::BitWidth) {
+    //   Out << "dummy";
+    //   continue;
+    // }
     if (Syms.T.find(Child) != Syms.T.end()) {
       Out << Syms.T[Child];
       if (Child->K == Inst::Const && Syms.T[Child].starts_with("C")) {
