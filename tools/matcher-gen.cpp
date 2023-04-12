@@ -813,17 +813,21 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
 
   }
   if (I->K == Inst::Trunc || I->K == Inst::SExt || I->K == Inst::ZExt) {
-    auto Cousin = getSibling(I, Parent);
-    std::string S;
-    if (Syms.T.find(Cousin) != Syms.T.end()) {
-      if (Syms.T[Cousin].starts_with("x")) {
-        S = Syms.T[Cousin];
-      }
-    }
-    if (!S.empty()) {
-      Out << ", T(" << S << ")"; // Ad-hoc type inference
+    if (!Parent) {
+      Out << ", T(I)"; // Parent is rhs root 
     } else {
-      Out << ", T(" << I->Width << ", B)";
+      auto Cousin = getSibling(I, Parent);
+      std::string S;
+      if (Syms.T.find(Cousin) != Syms.T.end()) {
+        if (Syms.T[Cousin].starts_with("x")) {
+          S = Syms.T[Cousin];
+        }
+      }
+      if (!S.empty()) {
+        Out << ", T(" << S << ")"; // Ad-hoc type inference
+      } else {
+        Out << ", T(" << I->Width << ", B)";
+      }
     }
   }
   Out << ")";
