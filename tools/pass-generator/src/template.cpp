@@ -199,6 +199,10 @@ public:
     return llvm::IRBuilder<NoFolder>::CreateTrunc(A, T);
   }
 
+  llvm::Value *CreateSelect(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
+    if (!A || !B || !C || !eqWD(B, C) || A->getType()->getScalarSizeInBits() != 1) return nullptr;
+    return llvm::IRBuilder<NoFolder>::CreateSelect(A, B, C);
+  }
 
 
 };
