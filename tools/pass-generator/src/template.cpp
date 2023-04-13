@@ -613,6 +613,10 @@ namespace util {
         return true;
       }
     }
+    if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
+      DataLayout DL(I->getParent()->getParent()->getParent());
+      return llvm::isKnownToBeAPowerOfTwo(V, DL);
+    }
     return false;
   }
 
@@ -825,7 +829,11 @@ namespace util {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return !Con->getValue().isZero();
     }
-//    llvm::errs() << "NZ called on NC.\n";
+
+    if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
+      DataLayout DL(I->getParent()->getParent()->getParent());
+      return llvm::isKnownNonZero(V, DL);
+    }
     return false;
   }
 
@@ -833,7 +841,10 @@ namespace util {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNonNegative();
     }
-//    llvm::errs() << "NN called on NC.\n";
+    if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
+      DataLayout DL(I->getParent()->getParent()->getParent());
+      return llvm::isKnownNonNegative(V, DL);
+    }
     return false;
   }
 
@@ -841,7 +852,10 @@ namespace util {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNegative();
     }
-//    llvm::errs() << "Neg called on NC.\n";
+    if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
+      DataLayout DL(I->getParent()->getParent()->getParent());
+      return llvm::isKnownNegative(V, DL);
+    }
     return false;
   }
 
