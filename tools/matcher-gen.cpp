@@ -192,6 +192,15 @@ struct VC : public Constraint {
   std::string Cons;
 };
 
+struct NSB : public Constraint {
+  NSB(std::string Name_, size_t Value_) : Name(Name_), Value(Value_)  {}
+  std::string print() override {
+    return "util::nsb(" + Name + ", " + std::to_string(Value) + ")";
+  }
+  std::string Name;
+  size_t Value;
+};
+
 struct PC : public Constraint {
   PC(std::string LHS, std::string RHS) : L(LHS), R(RHS) {}
   std::string print() override {
@@ -612,6 +621,11 @@ struct SymbolTable {
       if (V->Negative) {
         Constraints.push_back(new VC("neg", Name));
       }
+      if (V->NumSignBits) {
+        Constraints.push_back(new NSB(Name, V->NumSignBits));
+      }
+
+
 
     }
   }
