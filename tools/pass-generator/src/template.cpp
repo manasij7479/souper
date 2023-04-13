@@ -837,6 +837,17 @@ namespace util {
     return false;
   }
 
+  bool nsb(llvm::Value *V, size_t n) {
+    if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
+      return Con->getValue().getNumSignBits() > n;
+    }
+    if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
+      DataLayout DL(I->getParent()->getParent()->getParent());
+      return llvm::ComputeNumSignBits(V, DL) > n;
+    }
+    return false;
+  }
+
   bool nn(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNonNegative();
