@@ -732,7 +732,12 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
       }
     } else if (Child->K == Inst::Var) {
       if (Child->Name.starts_with("symconst")) {
-        Out << "m_Constant(&" << Syms.T[Child] << ")";
+        if (MatchedVals.find(Child) == MatchedVals.end()) {
+          MatchedVals.insert(Child);
+          Out << "m_Constant(&" << Syms.T[Child] << ")";
+        } else {
+          Out << "m_Deferred(" << Syms.T[Child] << ")";
+        }
       } else if (Child->Name.starts_with("constexpr")) {
         llvm::errs() << "FOUND A CONSTEXPR\n";
         return false;
@@ -961,7 +966,7 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
 
   int prof = profit(Input);
   size_t LHSSize = souper::instCount(Input.Mapping.LHS);
-  if (prof <= 0 || LHSSize > 15) {
+  if (prof < 0 || LHSSize > 15) {
     llvm::errs() << "Skipping replacement profit < 0 or LHS size > 15\n";
     return false;
   }

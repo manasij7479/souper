@@ -319,25 +319,25 @@ struct bind_apint {
   }
 };
 
-struct width_specific_intval : public specific_intval<false> {
-  size_t Width;
-  width_specific_intval(llvm::APInt V, size_t W) : specific_intval<false>(V), Width(W) {}
+// struct width_specific_intval : public specific_intval<false> {
+//   size_t Width;
+//   width_specific_intval(llvm::APInt V, size_t W) : specific_intval<false>(V), Width(W) {}
 
-  template <typename ITy> bool match(ITy *V) {
-    if (V->getType()->getScalarSizeInBits() != Width) {
-      return false;
-    }
-    return specific_intval<false>::match(V);
-  }
-};
+//   template <typename ITy> bool match(ITy *V) {
+//     if (V->getType()->getScalarSizeInBits() != Width) {
+//       return false;
+//     }
+//     return specific_intval<false>::match(V);
+//   }
+// };
 
-inline width_specific_intval m_SpecificInt(size_t W, uint64_t V) {
-  return width_specific_intval(APInt(64, V), W);
-}
+// inline width_specific_intval m_SpecificInt(size_t W, uint64_t V) {
+//   return width_specific_intval(APInt(64, V), W);
+// }
 
-inline width_specific_intval m_SpecificInt(size_t W, std::string S) {
-  return width_specific_intval(APInt(W, S, 10), W);
-}
+// inline width_specific_intval m_SpecificInt(size_t W, std::string S) {
+//   return width_specific_intval(APInt(W, S, 10), W);
+// }
 
 struct specific_ext_intval {
   llvm::APInt Val;

@@ -2664,7 +2664,7 @@ int main(int argc, char **argv) {
       if (!JustReduce) {
 
         bool Changed = false;
-        size_t MaxTries = 1; // Increase this if we ever run with 10/100x timeout.
+        size_t MaxTries = 2; // Increase this if we ever run with 10/100x timeout.
         bool FirstTime = true;
         do {
           if (!OnlyWidth) {
@@ -2686,6 +2686,10 @@ int main(int argc, char **argv) {
             if (Opt) {
               Result = *Opt;
             }
+
+            // if (Changed && Opt) {
+            //   PrintInputAndResult(Input, Result);
+            // } 
 
             if (SymbolicDF) {
               // Refresh("PUSH SYMDF_KB_DB");
