@@ -270,7 +270,8 @@ bool Reducer::inferKBPrecondition(ParsedReplacement &Input, std::vector<Inst *> 
 }
 
 ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
-  if (Input.Mapping.LHS->Ops.size() != 2) {
+  if (Input.Mapping.LHS->Ops.size() != 2
+      || Input.Mapping.RHS->Ops.size() != 2) {
     return Input;
   }
   // TODO: Implement for select, fsh*
@@ -280,7 +281,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
     if (auto Clone = Verify(Stub, IC, S)) {
-      return Clone.value();
+      return ReduceBackwards(Clone.value());
     }
   }
 
@@ -288,7 +289,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[0];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[0];
     if (auto Clone = Verify(Stub, IC, S)) {
-      return Clone.value();
+      return ReduceBackwards(Clone.value());
     }
   }
 
@@ -300,7 +301,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[0];
     if (auto Clone = Verify(Stub, IC, S)) {
-      return Clone.value();
+      return ReduceBackwards(Clone.value());
     }
   }
 
@@ -308,7 +309,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[0];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
     if (auto Clone = Verify(Stub, IC, S)) {
-      return Clone.value();
+      return ReduceBackwards(Clone.value());
     }
   }
 
