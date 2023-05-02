@@ -270,6 +270,9 @@ bool Reducer::inferKBPrecondition(ParsedReplacement &Input, std::vector<Inst *> 
 }
 
 ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
+  if (Input.Mapping.LHS == Input.Mapping.RHS) {
+    return Input;
+  }
   if (Input.Mapping.LHS->Ops.size() != 2
       || Input.Mapping.RHS->Ops.size() != 2) {
     return Input;
@@ -280,6 +283,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
   if (Input.Mapping.LHS->Ops[0] == Input.Mapping.RHS->Ops[0]) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
+
     if (auto Clone = Verify(Stub, IC, S)) {
       return ReduceBackwards(Clone.value());
     }
