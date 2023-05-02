@@ -201,9 +201,23 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       auto Hash = HashRep(Rep);
       if (Hashes.find(Hash) == Hashes.end()) {
         Hashes.insert(Hash);
-        ReplacementContext RC;
-        Rep.printLHS(llvm::outs(), RC, true);
-        Rep.printRHS(llvm::outs(), RC, true);
+
+        bool Valid;
+        std::vector<std::pair<Inst *, APInt>> Models;
+        if (std::error_code EC = S->isValid(IC, Rep.BPCs, Rep.PCs,
+                                            Rep.Mapping, Valid, &Models)) {
+          llvm::errs() << EC.message() << '\n';
+          Ret = 1;
+          ++Error;
+        }
+
+        if (Valid) {
+          ReplacementContext RC;
+          Rep.printLHS(llvm::outs(), RC, true);
+          Rep.printRHS(llvm::outs(), RC, true);
+        } else {
+          // TODO: Warn about invalid transformation.
+        }
       } else {
         llvm::outs() << "; Skipping redundant transformation.\n";
         std::string S;
