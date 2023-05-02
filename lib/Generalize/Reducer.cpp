@@ -269,6 +269,52 @@ bool Reducer::inferKBPrecondition(ParsedReplacement &Input, std::vector<Inst *> 
   return false;
 }
 
+ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
+  if (Input.Mapping.LHS->Ops.size() != 2) {
+    return Input;
+  }
+  // TODO: Implement for select, fsh*
+
+  auto Stub = Input;
+  if (Input.Mapping.LHS->Ops[0] == Input.Mapping.RHS->Ops[0]) {
+    Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
+    Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
+    if (auto Clone = Verify(Stub, IC, S)) {
+      return Clone.value();
+    }
+  }
+
+  if (Input.Mapping.LHS->Ops[1] == Input.Mapping.RHS->Ops[1]) {
+    Stub.Mapping.LHS = Input.Mapping.LHS->Ops[0];
+    Stub.Mapping.RHS = Input.Mapping.RHS->Ops[0];
+    if (auto Clone = Verify(Stub, IC, S)) {
+      return Clone.value();
+    }
+  }
+
+  if (!Inst::isCommutative(Input.Mapping.LHS->K)) {
+    return Input;
+  }
+
+  if (Input.Mapping.LHS->Ops[0] == Input.Mapping.RHS->Ops[1]) {
+    Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
+    Stub.Mapping.RHS = Input.Mapping.RHS->Ops[0];
+    if (auto Clone = Verify(Stub, IC, S)) {
+      return Clone.value();
+    }
+  }
+
+  if (Input.Mapping.LHS->Ops[1] == Input.Mapping.RHS->Ops[0]) {
+    Stub.Mapping.LHS = Input.Mapping.LHS->Ops[0];
+    Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
+    if (auto Clone = Verify(Stub, IC, S)) {
+      return Clone.value();
+    }
+  }
+
+  return Input;
+}
+
 ParsedReplacement Reducer::ReduceGreedyKBIFY(ParsedReplacement Input) {
   std::set<Inst *> Insts;
   collectInsts(Input.Mapping.LHS, Insts);

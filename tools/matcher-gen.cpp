@@ -1327,20 +1327,28 @@ int main(int argc, char **argv) {
           std::string IRComment =
           Input.getLHSString(RC, true) +
           Input.getRHSString(RC, true) + "\n";
-          O << IRComment << std::flush;
+
+          O << IRComment << '\n' << std::flush;
         }
       }
+
+      InfixPrinter P(Input, false);
+      std::string S;
+      llvm::raw_string_ostream Out(S);
+      P(Out);
+      Out.flush();
 
       ReplacementContext RC;
       std::string IRComment =
         "/* Opt : " +
         std::to_string(current) + "\n" +
         Input.getLHSString(RC, true) +
-        Input.getRHSString(RC, true) + "*/\n";
+        Input.getRHSString(RC, true) + "\n" + S + "*/\n";
 
       if (NoDispatch && Sort && !Ordered.empty()) {
         Results[current] = IRComment + Str + "\n";
       } else {
+
         llvm::outs() << IRComment << Str << "\n";
         llvm::outs().flush();
         outputs= true;

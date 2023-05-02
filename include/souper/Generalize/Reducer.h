@@ -18,6 +18,8 @@ public:
 
   ParsedReplacement ReduceGreedy(ParsedReplacement Input);
 
+  ParsedReplacement ReduceBackwards(ParsedReplacement Input);
+
   ParsedReplacement ReducePairsGreedy(ParsedReplacement Input);
 
   ParsedReplacement ReduceTriplesGreedy(ParsedReplacement Input);

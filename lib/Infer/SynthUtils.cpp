@@ -345,4 +345,66 @@ int profit(const ParsedReplacement &P) {
   return constAwareCost(P.Mapping.LHS) - constAwareCost(P.Mapping.RHS);
 }
 
+InfixPrinter::InfixPrinter(ParsedReplacement P_, bool ShowImplicitWidths)
+  : P(P_), ShowImplicitWidths(ShowImplicitWidths) {
+  varnum = 0;
+  std::vector<InstMapping> NewPCs;
+  for (auto &&PC : P.PCs) {
+    countUses(PC.LHS);
+    countUses(PC.RHS);
+    if (!registerSymDFVars(PC.LHS)) {
+      NewPCs.push_back(PC);
+    }
+    countUses(P.Mapping.LHS);
+    countUses(P.Mapping.RHS);
+  }
+  P.PCs = NewPCs;
+  registerSymDBVar();
+  registerWidthConstraints();
+}
+
+void InfixPrinter::registerWidthConstraints() {
+  for (auto &&PC : P.PCs) {
+    if (PC.LHS->K == Inst::Eq && PC.LHS->Ops[0]->K == Inst::BitWidth) {
+      // PC.LHS looks like (width %x) == 32
+      WidthConstraints[PC.LHS->Ops[0]->Ops[0]] = PC.LHS->Ops[1]->Val.getZExtValue();
+    }
+  }
+}
+
+void InfixPrinter::registerSymDBVar() {
+  if (P.Mapping.LHS->K == Inst::DemandedMask) {
+    Syms[P.Mapping.LHS->Ops[1]] = "@db";
+    assert(P.Mapping.RHS->K == Inst::DemandedMask && "Expected RHS to be a demanded mask.");
+    assert(P.Mapping.LHS->Ops[1] == P.Mapping.RHS->Ops[1] && "Expected same mask.");
+    P.Mapping.LHS = P.Mapping.LHS->Ops[0];
+    P.Mapping.RHS = P.Mapping.RHS->Ops[0];
+  }
+}
+
+bool InfixPrinter::registerSymDFVars(Inst *I) {
+  if (I->K == Inst::KnownOnesP && I->Ops[0]->K == Inst::Var &&
+    I->Ops[1]->Name.starts_with("symDF_K")) {
+    Syms[I->Ops[1]] = I->Ops[0]->Name + ".k1";
+    // VisitedVars.insert(I->Ops[1]->Name);
+    return true;
+  }
+  if (I->K == Inst::KnownZerosP && I->Ops[0]->K == Inst::Var &&
+    I->Ops[1]->Name.starts_with("symDF_K")) {
+    Syms[I->Ops[1]] = I->Ops[0]->Name + ".k0";
+    // VisitedVars.insert(I->Ops[1]->Name);
+    return true;
+  }
+  return false;
+}
+
+void InfixPrinter::countUses(Inst *I) {
+  for (auto &&Op : I->Ops) {
+    if (Op->K != Inst::Var && Op->K != Inst::Const) {
+      UseCount[Op]++;
+    }
+    countUses(Op);
+  }
+}
+
 }
