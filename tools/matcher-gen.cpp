@@ -43,7 +43,7 @@ static llvm::cl::opt<bool> NoDispatch("no-dispatch",
 static llvm::cl::opt<bool> OnlyExplicitWidths("explicit-width-checks",
     llvm::cl::desc("Only generate width checks when explicitly specified."
                    "(default=false)"),
-    llvm::cl::init(false));
+    llvm::cl::init(true));
 
 static llvm::cl::opt<bool> Sort("sortf",
     llvm::cl::desc("Sort matchers according to listfile"
