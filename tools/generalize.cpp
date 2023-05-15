@@ -2223,7 +2223,29 @@ InstantiateWidthChecks(InstContext &IC,
       if (DebugLevel > 4) {
         llvm::errs() << "WIDTH: Generalized opt is valid for all widths.\n";
       }
-      // Completely width independent. No width checks needed.
+      // Completely width independent.
+
+      // Only width == 1 checks needed
+      std::set<Inst *> Visited;
+      std::vector<Inst *> Stack{Input.Mapping.LHS, Input.Mapping.RHS};
+      // DFS to visit all instructions.
+      while (!Stack.empty()) {
+        auto I = Stack.back();
+        Stack.pop_back();
+        if (Visited.count(I)) {
+          continue;
+        }
+
+        if (I->Width == 1 && !Inst::isCmp(I->K)) {
+          Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
+        }
+
+        Visited.insert(I);
+        for (auto Op : I->Ops) {
+          Stack.push_back(Op);
+        }
+      }
+
       return {Input, true};
     }
 
@@ -2420,7 +2442,7 @@ int main(int argc, char **argv) {
 
             // if (Changed && Opt) {
             //   PrintInputAndResult(Input, Result);
-            // } 
+            // }
 
             if (SymbolicDF) {
               // Refresh("PUSH SYMDF_KB_DB");
