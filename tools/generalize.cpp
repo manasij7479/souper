@@ -2204,6 +2204,35 @@ bool IsStaticallyWidthIndependent(ParsedReplacement Input) {
   return true;
 }
 
+void GetWidthChangeInsts(Inst *I, std::vector<Inst *> &WidthChanges) {
+  findInsts(I, WidthChanges, [](Inst *I) {
+    return I->K == Inst::Trunc || I->K == Inst::SExt || I->K == Inst::ZExt;});
+}
+
+bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
+  std::vector<Inst *> Inputs;
+  findVars(Input.Mapping.LHS, Inputs);
+
+  for (auto &&V : Inputs) {
+    if (!V->Range.isFullSet()) {
+      return true;
+    }
+    if (V->KnownOnes.getBitWidth() == V->Width && V->KnownOnes != 0) {
+      return true;
+    }
+
+    if (V->KnownZeros.getBitWidth() == V->Width && V->KnownZeros != 0) {
+      return true;
+    }
+  }
+
+  if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
+      !Input.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+    return true;
+  }
+  return false;
+}
+
 std::pair<ParsedReplacement, bool>
 InstantiateWidthChecks(InstContext &IC,
   Solver *S, ParsedReplacement Input) {
@@ -2290,6 +2319,11 @@ InstantiateWidthChecks(InstContext &IC,
   std::vector<Inst *> Inputs;
   findVars(Input.Mapping.LHS, Inputs);
   for (auto &&I : Inputs) {
+    Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
+  }
+  std::vector<Inst *> WidthChangeInsts;
+  GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
+  for (auto &&I : WidthChangeInsts) {
     Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
   }
   return {Input, false};

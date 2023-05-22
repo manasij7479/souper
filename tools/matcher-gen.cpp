@@ -54,7 +54,7 @@ static llvm::cl::opt<std::string> ListFile("listfile",
     llvm::cl::desc("List of optimization indexes to include.\n"
                    "(default=empty-string)"),
     llvm::cl::init(""));
-  
+
 static llvm::cl::opt<std::string> ListOutFile("listoutfile",
     llvm::cl::desc("List of optimization indexes to include.\n"
                    "(default=empty-string)"),
@@ -624,9 +624,6 @@ struct SymbolTable {
       if (V->NumSignBits) {
         Constraints.push_back(new NSB(Name, V->NumSignBits));
       }
-
-
-
     }
   }
 
@@ -838,7 +835,7 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
   }
   if (I->K == Inst::Trunc || I->K == Inst::SExt || I->K == Inst::ZExt) {
     if (!Parent) {
-      Out << ", T(I)"; // Parent is rhs root 
+      Out << ", T(I)"; // Parent is rhs root
     } else {
       auto Cousin = getSibling(I, Parent);
       std::string S;
@@ -919,7 +916,7 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
       Syms.ConstRefs.insert(I);
     }
 
-    if (LHSInsts.find(I) != LHSInsts.end()) {
+    if (LHSInsts.find(I) != LHSInsts.end() ) {
       if (Syms.Used.insert(I).second && Syms.T.find(I) == Syms.T.end()) {
         Syms.T[I] = ("x" + std::to_string(varnum++));
         // llvm::errs() << "Var0: " << I->Name << " -> " << Syms.T[I] << "\n";
@@ -930,7 +927,38 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
         Stack.push_back(Child);
       }
     }
+  }
 
+
+  Visited.clear();
+  for (auto M : Input.PCs) {
+    Stack.push_back(M.LHS);
+    Stack.push_back(M.RHS);
+  }
+
+  while (!Stack.empty()) {
+    auto I = Stack.back();
+    Stack.pop_back();
+    Visited.insert(I);
+    // if (I->K == Inst::Const) {
+    //   Syms.ConstRefs.insert(I);
+    // }
+
+    if (LHSInsts.find(I) != LHSInsts.end()) {
+      if (I->Width == 1 &&
+        (I->K == Inst::SExt || I->K == Inst::ZExt || I->K == Inst::Trunc)) {
+        if (Syms.T.find(I) == Syms.T.end() && Syms.Used.insert(I).second) {
+          Syms.T[I] = ("x" + std::to_string(varnum++));
+          // llvm::errs() << "Var0: " << I->Name << " -> " << Syms.T[I] << "\n";
+        }
+      }
+    }
+
+    for (auto Child : I->Ops) {
+      if (Visited.find(Child) == Visited.end()) {
+        Stack.push_back(Child);
+      }
+    }
   }
 
   if (!Syms.T.empty()) {
@@ -1021,7 +1049,6 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
   Syms.PrintConstraintsPre(Out);
 
   Syms.PrintConstDecls(Out);
-
 
 
   Out << "  auto ret";
