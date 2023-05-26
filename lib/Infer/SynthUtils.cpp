@@ -9,10 +9,33 @@ Inst *Replace(Inst *R, InstContext &IC, std::map<Inst *, Inst *> &M) {
   return getInstCopy(R, IC, M, BlockCache, &ConstMap, false);
 }
 
+Inst *Replace(Inst *R, InstContext &IC,
+    std::map<Inst *, llvm::APInt> &ConstMap) {
+  std::map<Block *, Block *> BlockCache;
+  std::map<Inst *, Inst *> M;
+  return getInstCopy(R, IC, M, BlockCache, &ConstMap, false);
+}
+
 ParsedReplacement Replace(ParsedReplacement I, InstContext &IC,
                           std::map<Inst *, Inst *> &M) {
   std::map<Block *, Block *> BlockCache;
   std::map<Inst *, llvm::APInt> ConstMap;
+
+  I.Mapping.LHS =  getInstCopy(I.Mapping.LHS, IC, M, BlockCache, &ConstMap, false);
+  I.Mapping.RHS =  getInstCopy(I.Mapping.RHS, IC, M, BlockCache, &ConstMap, false);
+
+  for (auto &PC : I.PCs) {
+    PC.LHS = getInstCopy(PC.LHS, IC, M, BlockCache, &ConstMap, false, false);
+    PC.RHS = getInstCopy(PC.RHS, IC, M, BlockCache, &ConstMap, false, false);
+  }
+
+  return I;
+}
+
+ParsedReplacement Replace(ParsedReplacement I, InstContext &IC,
+                          std::map<Inst *, llvm::APInt> &ConstMap) {
+  std::map<Block *, Block *> BlockCache;
+  std::map<Inst *, Inst *> M;
 
   I.Mapping.LHS =  getInstCopy(I.Mapping.LHS, IC, M, BlockCache, &ConstMap, false);
   I.Mapping.RHS =  getInstCopy(I.Mapping.RHS, IC, M, BlockCache, &ConstMap, false);

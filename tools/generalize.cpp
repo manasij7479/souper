@@ -532,7 +532,7 @@ std::vector<Inst *> InferConstantLimits(
 
   for (auto V : Vars) {
     for (auto &&[XI, XC] : CMap) {
-      if (XI->Width == 1) {
+      if (V->Width ==1 || XI->Width == 1) {
         continue;
       }
       // X < Width, X <= Width
@@ -620,6 +620,9 @@ std::vector<Inst *> BitFuncs(Inst *I, InstContext &IC) {
 
   auto Copy = Results;
   for (auto &&C : Copy) {
+    if (C->Width == 1) {
+      continue;
+    }
     Results.push_back(Builder(C, IC).BitWidth().Sub(C)());
   }
 
@@ -798,9 +801,11 @@ std::vector<Inst *> InferPotentialRelations(
       // }
 
     }
-    Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth().Sub(1))());
-    // Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth().UDiv(2))());
-    // Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth())());
+    if (XI->Width != 1) {
+      Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth().Sub(1))());
+      // Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth().UDiv(2))());
+      // Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth())());
+    }
   }
 
   // TODO: Make sure this works.
@@ -861,18 +866,23 @@ std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
   ParsedReplacement Input, InstContext &IC, Solver *S,
   std::map<Inst *, llvm::APInt> SymCS) {
 
+  // return {};
+
   std::map<Inst *, std::pair<llvm::APInt, llvm::APInt>> Restore;
+
+  // auto Clone = souper::Clone(Input, IC);
+  // std::swap(Input, Clone);
 
   size_t BitsWeakened = 0;
 
-  auto Clone = souper::Clone(Input, IC);
-
   for (auto &&C : SymCS) {
-    if (C.first->Width < 8) continue;
+    if (C.first->Width < 4) continue;
     Restore[C.first] = {C.first->KnownZeros, C.first->KnownOnes};
     C.first->KnownZeros = ~C.second;
     C.first->KnownOnes = C.second;
   }
+
+  std::map<Inst *, llvm::APInt> RevertMap;
 
   std::optional<ParsedReplacement> Ret;
   auto SOLVE = [&]() -> bool {
@@ -883,9 +893,10 @@ std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
       return false;
     }
   };
-
+  size_t ConstsWeakened = 0;
   for (auto &&C : SymCS) {
-    if (C.first->Width < 8) continue;
+    if (C.first->Width < 4) continue;
+    BitsWeakened = 0;
     for (size_t i = 0; i < C.first->Width; ++i) {
       llvm::APInt OriZ = C.first->KnownZeros;
       llvm::APInt OriO = C.first->KnownOnes;
@@ -904,19 +915,30 @@ std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
         BitsWeakened++;
       }
     }
+    // llvm::errs() << "BitsWeakened: " << BitsWeakened << '\n';
+    if (BitsWeakened <= C.first->Width / 2) {
+      C.first->KnownZeros = ~SymCS[C.first];
+      C.first->KnownOnes = SymCS[C.first];
+      RevertMap[C.first] = SymCS[C.first];
+    } else {
+      ConstsWeakened++;
+    }
   }
-
-//  llvm::errs() << "HERE " << BitsWeakened << "\n";
-  if (BitsWeakened >= 32) { // compute better threshold somehow
-    return Input;
-  } else {
+  // llvm::errs() << "ConstsWeakened: " << ConstsWeakened << '\n';
+  if (!ConstsWeakened) {
+    // std::swap(Input, Clone);
     for (auto &&P : Restore) {
       P.first->KnownZeros = P.second.first;
       P.first->KnownOnes = P.second.second;
     }
-    return Ret;
+    // Input.print(llvm::errs(), true);
+    // llvm::errs() << "\n<-Input\n";
+    // Clone.print(llvm::errs(), true);
+    // llvm::errs() << "\n<-Clone\n";
+    return {};
+  } else {
+    return souper::Replace(Input, IC, RevertMap);
   }
-
 }
 
 std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
@@ -1595,8 +1617,12 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       if (SymbolizeHackersDelight) {
         Components.push_back(Builder(IC, llvm::APInt::getAllOnesValue(C->Width)).Shl(C)());
         Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
-        Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
-        Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
+
+        if (C->Width != 1) {
+          Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
+          Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
+        }
+
         // TODO: Add a few more, we can afford to run generalization longer
       }
     }
@@ -1961,7 +1987,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!EnumeratedCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                  InstCache, IC, S, SymCS, false, true, true);
+                                  InstCache, IC, S, SymCS, false, true, false);
     if (Clone) {
       return Clone;
     }
