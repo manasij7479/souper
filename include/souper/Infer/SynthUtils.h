@@ -123,6 +123,10 @@ Inst *Replace(Inst *R, InstContext &IC, std::map<Inst *, Inst *> &M);
 ParsedReplacement Replace(ParsedReplacement I, InstContext &IC,
                           std::map<Inst *, Inst *> &M);
 
+Inst *Replace(Inst *R, InstContext &IC, std::map<Inst *, llvm::APInt> &ConstMap);
+ParsedReplacement Replace(ParsedReplacement I, InstContext &IC,
+                          std::map<Inst *, llvm::APInt> &ConstMap);
+
 Inst *Clone(Inst *R, InstContext &IC);
 
 InstMapping Clone(InstMapping In, InstContext &IC);
