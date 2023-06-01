@@ -330,6 +330,11 @@ struct ShrinkWrap {
           Target = ResultWidth * I->Ops[0]->Width * 1.0 / I->Width;
         }
         // llvm::errs() << "HERE: " << ResultWidth << " " << Target << '\n';
+        // llvm::errs() << "Trunc " << I->Width << " " << ResultWidth << " " << Target << '\n';
+        auto Operand = ShrinkInst(I->Ops[0], I, Target);
+        if (Operand->Width <= ResultWidth) {
+          return nullptr;
+        }
         return IC.getInst(Inst::Trunc, ResultWidth, { ShrinkInst(I->Ops[0], I, Target)});
       }
       if (I->K == Inst::ZExt || I->K == Inst::SExt) {
@@ -344,7 +349,14 @@ struct ShrinkWrap {
           // Maintain ratio
           Target = ResultWidth * I->Ops[0]->Width * 1.0 / I->Width;
         }
-        return IC.getInst(I->K, ResultWidth, { ShrinkInst(I->Ops[0], I, Target)});
+        // llvm::errs() << "NAME: " << I->Ops[0]->Name << '\t' << I->Ops[0]->Width << '\n';
+        // llvm::errs() << "Ext " << I->Width << " " << ResultWidth << " " << Target << '\n';
+        auto Operand = ShrinkInst(I->Ops[0], I, Target);
+
+        if (Operand->Width >= ResultWidth) {
+          return nullptr;
+        }
+        return IC.getInst(I->K, ResultWidth, {Operand});
       }
 
       if (I->K == Inst::Eq || I->K == Inst::Ne ||
@@ -377,6 +389,9 @@ struct ShrinkWrap {
 
       for (auto Op : OriginalOps) {
         OpMap[Op] = ShrinkInst(Op, I, ResultWidth);
+        if (!OpMap[Op]) {
+          return nullptr;
+        }
         if (Op->Width != 1) {
           ResultWidth = OpMap[Op]->Width;
         }
@@ -415,9 +430,15 @@ struct ShrinkWrap {
     ParsedReplacement New;
     New.Mapping.LHS = ShrinkInst(Input.Mapping.LHS, nullptr, TargetWidth);
     New.Mapping.RHS = ShrinkInst(Input.Mapping.RHS, nullptr, TargetWidth);
+    if (!New.Mapping.LHS || !New.Mapping.RHS) {
+      return {};
+    }
     for (auto PC : Input.PCs) {
       New.PCs.push_back({ShrinkInst(PC.LHS, nullptr, TargetWidth),
                          ShrinkInst(PC.RHS, nullptr, TargetWidth)});
+      if (!New.PCs.back().LHS || !New.PCs.back().RHS) {
+        return {};
+      }
     }
 
     // New.print(llvm::errs(), true);
@@ -822,7 +843,7 @@ std::vector<Inst *> InferPotentialRelations(
         if (XI->Width > YI->Width) {
           // Builder(YI, IC).ZExt(XI->Width).Eq(XI)()->Print();
           Results.push_back(Builder(YI, IC).ZExt(XI->Width).Eq(XI)());
-        } else {
+        } else if (XI->Width < YI->Width) {
           Results.push_back(Builder(XI, IC).ZExt(YI->Width).Eq(YI)());
         }
       }
@@ -1246,7 +1267,7 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
     llvm::APInt NewTarget = Target;
     if (Target.getBitWidth() < I->Width) {
       NewTarget = Target.sgt(0) ? Target.zext(I->Width) : Target.sext(I->Width);
-    } else {
+    } else if (Target.getBitWidth() > I->Width) {
       NewTarget = Target.trunc(I->Width);
     }
     for (auto X : IOSynthesize(NewTarget, ConstMap, IC, Threshold - 1, ConstMode, nullptr)) {
@@ -1255,7 +1276,7 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
       if (NewTarget.getBitWidth() < Target.getBitWidth()) {
         Results.push_back(Builder(IC, X).ZExt(Target.getBitWidth())());
         Results.push_back(Builder(IC, X).SExt(Target.getBitWidth())());
-      } else {
+      } else if (NewTarget.getBitWidth() > Target.getBitWidth()) {
         Results.push_back(Builder(IC, X).Trunc(Target.getBitWidth())());
       }
     }
@@ -2363,6 +2384,9 @@ std::optional<ParsedReplacement> GeneralizeShrinked(
   }
 
   ShrinkWrap Shrink(IC, S, Input, 8);
+
+  // Input.print(llvm::errs(), true);
+
   auto Smol = Shrink();
 
   if (Smol) {
@@ -2371,6 +2395,7 @@ std::optional<ParsedReplacement> GeneralizeShrinked(
       InfixPrinter P(Smol.value());
       P(llvm::errs());
       Smol->print(llvm::errs(), true);
+      exit(0);
       llvm::errs() << "\n";
       if (DebugLevel > 4) {
         Smol.value().print(llvm::errs(), true);
