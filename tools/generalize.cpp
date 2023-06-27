@@ -2288,7 +2288,7 @@ InstantiateWidthChecks(InstContext &IC,
     return {Input, true};
   }
 
-  if (!NoWidth && !hasMultiArgumentPhi(Input.Mapping.LHS)) {
+  if (!NoWidth && !hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
     // Instantiate Alive driver with Symbolic width.
     AliveDriver Alive(Input.Mapping.LHS,
     Input.PCs.empty() ? nullptr : CombinePCs(Input.PCs, IC),
