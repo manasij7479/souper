@@ -438,8 +438,12 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
     unsigned i = 0;
     size_t correct = 0;
     size_t incorrect = 0;
-    for (; types; ++types) {
+    for (; types; ++types, ++i) {
       tv.fixupTypes(types);
+      std::map<const Inst *, size_t> Typing;
+      for (auto &&P : Inputs) {
+        Typing[P.first] = P.second->bits();
+      }
       if (auto errs = tv.verify()) {
         if (DebugLevel > 4) {
           llvm::errs() << "Invalid typing: \n";
@@ -447,17 +451,14 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
             llvm::errs() << P.first->Name << ' ' << P.second->bits() << "\n";
           }
         }
+        InvalidTypings.push_back(Typing);
         incorrect++;
       } else {
-        std::map<const Inst *, size_t> Typing;
-        for (auto &&P : Inputs) {
-          Typing[P.first] = P.second->bits();
-        }
         ValidTypings.push_back(Typing);
         correct++;
       }
     }
-    if (!incorrect) {
+    if (!incorrect && i) {
       return true;
     } else if (!correct) {
       return false;
@@ -509,7 +510,7 @@ bool souper::AliveDriver::translateRoot(const souper::Inst *I, const Inst *PC,
   translateDemandedBits(I, F, ExprCache);
 
   FunctionBuilder Builder(F);
-  if (PC) {
+  if (PC && !(PC->K == Inst::Const && PC->Val.isAllOnesValue())) {
     Builder.assume(ExprCache[PC]);
   }
   Builder.ret(getType(I->Width), ExprCache[I]);
@@ -802,7 +803,9 @@ souper::AliveDriver::translateDataflowFacts(const souper::Inst* I,
       return false;
     }
     FunctionBuilder Builder(F);
-    Builder.assume(ExprCache[DataFlowConstraints]);
+    if (!(DataFlowConstraints->K == Inst::Const && DataFlowConstraints->Val.isAllOnesValue())) {
+      Builder.assume(ExprCache[DataFlowConstraints]);
+    }
     return true;
   } else {
     return false;

@@ -49,6 +49,10 @@ public:
     return ValidTypings;
   }
 
+  std::vector<std::map<const Inst *, size_t>> getInvalidTypings() {
+    return InvalidTypings;
+  }
+
   bool WidthIndependentMode; // This probably doesn't need to be public
 private:
   Inst *LHS, *PreCondition;
@@ -74,7 +78,7 @@ private:
   std::unordered_map<const Inst *, std::string> NamesCache;
   bool IsLHS;
 
-  std::vector<std::map<const Inst *, size_t>> ValidTypings;
+  std::vector<std::map<const Inst *, size_t>> ValidTypings, InvalidTypings;
 
   InstContext &IC;
   smt::smt_initializer smt_init;
