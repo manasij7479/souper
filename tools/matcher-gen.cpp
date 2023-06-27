@@ -516,6 +516,7 @@ struct SymbolTable {
     if (PC.LHS->K != Inst::Eq)
       return nullptr;
     if (PC.LHS->Ops[0]->K == Inst::BitWidth) {
+
       return new WidthEq(T.at(PC.LHS->Ops[0]->Ops[0]),
                                  PC.LHS->Ops[1]->Val.getLimitedValue());
     }
@@ -960,8 +961,7 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
     // }
 
     if (LHSInsts.find(I) != LHSInsts.end()) {
-      if (I->Width == 1 &&
-        (I->K == Inst::SExt || I->K == Inst::ZExt || I->K == Inst::Trunc)) {
+      if (I->K == Inst::SExt || I->K == Inst::ZExt || I->K == Inst::Trunc) {
         if (Syms.T.find(I) == Syms.T.end() && Syms.Used.insert(I).second) {
           Syms.T[I] = ("x" + std::to_string(varnum++));
           // llvm::errs() << "Var0: " << I->Name << " -> " << Syms.T[I] << "\n";
