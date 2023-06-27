@@ -484,6 +484,11 @@ void m(llvm::APInt &A, llvm::APInt &B) {
 
 }
 
+llvm::APInt flip(llvm::APInt A) {
+  A.flipAllBits();
+  return A;
+}
+
 llvm::APInt xor_(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A ^ B;
