@@ -2326,8 +2326,7 @@ InstantiateWidthChecks(InstContext &IC,
     }
 
     auto &&ValidTypings = Alive.getValidTypings();
-
-    if (ValidTypings.empty()) {
+    if (ValidTypings.empty() && !Alive.getInvalidTypings().empty()) {
       // Something went wrong, generalized opt is not valid at any width.
       if (DebugLevel > 4) {
         llvm::errs() << "WIDTH: Generalized opt is not valid for any width.\n";
@@ -2336,6 +2335,15 @@ InstantiateWidthChecks(InstContext &IC,
       Input.Mapping.RHS = nullptr;
       return {Input, false};
     }
+
+    if (ValidTypings.empty() && Alive.getInvalidTypings().empty()) {
+      // Something went wrong, Alive didn't generate typing assignments.
+      if (DebugLevel > 2) {
+        llvm::errs() << "Alive didn't generate typing assignments.\n";
+      }
+
+    }
+
 
   // Abstract width to a range or relational precondition
   // TODO: Abstraction
