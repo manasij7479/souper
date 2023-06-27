@@ -2338,7 +2338,7 @@ InstantiateWidthChecks(InstContext &IC,
 
     if (ValidTypings.empty() && Alive.getInvalidTypings().empty()) {
       // Something went wrong, Alive didn't generate typing assignments.
-      if (DebugLevel > 2) {
+      if (DebugLevel > 4) {
         llvm::errs() << "Alive didn't generate typing assignments.\n";
       }
 
