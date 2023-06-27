@@ -332,6 +332,7 @@ struct SymbolTable {
     Out << ";\n";
   }
 
+  // TODO: This needs a bit more work
   // Try to translate Souper expressions to APInt operations.
   std::pair<std::string, bool> Translate(souper::Inst *I) {
     std::vector<std::pair<std::string, bool>> Children;
@@ -432,6 +433,20 @@ struct SymbolTable {
       return {FUN("or_"), true};
     }
     case Inst::Xor : {
+      // Workaround for ^ -1 width independence bug
+
+      if (I->Ops[0]->K == Inst::Const) {
+        if (I->Ops[0]->Val.isAllOnesValue()) {
+          return {"flip(" + Children[1].first + ")", true};
+        }
+      }
+
+      if (I->Ops[1]->K == Inst::Const) {
+        if (I->Ops[1]->Val.isAllOnesValue()) {
+          return {"flip(" + Children[0].first + ")", true};
+        }
+      }
+
       if (I->Width == 1) {
         return {OP("^"), true};
       }
