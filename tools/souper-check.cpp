@@ -18,6 +18,7 @@
 
 #include "souper/Infer/ConstantSynthesis.h"
 #include "souper/Infer/Pruning.h"
+#include "souper/Infer/SynthUtils.h"
 #include "souper/Inst/InstGraph.h"
 #include "souper/Parser/Parser.h"
 #include "souper/Tool/GetSolver.h"
@@ -95,6 +96,10 @@ static cl::opt<bool> Hash("hash",
 static cl::opt<bool> FilterRedundant("filter-redundant",
     cl::desc("Filter redundant transformations based on static hashing (default=false)"),
     cl::init(false));
+
+static cl::opt<std::string> PrettyPrint("pretty-print",
+    cl::desc("Pretty print (default=null)"),
+    cl::init(""));
 
 
 size_t HashInt(size_t x) {
@@ -479,6 +484,15 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
             llvm::outs() << "\n(or)\n";
           }
         }
+    } else if (PrettyPrint != "") {
+      if (PrettyPrint == "infix") {
+        InfixPrinter P(Rep);
+        P(llvm::outs());
+      }
+      if (PrettyPrint == "go" || PrettyPrint == "s-expr") {
+        GoPrinter P(Rep);
+        P(llvm::outs());
+      }
     } else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;

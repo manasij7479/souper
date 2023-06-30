@@ -148,6 +148,82 @@ std::vector<ValueCache> GetMultipleCEX(ParsedReplacement Input, InstContext &IC,
 
 int profit(const ParsedReplacement &P);
 
+struct GoPrinter {
+  GoPrinter(ParsedReplacement P_) : P(P_) {}
+
+  template<typename Stream>
+  void operator()(Stream &S) {
+
+    bool first = true;
+    for (auto &&PC : P.PCs) {
+      if (first) {
+        first = false;
+      } else {
+        S << " && \n";
+      }
+      if (PC.RHS->K == Inst::Const && PC.RHS->Val == 0) {
+        S << "!(" << printInst(PC.LHS) << ")";
+      } else if (PC.RHS->K == Inst::Const && PC.RHS->Val == 1) {
+        S << printInst(PC.LHS);
+      } else {
+        S << "(= " << printInst(PC.LHS) << " " << printInst(PC.RHS) << ")";
+      }
+    }
+
+    if (!P.PCs.empty()) {
+      S << " |= ";
+    }
+
+
+    S << printInst(P.Mapping.LHS) << " -> "
+      << printInst(P.Mapping.RHS) << "\n";
+  }
+
+  std::string printInst(Inst *I) {
+    std::string Result = "";
+    if (I->K == Inst::Var) {
+      if (I->Name.starts_with("symconst_")) {
+        auto Name = "C" + I->Name.substr(9);
+        Result += Name;
+      } else {
+        Result += I->Name;
+      }
+      std::ostringstream Out;
+      if (I->KnownZeros.getBoolValue() || I->KnownOnes.getBoolValue())
+        Out << " (knownBits=" << Inst::getKnownBitsString(I->KnownZeros, I->KnownOnes)
+            << ")";
+      if (I->NonNegative)
+        Out << " (nonNegative)";
+      if (I->Negative)
+        Out << " (negative)";
+      if (I->NonZero)
+        Out << " (nonZero)";
+      if (I->PowOfTwo)
+        Out << " (powerOfTwo)";
+      if (I->NumSignBits > 1)
+        Out << " (signBits=" << I->NumSignBits << ")";
+      if (!I->Range.isFullSet())
+        Out << " (range=[" << llvm::toString(I->Range.getLower(), 10, false)
+            << "," << llvm::toString(I->Range.getUpper(), 10, false) << "))";
+
+      Result += Out.str();
+    } else if (I->K == Inst::Const) {
+      Result += llvm::toString(I->Val, 10, false);
+    } else {
+      Result = "(";
+      Result += Inst::getKindName(I->K);
+      Result += ' ';
+      for (auto Child : I->Ops) {
+        Result += printInst(Child);
+        Result += ' ';
+      }
+      Result[Result.length() - 1] = ')';
+    }
+    return Result;
+  }
+  ParsedReplacement P;
+};
+
 struct InfixPrinter {
   InfixPrinter(ParsedReplacement P_, bool ShowImplicitWidths = true);
 
@@ -344,9 +420,6 @@ struct InfixPrinter {
   void printPCs(Stream &S) {
     bool first = true;
     for (auto &&PC : P.PCs) {
-      // if (PC.LHS->K == Inst::KnownOnesP || PC.LHS->K == Inst::KnownZerosP) {
-      //   continue;
-      // }
       if (first) {
         first = false;
       } else {
