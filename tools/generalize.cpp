@@ -2305,6 +2305,14 @@ InstantiateWidthChecks(InstContext &IC,
       std::set<Inst *> Visited;
       std::vector<Inst *> Stack{Input.Mapping.LHS, Input.Mapping.RHS};
       // DFS to visit all instructions.
+
+      std::vector<Inst *> WidthChangeInsts;
+      std::set<Inst *> WISet;
+      GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
+      for (auto &&I : WidthChangeInsts) {
+        WISet.insert(I);
+      }
+
       while (!Stack.empty()) {
         auto I = Stack.back();
         Stack.pop_back();
@@ -2312,7 +2320,7 @@ InstantiateWidthChecks(InstContext &IC,
           continue;
         }
 
-        if (I->Width == 1 && !Inst::isCmp(I->K)) {
+        if (I->Width == 1 && WISet.find(I) != WISet.end()) {
           Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
         }
 
@@ -2369,7 +2377,6 @@ InstantiateWidthChecks(InstContext &IC,
     }
 
   }
-
   // If abstraction fails, insert checks for existing widths.
   std::vector<Inst *> Inputs;
   findVars(Input.Mapping.LHS, Inputs);
@@ -2379,7 +2386,9 @@ InstantiateWidthChecks(InstContext &IC,
   std::vector<Inst *> WidthChangeInsts;
   GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
   for (auto &&I : WidthChangeInsts) {
-    Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
+    if (I->K != Inst::Const) {
+      Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
+    }
   }
   return {Input, false};
 }
