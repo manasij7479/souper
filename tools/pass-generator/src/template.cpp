@@ -71,8 +71,8 @@ public:
   }
 
   bool eqWD(llvm::Value *A, llvm::Value *B) {
-    if (A && A->getType() && A->getType()->isIntegerTy() &&
-        B && B->getType() && B->getType()->isIntegerTy()) {
+    if (A && A->getType() && A->getType()->isSized() && A->getType()->isIntegerTy() &&
+        B && B->getType() && B->getType()->isSized() && B->getType()->isIntegerTy()) {
       return A->getType()->getScalarSizeInBits() == B->getType()->getScalarSizeInBits();
     } else {
       return false; 
@@ -184,25 +184,25 @@ public:
   }
 
   llvm::Value *CreateSExt(llvm::Value *A, llvm::Type *T) {
-    if (!A || !A->getType() || !A->getType()->isIntegerTy() || 
+    if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy() ||
          A->getType()->getScalarSizeInBits() >= T->getScalarSizeInBits()) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateSExt(A, T);
   }
 
   llvm::Value *CreateZExt(llvm::Value *A, llvm::Type *T) {
-    if (!A || !A->getType() || !A->getType()->isIntegerTy() || 
+    if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy() ||
          A->getType()->getScalarSizeInBits() >= T->getScalarSizeInBits()) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateZExt(A, T);
   }
 
   llvm::Value *CreateTrunc(llvm::Value *A, llvm::Type *T) {
-    if (!A || !A->getType() || !A->getType()->isIntegerTy() || 
+    if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy() ||
          A->getType()->getScalarSizeInBits() <= T->getScalarSizeInBits()) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateTrunc(A, T);
   }
 
   llvm::Value *CreateSelect(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
-    if (!A || !B || !C || !eqWD(B, C) || A->getType()->getScalarSizeInBits() != 1) return nullptr;
+    if (!A || !B || !C || !eqWD(B, C) || !A->getType()->isSized() ||  A->getType()->getScalarSizeInBits() != 1) return nullptr;
     return llvm::IRBuilder<NoFolder>::CreateSelect(A, B, C);
   }
 
@@ -399,7 +399,7 @@ template <typename Op_t, unsigned Opcode> struct CastClass_match_width {
   CastClass_match_width(size_t W, const Op_t &OpMatch) : Width(W), Op(OpMatch) {}
 
   template <typename OpTy> bool match(OpTy *V) {
-    if (V->getType()->getScalarSizeInBits() != Width) {
+    if (V->getType()->isSized() && V->getType()->getScalarSizeInBits() != Width) {
       return false;
     }
     if (auto *O = dyn_cast<Operator>(V))
@@ -578,20 +578,25 @@ bool ne(llvm::APInt A, llvm::APInt B) {
 
 namespace util {
   bool dc(llvm::DominatorTree *DT, llvm::Instruction *I, llvm::Value *V) {
+    //llvm::errs() << "FOO\n";
     if (!I || !V) {
       return false;
     }
+    //llvm::errs() << "FOO2\n";
     if (auto Def = dyn_cast<Instruction>(V)) {
       if (I->getParent() == Def->getParent()) {
+        //llvm::errs() << "FOO3\n";
         return true;
       }
+      //llvm::errs() << "FOO4" << DT->dominates(Def, I->getParent()) <<  "\n";
       return DT->dominates(Def, I->getParent());
     }
+    //llvm::errs() << "FOO5\n";
     return true;
   }
 
   bool check_width(llvm::Value *V, size_t W) {
-    if (V && V->getType() && V->getType()->isIntegerTy()) {
+    if (V && V->getType() && V->getType()->isSized() && V->getType()->isSized() && V->getType()->isIntegerTy()) {
       return V->getType()->getScalarSizeInBits() == W;
     } else {
       return false;
@@ -599,8 +604,8 @@ namespace util {
   }
 
   bool check_width(llvm::Value *V, Instruction *I) {
-    if (V && V->getType() && V->getType()->isIntegerTy() &&
-        I && I->getType() && I->getType()->isIntegerTy()) {
+    if (V && V->getType() && V->getType()->isSized() && V->getType()->isIntegerTy() &&
+        I && I->getType() && I->getType()->isSized() && I->getType()->isIntegerTy()) {
       return V->getType()->getScalarSizeInBits() == I->getType()->getScalarSizeInBits();
     } else {
       return false;
@@ -830,11 +835,13 @@ namespace util {
     return true;
   }
 
+#define SCALAR(A) if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy()) return false
+
   bool nz(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return !Con->getValue().isZero();
     }
-
+    SCALAR(V);
     if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
       DataLayout DL(I->getParent()->getParent()->getParent());
       return llvm::isKnownNonZero(V, DL);
@@ -846,6 +853,7 @@ namespace util {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().getNumSignBits() > n;
     }
+    SCALAR(V);
     if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
       DataLayout DL(I->getParent()->getParent()->getParent());
       return llvm::ComputeNumSignBits(V, DL) > n;
@@ -857,6 +865,7 @@ namespace util {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNonNegative();
     }
+    SCALAR(V);
     if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
       DataLayout DL(I->getParent()->getParent()->getParent());
       return llvm::isKnownNonNegative(V, DL);
@@ -868,6 +877,7 @@ namespace util {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNegative();
     }
+    SCALAR(V);
     if (Instruction *I = llvm::dyn_cast<Instruction>(V)) {
       DataLayout DL(I->getParent()->getParent()->getParent());
       return llvm::isKnownNegative(V, DL);
@@ -887,6 +897,7 @@ namespace util {
 
   struct Stats {
     void hit(size_t opt, int cost) {
+      //llvm::errs() << "MATCH " << opt << " " << cost << "\n";
       Hits[opt]++;
       Cost[opt] = cost;
     }
@@ -1071,6 +1082,8 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
     return PreservedAnalyses::none();
   }
 
+  #include "gen.cpp.inc"
+
 
   Value *getReplacement(llvm::Instruction *I, IRBuilder *B) {
 //    if (!I->hasOneUse()) {
@@ -1082,9 +1095,8 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
     // Implying this situation can be improved further
 
     // Autogenerated transforms
-    #include "gen.cpp.inc"
 
-    return nullptr;
+    return f(I, B);
   }
 
   struct SymConst {
