@@ -500,9 +500,22 @@ struct SymbolTable {
         return {FUN("ne"), true};
       }
     }
-    case Inst::ZExt : return {WC64_HACK("zext"), true};
-    case Inst::SExt : return {WC64_HACK("sext"), true};
-    case Inst::Trunc : return {WC("trunc"), true};
+    case Inst::ZExt :
+      if (I->Width <= I->Ops[0]->Width)
+        return {"", false};
+      else
+        return {WC64_HACK("zext"), true};
+    case Inst::SExt :
+      if (I->Width <= I->Ops[0]->Width)
+        return {"", false};
+      else
+        return {WC64_HACK("sext"), true};
+    case Inst::Trunc :
+      // FIXME
+//      if (I->Width >= I->Ops[0]->Width)
+        return {"", false};
+//      else
+//        return {WC("trunc"), true};
 
     default: {
       llvm::errs() << "Unimplemented op in PC: " << Inst::getKindName(I->K) << "\n";
@@ -722,6 +735,19 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
     return false;
   }
 
+  if (I->K == Inst::Phi) {
+    llvm::errs() << "\nFIXME Enable PHIs\n";
+    return false;
+    for (int i = 0; i < I->Ops.size(); ++i) {
+      for (int j = 0; j < I->Ops.size(); ++j) {
+        if (i != j && I->Ops[i] == I->Ops[j]) {
+          llvm::errs() << "\nUnimplemented case: duplicate Phi arg.\n";
+          return false;
+        }
+      }
+    }
+  }
+
   auto Op = It->second;
 
   Out << Op;
@@ -891,7 +917,9 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
     Stack.pop_back();
     LHSInsts.insert(I);
     Visited.insert(I);
-    if (I->K == Inst::Var) {
+    if (I->K == Inst::Var || I->K == Inst::SExt ||
+        I->K == Inst::ZExt || I->K == Inst::Trunc ||
+        (I->Width == 1 && !Inst::isCmp(I->K) && I->K != Inst::BitWidth)) {
       if (Syms.T.find(I) == Syms.T.end()) {
         Syms.T[I] = ("x" + std::to_string(varnum++));
         // llvm::errs() << "Var1: " << I->Name << " -> " << Syms.T[I] << "\n";
@@ -1023,7 +1051,7 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
 
   int prof = profit(Input);
   size_t LHSSize = souper::instCount(Input.Mapping.LHS);
-  if (prof < 0 || LHSSize > 15) {
+  if (prof <= 0 || LHSSize > 15) {
     llvm::errs() << "Skipping replacement profit < 0 or LHS size > 15\n";
     return false;
   }
@@ -1232,9 +1260,18 @@ int main(int argc, char **argv) {
   bool first = true;
   bool outputs = false;
 
+  const size_t OPTS_PER_FUNC = 100;
+  size_t current = 0;
+  size_t num_funcs = 0;
+
   std::map<size_t, std::string> Results;
 
+  llvm::outs() << "Value *f(llvm::Instruction *I, IRBuilder *B) {\n";
   for (auto &&Input: Inputs) {
+
+//    llvm::errs() << "HERE!\n";
+//    Input.print(llvm::errs(), true);
+
     auto SKIP = [&] (auto Msg) {
       Input.print(llvm::errs(), true);
       llvm::errs() << Msg << "\n\n\n";
@@ -1278,6 +1315,16 @@ int main(int argc, char **argv) {
         SKIP("SKIP Unsupported DF.");
         continue;
       }
+    }
+
+    if (current >= OPTS_PER_FUNC) {
+      current = 0;
+      llvm::outs() << "}\n return f" << num_funcs << "(I, B);\n}";
+      llvm::outs() << "Value * f" << num_funcs++ << "(llvm::Instruction *I, IRBuilder *B) {\n";
+      Last = Inst::None;
+      first = true;
+    } else {
+        current++;
     }
 
     if (Input.Mapping.LHS->K != Last && !NoDispatch) {
@@ -1399,7 +1446,9 @@ int main(int argc, char **argv) {
     } else {
       SKIP("SKIP Failed to generate matcher.");
     }
+
   }
+
   if (outputs && !NoDispatch) {
     llvm::outs() << "}\n";
   }
@@ -1409,6 +1458,8 @@ int main(int argc, char **argv) {
       llvm::outs() << Results[N];
     }
   }
+
+  llvm::outs() << "\n return nullptr;\n}";
 
 //  llvm::outs() << "end:\n";
 
