@@ -60,6 +60,11 @@ static llvm::cl::opt<std::string> ListOutFile("listoutfile",
                    "(default=empty-string)"),
     llvm::cl::init(""));
 
+static llvm::cl::opt<size_t> OptsPerFunc("opts-per-func",
+    llvm::cl::desc("Number of optimizations per function.\n"
+                   "(default=100)"),
+    llvm::cl::init(100));
+
 
 static const std::map<Inst::Kind, std::string> MatchOps = {
   {Inst::Add, "m_c_Add("}, {Inst::Sub, "m_Sub("},
@@ -1260,7 +1265,6 @@ int main(int argc, char **argv) {
   bool first = true;
   bool outputs = false;
 
-  const size_t OPTS_PER_FUNC = 100;
   size_t current = 0;
   size_t num_funcs = 0;
 
@@ -1317,7 +1321,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    if (current >= OPTS_PER_FUNC) {
+    if (current >= OptsPerFunc) {
       current = 0;
       llvm::outs() << "}\n return f" << num_funcs << "(I, B);\n}";
       llvm::outs() << "Value * f" << num_funcs++ << "(llvm::Instruction *I, IRBuilder *B) {\n";
