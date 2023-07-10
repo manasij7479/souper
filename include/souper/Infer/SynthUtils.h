@@ -176,7 +176,7 @@ struct GoPrinter {
 
 
     S << printInst(P.Mapping.LHS) << " -> "
-      << printInst(P.Mapping.RHS) << "\n";
+      << printInst(P.Mapping.RHS) << "\n\n";
   }
 
   std::string printInst(Inst *I) {
@@ -217,7 +217,7 @@ struct GoPrinter {
         Result += printInst(Child);
         Result += ' ';
       }
-      Result[Result.length() - 1] = ')';
+      Result += ')';
     }
     return Result;
   }
