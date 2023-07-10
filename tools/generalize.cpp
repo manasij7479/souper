@@ -739,6 +739,7 @@ std::vector<Inst *> InferPotentialRelations(
         Results.push_back(Builder(XI, IC).Flip().Eq(YI)());
       }
 
+
       // if (C2 && XC == YC) {
       //   Results.push_back(Builder(XI, IC).Eq(YI)());
       // }
@@ -790,6 +791,10 @@ std::vector<Inst *> InferPotentialRelations(
       }
 
       auto One = llvm::APInt(XC.getBitWidth(), 1);
+
+      if (XI->Width != 1 && XC - YC == 1) {
+        Results.push_back(Builder(XI, IC).Sub(YI).Eq(One)());
+      }
 
       auto GENComps = [&] (Inst *A, llvm::APInt AVal, Inst *B, llvm::APInt BVal) {
         if (AVal.sle(BVal)) Results.push_back(Builder(A, IC).Sle(B)());
@@ -1683,6 +1688,19 @@ void findDangerousConstants(Inst *I, std::set<Inst *> &Results) {
     //   Results.insert(Cur);
     // }
 
+    if (Cur->K == Inst::Xor) {
+      if (Cur->Ops[0]->K == Inst::Const) {
+        if (Cur->Ops[0]->Val.isAllOnes()) {
+          Results.insert(Cur->Ops[0]);
+        }
+      }
+      if (Cur->Ops[1]->K == Inst::Const) {
+        if (Cur->Ops[1]->Val.isAllOnes()) {
+          Results.insert(Cur->Ops[1]);
+        }
+      }
+    }
+
     if (Visited.find(Cur) == Visited.end()) {
       continue;
     }
@@ -1866,8 +1884,24 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 //    }
 
   }
-
   Refresh("Direct Symbolize for common consts");
+
+  for (auto C : LHSConsts) {
+    std::map<Inst *, Inst *> TargetConstMap;
+    TargetConstMap[C] = SymConstMap[C];
+
+    auto Rep = Replace(Input, IC, TargetConstMap);
+
+    auto Clone = Verify(Rep, IC, S);
+
+    if (Clone) {
+      bool changed = false;
+      auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
+      return changed ? Gen : Clone;
+    }
+  }
+  Refresh("Symbolize common consts, one by one");
+
 
   // Step 1.5 : Direct symbolize, simple rel constraints on LHS
 
@@ -2412,7 +2446,6 @@ std::optional<ParsedReplacement> GeneralizeShrinked(
       InfixPrinter P(Smol.value());
       P(llvm::errs());
       Smol->print(llvm::errs(), true);
-      exit(0);
       llvm::errs() << "\n";
       if (DebugLevel > 4) {
         Smol.value().print(llvm::errs(), true);
