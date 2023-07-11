@@ -797,6 +797,7 @@ std::vector<Inst *> InferPotentialRelations(
       }
 
       auto GENComps = [&] (Inst *A, llvm::APInt AVal, Inst *B, llvm::APInt BVal) {
+        if (AVal.ne(BVal)) Results.push_back(Builder(A, IC).Ne(B)());
         if (AVal.sle(BVal)) Results.push_back(Builder(A, IC).Sle(B)());
         if (AVal.ule(BVal)) Results.push_back(Builder(A, IC).Ule(B)());
         if (AVal.slt(BVal)) Results.push_back(Builder(A, IC).Slt(B)());
@@ -876,6 +877,9 @@ std::vector<Inst *> InferPotentialRelations(
 
   return Results;
 }
+
+#undef C2
+#undef C3
 
 std::set<Inst *> findConcreteConsts(Inst *I) {
   std::vector<Inst *> Results;
@@ -1828,6 +1832,12 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   std::map<Inst *, llvm::APInt> SymCS;
 
+  if (Nested) {
+    for (auto Pair : ConstMap) {
+      SymCS.insert(Pair);
+    }
+  }
+
   static int i = 1;
   for (auto I : LHSConsts) {
     auto Name = "symconst_" + std::to_string(i++);
@@ -1893,15 +1903,61 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     auto Rep = Replace(Input, IC, TargetConstMap);
 
     auto Clone = Verify(Rep, IC, S);
-
+    if (!Clone) {
+      Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
+    }
     if (Clone) {
       bool changed = false;
       auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
       return changed ? Gen : Clone;
     }
+
+    //
   }
   Refresh("Symbolize common consts, one by one");
 
+  if (LHSConsts.size() > 2 && LHSConsts.size() < 5) {
+    for (auto C1 : LHSConsts) {
+      for (auto C2 : LHSConsts) {
+        if (C1 == C2 || C1->Width != C2->Width) {
+          continue;
+        }
+
+        std::map<Inst *, Inst *> TargetConstMap;
+        TargetConstMap[C1] = SymConstMap[C1];
+        TargetConstMap[C2] = SymConstMap[C2];
+
+        auto Rep = Replace(Input, IC, TargetConstMap);
+
+        auto Clone = Verify(Rep, IC, S);
+
+        if (Clone) {
+          return Clone;
+        }
+
+        std::vector<std::pair<Inst *, llvm::APInt>> ValsMap;
+        ValsMap.push_back({TargetConstMap[C1], SymCS[TargetConstMap[C1]]});
+        ValsMap.push_back({TargetConstMap[C2], SymCS[TargetConstMap[C2]]});
+
+        auto Relations = InferPotentialRelations(ValsMap, IC, Rep, {}, false);
+
+        // for (auto R : Relations) {
+        //   ReplacementContext RC;
+        //   RC.printInst(R, llvm::errs(), true);
+        //   llvm::errs() << "\n";
+        // }
+
+        Clone = VerifyWithRels(IC, S, Rep, Relations);
+
+        if (Clone) {
+          return Clone;
+        }
+
+      }
+    }
+  }
+
+  Refresh("Symbolize common consts, two at a time");
 
   // Step 1.5 : Direct symbolize, simple rel constraints on LHS
 
@@ -2244,10 +2300,10 @@ Inst *CombinePCs(const std::vector<InstMapping> &PCs, InstContext &IC) {
 
 bool IsStaticallyWidthIndependent(ParsedReplacement Input) {
 
-  if (Input.Mapping.LHS->Width == 1) {
-    return false;
-  }
-
+  // if (Inst::IsCmp Input.Mapping.LHS->Width == 1) {
+  //   return false;
+  // }
+  // llvm::errs() << "A\n";
   std::vector<Inst *> Consts;
   auto Pred = [](Inst *I) {return I->K == Inst::Const;};
   findInsts(Input.Mapping.LHS, Consts, Pred);
@@ -2271,13 +2327,20 @@ bool IsStaticallyWidthIndependent(ParsedReplacement Input) {
   if (!WidthChanges.empty()) {
     return false;
   }
+    // llvm::errs() << "B\n";
 
   // False if non zero or non -1 const
   for (auto &&C : Consts) {
-    if (C->K == Inst::Const && (C->Val != 0 || !C->Val.isAllOnesValue())) {
-      return false;
+    if (C->K == Inst::Const) {
+      if (C->Val != 0 && !C->Val.isAllOnes()) {
+        // llvm::errs() << "WUT : " << C->Val << "\n";
+        return false;
+      }
     }
   }
+
+    // llvm::errs() << "C\n";
+
 
   // TODO Set up constant synthesis problem to see if subexpressions
   // simplify to non zero consts
