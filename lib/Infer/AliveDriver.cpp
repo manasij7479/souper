@@ -202,10 +202,9 @@ private:
         return ptr;
       }
       if (x.find("var_sym") != std::string::npos) {
-        auto i = std::make_unique<IR::Input>(t, std::move(x));
+        auto i = std::make_unique<IR::Input>(t, std::move(x), IR::ParamAttrs::NoUndef);
         auto ptr = i.get();
         F.addInput(std::move(i));
-        // FIXME: force non poison
         identifiers[x] = ptr;
         return ptr;
       }

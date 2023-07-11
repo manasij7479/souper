@@ -1,4 +1,4 @@
-; RUN: %generalize -basic -souper-debug-level=2 %s > /dev/null 2>%t
+; RUN: %generalize  -souper-debug-level=2 %s > /dev/null 2>%t
 ; RUN: %FileCheck %s < %t
 
 %v0:i8 = var ; v0
@@ -8,8 +8,8 @@ infer %2
 %3:i1 = eq 42:i8, %v0
 result %3
 
-; CHECK: C1 <=u ((1 << (zext(width(v0)) - 1)) - 1)
+; CHECK: C[[#n:]] <=u ((1 << (zext(width(v0)) - 1)) - 1)
 ; CHECK:   |=
-; CHECK: C1 == sext(v0)
+; CHECK: C[[#n]] == sext(v0)
 ; CHECK:   =>
 ; CHECK: v0 == trunc(C1)
