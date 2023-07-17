@@ -7,16 +7,40 @@
 
 namespace souper {
 
+bool hasCommonVars(const std::vector<Inst *> &Ops) {
+  if (Ops.size() < 2) {
+    return false;
+  }
+  std::set<Inst *> AllVars;
+  for (auto &&I : Ops) {
+    std::vector<Inst *> Vars;
+    findVars(I, Vars);
+    for (auto &&V : Vars) {
+      if (AllVars.find(V) != AllVars.end()) {
+        return true;
+      } else {
+        AllVars.insert(V);
+      }
+    }
+  }
+  return false;
+}
+
 void collectInsts(Inst *I, std::set<Inst *> &Results) {
   std::vector<Inst *> Stack{I};
   while (!Stack.empty()) {
     auto Current = Stack.back();
     Stack.pop_back();
 
-    Results.insert(Current);
-
     for (auto Child : Current->Ops) {
       if (Results.find(Child) == Results.end()) {
+        bool skip = false;
+        if (Current->K == Inst::Select || Current->K == Inst::Phi) {
+          if (hasCommonVars(Current->Ops)) {
+            skip = true;
+          }
+        }
+        if (!skip) Results.insert(Child);
         Stack.push_back(Child);
       }
     }
@@ -34,11 +58,17 @@ void collectInstsToDepth(Inst *I, size_t Depth, std::set<Inst *> &Results) {
     if (DepthMap[Current] > Depth) {
       continue;
     }
-    Results.insert(Current);
 
     for (auto Child : Current->Ops) {
       DepthMap[Child] = DepthMap[Current] + 1;
       if (Results.find(Child) == Results.end()) {
+        bool skip = false;
+        if (Current->K == Inst::Select || Current->K == Inst::Phi) {
+          if (hasCommonVars(Current->Ops)) {
+            skip = true;
+          }
+        }
+        if (!skip) Results.insert(Child);
         Stack.push_back(Child);
       }
     }
@@ -890,6 +920,10 @@ bool Reducer::VerifyInput(ParsedReplacement &Input) {
 }
 
 bool Reducer::safeToRemove(Inst *I, ParsedReplacement &Input) {
+  static std::set<Inst *> Unsafe;
+  if (Unsafe.find(I) != Unsafe.end()) {
+    return false;
+  }
   if (I == Input.Mapping.LHS || I->K == Inst::Var || I->K == Inst::Const ||
       I->K == Inst::UMulWithOverflow || I->K == Inst::UMulO ||
       I->K == Inst::SMulWithOverflow || I->K == Inst::SMulO ||
@@ -897,6 +931,7 @@ bool Reducer::safeToRemove(Inst *I, ParsedReplacement &Input) {
       I->K == Inst::SAddWithOverflow || I->K == Inst::SAddO ||
       I->K == Inst::USubWithOverflow || I->K == Inst::USubO ||
       I->K == Inst::SSubWithOverflow || I->K == Inst::SSubO) {
+    Unsafe.insert(I);
     return false;
   }
   return true;
