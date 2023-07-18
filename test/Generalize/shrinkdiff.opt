@@ -1,0 +1,14 @@
+; RUN: %generalize -basic -souper-debug-level=2 %s > /dev/null 2>%t
+; RUN: %FileCheck %s < %t
+
+%0:i32 = var
+%1:i1 = ult 188:i32, %0
+%2:i1 = ult %0, 224:i32
+%3:i1 = select %1, %2, 0:i1
+infer %3
+%4:i1 = and %1, %2
+result %4
+
+; CHECK: select (C[[#a:]] <u v0) (v0 <u C[[#b:]]) 0
+; CHECK: =>
+; CHECK:(C[[#a:]] <u v0) & (v0 <u C[[#b:]])
