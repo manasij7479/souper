@@ -277,6 +277,8 @@ struct ShrinkWrap {
 
   std::map<Inst *, Inst *> InstCache;
 
+  std::vector<Inst *> SynthConsts;
+
   Inst *ShrinkInst(Inst *I, Inst *Parent, size_t ResultWidth) {
     if (InstCache.count(I)) {
       return InstCache[I];
@@ -307,6 +309,7 @@ struct ShrinkWrap {
         return C;
       } else {
         auto C = IC.createSynthesisConstant(ResultWidth, I->Val.getLimitedValue());
+        SynthConsts.push_back(C);
         InstCache[I] = C;
         return C;
       }
@@ -446,7 +449,42 @@ struct ShrinkWrap {
       llvm::errs() << "Type check failed\n";
       return {};
     }
-    return Verify(New, IC, S);
+
+    std::optional<ParsedReplacement> Result;
+    size_t NumInequalityPCs = 0;
+
+    // Push Inequality PCs
+    for (size_t i = 1; i < SynthConsts.size(); ++i) {
+      for (size_t j = 0; j < i; ++j) {
+        auto C1 = SynthConsts[i];
+        auto C2 = SynthConsts[j];
+        auto PC = IC.getInst(Inst::Ne, 1, {C1, C2});
+        New.PCs.push_back({PC, IC.getConst(llvm::APInt(1, 1))});
+        ++NumInequalityPCs;
+      }
+    }
+
+    // Verify
+    do {
+      Result = Verify(New, IC, S);
+      if (Result) {
+        break;
+      } else {
+        New.PCs.pop_back();
+      }
+    } while (NumInequalityPCs--);
+
+    if (!Result) {
+      return {};
+    }
+
+    // Pop remaining Inequality PCs
+    while (NumInequalityPCs--) {
+      Result.value().PCs.pop_back();
+    }
+
+    return Result;
+    // return Verify(New, IC, S);
   }
 };
 
@@ -644,7 +682,9 @@ std::vector<Inst *> BitFuncs(Inst *I, InstContext &IC) {
     if (C->Width == 1) {
       continue;
     }
-    Results.push_back(Builder(C, IC).BitWidth().Sub(C)());
+    if (C->Width != 1 && C->K == Inst::Var) {
+      Results.push_back(Builder(C, IC).BitWidth().Sub(C)());
+    }
   }
 
   return Results;
@@ -1648,9 +1688,20 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
         Components.push_back(Builder(IC, llvm::APInt::getAllOnesValue(C->Width)).Shl(C)());
         Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
 
-        if (C->Width != 1) {
+        if (C->Width != 1 && C->K == Inst::Var) {
           Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
+
+          llvm::errs() << "HERE\n";
+
+          ReplacementContext RC;
+          RC.printInst(Components.back(), llvm::errs(), true);
+
           Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
+
+          ReplacementContext RC2;
+          RC2.printInst(Components.back(), llvm::errs(), true);
+
+          llvm::errs() << "\n";
         }
 
         // TODO: Add a few more, we can afford to run generalization longer
@@ -2566,7 +2617,7 @@ void PrintInputAndResult(ParsedReplacement Input, ParsedReplacement Result) {
                   << InfixPrinter(Input)
                   << "\n\tGeneralized (profit=" << profit(Result) << "):\n\n"
                   << InfixPrinter(Result, NoWidth) << "\n";
-    // Result.print(llvm::errs(), true);
+    Result.print(llvm::errs(), true);
   }
   llvm::outs().flush();
 }
