@@ -2617,7 +2617,7 @@ void PrintInputAndResult(ParsedReplacement Input, ParsedReplacement Result) {
                   << InfixPrinter(Input)
                   << "\n\tGeneralized (profit=" << profit(Result) << "):\n\n"
                   << InfixPrinter(Result, NoWidth) << "\n";
-    Result.print(llvm::errs(), true);
+    // Result.print(llvm::errs(), true);
   }
   llvm::outs().flush();
 }
