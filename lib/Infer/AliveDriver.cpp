@@ -201,14 +201,13 @@ private:
         identifiers[x] = ptr;
         return ptr;
       }
+      IR::ParamAttrs Attrs;
+
       if (x.find("var_sym") != std::string::npos) {
-        auto i = std::make_unique<IR::Input>(t, std::move(x), IR::ParamAttrs::NoUndef);
-        auto ptr = i.get();
-        F.addInput(std::move(i));
-        identifiers[x] = ptr;
-        return ptr;
+        Attrs = IR::ParamAttrs::NoUndef;
       }
-      auto i = std::make_unique<IR::Input>(t, std::move(x));
+
+      auto i = std::make_unique<IR::Input>(t, std::move(x), std::move(Attrs));
       auto ptr = i.get();
       F.addInput(std::move(i));
       identifiers[x] = ptr;
@@ -399,8 +398,13 @@ void souper::AliveDriver::copyInputs(souper::AliveDriver::Cache &To,
                                      IR::Function &RHS) {
   for (auto &[I, Val] : Inputs) {
     if (I->K == Inst::Kind::Var) {
+      IR::ParamAttrs Attrs = IR::ParamAttrs::None;
+      if (Val->getName().find("var_sym") != std::string::npos) {
+        Attrs = IR::ParamAttrs::NoUndef;
+      }
       auto Input = std::make_unique<IR::Input>(Val->getType(),
-                                               std::string(NameMap[I]));
+                                                std::string(NameMap[I]),
+                                                std::move(Attrs));
       To[I] = Input.get();
       RHS.addInput(std::move(Input));
     }
