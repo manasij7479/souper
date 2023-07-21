@@ -12,4 +12,4 @@ result %3
 ; CHECK:   |=
 ; CHECK: C[[#n]] == sext(v0)
 ; CHECK:   =>
-; CHECK: v0 == trunc(C1)
+; CHECK: v0 == trunc(C[[#n]])
