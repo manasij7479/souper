@@ -91,8 +91,8 @@ namespace {
     cl::desc("Ignore cost of RHSs -- just generate them (default=false)"),
     cl::init(false));
   static cl::opt<bool> SynFreeze("souper-synthesize-freeze",
-    cl::desc("Generate Freeze (default=true)"),
-    cl::init(true));
+    cl::desc("Generate Freeze (default=false)"),
+    cl::init(false));
   static cl::opt<bool> SynLog("souper-synthesize-log",
     cl::desc("Generate LogB (default=false)"),
     cl::init(false));
@@ -937,11 +937,13 @@ EnumerativeSynthesis::generateExprs(InstContext &IC, size_t CountLimit,
 
   std::vector<Inst *> Guesses;
 
-  int TooExpensive = CountLimit + 1;
+  int TooExpensive = CountLimit + 2;
+
+  int RejectedBecauseTooExpesive = 0;
 
   for (auto I : Vars) {
     if (I->Width == Width)
-      addGuess(I, Width, IC, TooExpensive, Guesses, TooExpensive);
+      addGuess(I, Width, IC, TooExpensive, Guesses, RejectedBecauseTooExpesive);
   }
 
   auto Generate = [&Guesses](Inst *Guess) {

@@ -1,0 +1,14 @@
+; RUN: %generalize -souper-debug-level=2 %s > /dev/null 2>%t
+; RUN: %FileCheck %s < %t
+
+%v0:i32 = var ; v0
+%1:i32 = fshl 0:i32, %v0, 7:i32
+infer %1
+%2:i32 = lshr %v0, 25:i32
+result %2
+
+; CHECK: (0 <u C[[#a:]]) & (C[[#b:]] <u width(v0))
+; CHECK:  |=
+; CHECK: fshl 0 v0 C[[#a]]
+; CHECK:  =>
+; CHECK: v0 >>l (width(C[[#a]]) - C[[#a]])

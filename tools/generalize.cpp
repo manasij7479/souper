@@ -1185,6 +1185,15 @@ FirstValidCombination(ParsedReplacement Input,
                       bool SDF,
                       bool DFF,
                       std::vector<Inst *> Rels = {}) {
+
+  // if (Candidates[0].size()) {
+  // llvm::errs() << "FirstValidCombination: " << Candidates[0].size() << "\n";
+
+  // ReplacementContext RC;
+  // RC.printInst(Candidates[0][0], llvm::errs(), true);
+  // llvm::errs() << "\n";
+  // }
+
   std::vector<int> Counts;
   for (auto &&Cand : Candidates) {
     Counts.push_back(Cand.size());
@@ -1194,6 +1203,17 @@ FirstValidCombination(ParsedReplacement Input,
 
   size_t IterLimit = 2000;
   size_t CurIter = 0;
+
+  std::set<Inst *> SymConstsInPC;
+  for (auto PC : Input.PCs) {
+    std::vector<Inst *> Vars;
+    findVars(PC.LHS, Vars);
+    for (auto &&V : Vars) {
+      if (V->Name.starts_with("sym")) {
+        SymConstsInPC.insert(V);
+      }
+    }
+  }
 
   for (auto &&Comb : Combinations) {
     if (CurIter >= IterLimit) {
@@ -1215,7 +1235,7 @@ FirstValidCombination(ParsedReplacement Input,
       }
     }
 
-    std::set<Inst *> SymsInCurrent;
+    std::set<Inst *> SymsInCurrent = SymConstsInPC;
     for (auto &&V : VarsFound) {
       if (V->Name.starts_with("sym")) {
         SymsInCurrent.insert(V);
@@ -1226,6 +1246,7 @@ FirstValidCombination(ParsedReplacement Input,
 
     for (auto &&[C, Val] : SymCS) {
       if (SymsInCurrent.find(C) == SymsInCurrent.end()) {
+        // llvm::errs() << "HERE "<<C->Name<<"\n";
         ReverseMap[C] = Builder(IC, Val)();
       }
     }
@@ -1274,11 +1295,9 @@ FirstValidCombination(ParsedReplacement Input,
     Copy.Mapping.LHS = Replace(Input.Mapping.LHS, IC, InstCacheRHS);
     Copy.Mapping.RHS = Replace(Input.Mapping.RHS, IC, InstCacheRHS);
 
+
+
     // Copy.PCs = Input.PCs;
-
-    // Copy.print(llvm::errs(), true);
-    // llvm::errs() << "\n";
-
     if (SOLVE(Copy)) {
       return Clone;
     }
@@ -1286,13 +1305,13 @@ FirstValidCombination(ParsedReplacement Input,
     if (!ReverseMap.empty()) {
       Copy.Mapping.LHS = Replace(Copy.Mapping.LHS, IC, ReverseMap);
       Copy.Mapping.RHS = Replace(Copy.Mapping.RHS, IC, ReverseMap);
+
       if (SOLVE(Copy)) {
         return Clone;
       }
     }
 
   }
-
   return std::nullopt;
 }
 
@@ -1679,29 +1698,25 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
 
     std::vector<Inst *> Components;
     for (auto &&C : AtomicComps) {
+      // auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
+
+      // auto MinusOne = Builder(IC, llvm::APInt(C->Width, 1)).AShr(Builder(IC, C).BitWidth())();
+      auto MinusOne = Builder(IC, llvm::APInt::getAllOnesValue(C->Width))();
       Components.push_back(C);
       // Components.push_back(Builder(C, IC).BSwap()());
       Components.push_back(Builder(C, IC).LogB()());
       Components.push_back(Builder(C, IC).Sub(1)());
-      Components.push_back(Builder(C, IC).Xor(-1)());
+      Components.push_back(Builder(C, IC).Xor(MinusOne)());
       if (SymbolizeHackersDelight) {
-        Components.push_back(Builder(IC, llvm::APInt::getAllOnesValue(C->Width)).Shl(C)());
+        Components.push_back(Builder(IC, MinusOne).Shl(C)());
         Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
 
         if (C->Width != 1 && C->K == Inst::Var) {
           Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
-
-          llvm::errs() << "HERE\n";
-
-          ReplacementContext RC;
-          RC.printInst(Components.back(), llvm::errs(), true);
-
           Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
-
-          ReplacementContext RC2;
-          RC2.printInst(Components.back(), llvm::errs(), true);
-
-          llvm::errs() << "\n";
+          auto CModWidth = Builder(IC, C).URem(Builder(IC, C).BitWidth());
+          Components.push_back(CModWidth());
+          Components.push_back(Builder(IC, C).BitWidth().Sub(CModWidth)());
         }
 
         // TODO: Add a few more, we can afford to run generalization longer
@@ -1726,6 +1741,7 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       }
       // Filter by value
       Candidates.push_back(FilterExprsByValue(CandsForTarget, Target->Val, ConstMap));
+      // Candidates.push_back(CandsForTarget);
     }
     return Candidates;
 }
@@ -2204,7 +2220,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!EnumeratedCandidates.empty() && !Nested) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                        InstCache, IC, S, SymCS, true, true, true, Relations);
+                                        InstCache, IC, S, SymCS, true, true, false, Relations);
     if (Clone) {
       return Clone;
     }
@@ -2215,7 +2231,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!SimpleCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                       InstCache, IC, S, SymCS, false, true, true);
+                                       InstCache, IC, S, SymCS, false, true, false);
     if (Clone) {
       return Clone;
     }
@@ -2233,14 +2249,14 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!SimpleCandidatesWithConsts.empty() && !Nested) {
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidatesWithConsts,
-                                       InstCache, IC, S, SymCS, false, true, true);
+                                       InstCache, IC, S, SymCS, false, true, false);
     if (Clone) {
       return Clone;
     }
     Refresh("Simple cands+consts with constraints");
 
     Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidatesWithConsts,
-                                        InstCache, IC, S, SymCS, true, true, true, Relations);
+                                        InstCache, IC, S, SymCS, true, true, false, Relations);
     if (Clone) {
       return Clone;
     }
@@ -2350,11 +2366,6 @@ Inst *CombinePCs(const std::vector<InstMapping> &PCs, InstContext &IC) {
 }
 
 bool IsStaticallyWidthIndependent(ParsedReplacement Input) {
-
-  // if (Inst::IsCmp Input.Mapping.LHS->Width == 1) {
-  //   return false;
-  // }
-  // llvm::errs() << "A\n";
   std::vector<Inst *> Consts;
   auto Pred = [](Inst *I) {return I->K == Inst::Const;};
   findInsts(Input.Mapping.LHS, Consts, Pred);
@@ -2378,23 +2389,22 @@ bool IsStaticallyWidthIndependent(ParsedReplacement Input) {
   if (!WidthChanges.empty()) {
     return false;
   }
-    // llvm::errs() << "B\n";
 
-  // False if non zero or non -1 const
   for (auto &&C : Consts) {
     if (C->K == Inst::Const) {
-      if (C->Val != 0 && !C->Val.isAllOnes()) {
-        // llvm::errs() << "WUT : " << C->Val << "\n";
+      if (C->Val != 0 && !C->Val.isAllOnes() && C->Val != 1) {
         return false;
       }
     }
   }
 
-    // llvm::errs() << "C\n";
-
-
-  // TODO Set up constant synthesis problem to see if subexpressions
-  // simplify to non zero consts
+  std::vector<Inst *> Vars;
+  findVars(Input.Mapping.LHS, Vars);
+  for (auto &&V : Vars) {
+    if (V->Width == 1) {
+      return false;
+    }
+  }
 
   return true;
 }
@@ -2428,6 +2438,15 @@ bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
   return false;
 }
 
+ParsedReplacement ReplaceMinusOne(InstContext &IC, ParsedReplacement Input) {
+  std::map<Inst *, Inst *> Map;
+  for (size_t i = 2; i <= 64; ++i) {
+    Map[IC.getConst(llvm::APInt::getAllOnesValue(i))] =
+      Builder(IC, llvm::APInt(1, 1)).SExt(i)();
+  }
+  return Replace(Input, IC, Map);
+}
+
 std::pair<ParsedReplacement, bool>
 InstantiateWidthChecks(InstContext &IC,
   Solver *S, ParsedReplacement Input) {
@@ -2435,6 +2454,8 @@ InstantiateWidthChecks(InstContext &IC,
   if (IsStaticallyWidthIndependent(Input)) {
     return {Input, true};
   }
+
+  Input = ReplaceMinusOne(IC, Input);
 
   if (!NoWidth && !hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
     // Instantiate Alive driver with Symbolic width.
@@ -2666,7 +2687,7 @@ int main(int argc, char **argv) {
       if (!JustReduce) {
 
         bool Changed = false;
-        size_t MaxTries = 2; // Increase this if we ever run with 10/100x timeout.
+        size_t MaxTries = 1; // Increase this if we ever run with 10/100x timeout.
         bool FirstTime = true;
         do {
           if (!OnlyWidth) {
