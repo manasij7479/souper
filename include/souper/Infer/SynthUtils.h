@@ -37,7 +37,8 @@ public:
   BINOP(Add) BINOP(Sub) BINOP(Mul)
   BINOP(And) BINOP(Xor) BINOP(Or)
   BINOP(Shl) BINOP(LShr) BINOP(UDiv)
-  BINOP(SDiv)
+  BINOP(SDiv) BINOP(AShr) BINOP(URem)
+  BINOP(SRem)
 #undef BINOP
 
   template<typename T> Builder Ugt(T t) {                        \
