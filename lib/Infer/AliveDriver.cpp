@@ -193,19 +193,18 @@ private:
     if (auto It = identifiers.find(x); It != identifiers.end()) {
       return It->second;
     } else {
-      if (x.find(souper::ReservedConstPrefix) != std::string::npos) {
+      if (x.find("var_sym") != std::string::npos) {
         auto i = std::make_unique<IR::ConstantInput>(t, std::move(x));
         auto ptr = i.get();
-//         F.addInput(std::move(i));
         F.addConstant(std::move(i));
         identifiers[x] = ptr;
         return ptr;
       }
       IR::ParamAttrs Attrs;
 
-      if (x.find("var_sym") != std::string::npos) {
-        Attrs = IR::ParamAttrs::NoUndef;
-      }
+      // if (x.find("var_sym") != std::string::npos) {
+      //   Attrs = IR::ParamAttrs::NoUndef;
+      // }
 
       auto i = std::make_unique<IR::Input>(t, std::move(x), std::move(Attrs));
       auto ptr = i.get();
@@ -442,6 +441,10 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
     size_t correct = 0;
     size_t incorrect = 0;
     for (; types; ++types, ++i) {
+      if (DebugLevel > 4) {
+        llvm::errs() << "Typing : " << i << "\r";
+      }
+
       tv.fixupTypes(types);
       std::map<const Inst *, size_t> Typing;
       for (auto &&P : Inputs) {
@@ -449,10 +452,11 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
       }
       if (auto errs = tv.verify()) {
         if (DebugLevel > 4) {
-          llvm::errs() << "Invalid typing: \n";
+          llvm::errs() << "\nInvalid typing: \n";
           for (auto &&P : Inputs) {
-            llvm::errs() << P.first->Name << ' ' << P.second->bits() << "\n";
+            llvm::errs() << P.first->Name << ' ' << P.second->bits() << "\t";
           }
+          llvm::errs() << "\n";
         }
         InvalidTypings.push_back(Typing);
         incorrect++;
@@ -516,8 +520,8 @@ bool souper::AliveDriver::translateRoot(const souper::Inst *I, const Inst *PC,
   if (PC && !(PC->K == Inst::Const && PC->Val.isAllOnesValue())) {
     Builder.assume(ExprCache[PC]);
   }
-  Builder.ret(getType(I->Width), ExprCache[I]);
-  F.setType(getType(I->Width));
+  Builder.ret(getType(I->Width, I), ExprCache[I]);
+  F.setType(getType(I->Width, I));
   return true;
 }
 
@@ -615,7 +619,7 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
     NameMap[I] = Name;
   }
 
-  auto &t = getType(I->Width);
+  auto &t = getType(I->Width, I);
 
   switch (I->K) {
     case souper::Inst::Var: {
@@ -657,9 +661,9 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
       unsigned idx = I->Ops[1]->Val.getLimitedValue();
       assert(idx <= 1 && "Only extractvalue with overflow instructions are supported.");
       if (idx == 0) {
-        t = getType(I->Ops[0]->Width - 1);
+        t = getType(I->Ops[0]->Width - 1, I);
       } else {
-        t = getType(1);
+        t = getType(1, nullptr);
       }
       ExprCache[I] = Builder.extractvalue(t, Name, ExprCache[I->Ops[0]], idx);
       return true;
@@ -678,7 +682,7 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
 
     #define BINOPOV(SOUPER, ALIVE) case souper::Inst::SOUPER: {  \
       ExprCache[I] = Builder.binOp(getOverflowType               \
-      (I->Ops[0]->Width), Name, ExprCache[Ops[0]],               \
+      (I->Ops[0]->Width, I), Name, ExprCache[Ops[0]],            \
       ExprCache[Ops[1]], IR::BinOp::ALIVE);                      \
       return true;                                               \
     }
@@ -691,7 +695,7 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
 
     #define FAKEBINOP(SOUPER, ALIVE) case souper::Inst::SOUPER: {\
       ExprCache[I] = Builder.binOp(t, Name, ExprCache[I->Ops[0]],\
-      Builder.val(getType(1), 0), IR::BinOp::ALIVE);             \
+      Builder.val(getType(1, nullptr), 0), IR::BinOp::ALIVE);    \
       return true;                                               \
     }
 
@@ -825,21 +829,35 @@ souper::AliveDriver::translateDemandedBits(const souper::Inst* I,
 
   assert(DemandedBits.getBitWidth() == I-> Width && "Uninitialized DemandedBits");
 
-  if (!DemandedBits.isAllOnes()) {
-    auto DBMask = Builder.val(getType(I->Width), DemandedBits);
+  if (!DemandedBits.isAllOnesValue()) {
+    auto DBMask = Builder.val(getType(I->Width, I), DemandedBits);
 
-    ExprCache[I] = Builder.binOp(getType(I->Width),
+    ExprCache[I] = Builder.binOp(getType(I->Width, I),
                                  "%" + std::to_string(InstNumbers++), ExprCache[I],
                                  DBMask, IR::BinOp::And);
   }
 }
 
-IR::Type &souper::AliveDriver::getType(int Width) {
+IR::Type &souper::AliveDriver::getType(int Width, const Inst *I) {
   if (WidthIndependentMode && Width != 1) {
-    if (SymTypes.empty()) {
-      SymTypes.push_back(new IR::SymbolicType("symty_", (1 << IR::SymbolicType::Int)));
+    if (I && SymTypes.find(I) != SymTypes.end()) {
+      return *SymTypes[I];
     }
-    return *SymTypes.back();
+    static int symtypenum = 0;
+
+    if (I->K == Inst::SExt || I->K == Inst::ZExt || I->K == Inst::Trunc) {
+      SymTypes[I] = new IR::ConstrainedSymbolicType("symty_" +
+        std::to_string(symtypenum++) + "_", IR::SymbolicType::Int,
+        [](auto width) {
+          auto Cond = width & (width - smt::expr::mkUInt(1, width.bits()));
+          return (Cond == smt::expr::mkUInt(0, width.bits()));
+        });
+      return *SymTypes[I];
+    }
+    // llvm::errs() << "THERE\n";
+    SymTypes[I] = new IR::SymbolicType("symty_" +
+      std::to_string(symtypenum++) + "_", (1 << IR::SymbolicType::Int));
+    return *SymTypes[I];
   }
 
   std::string n = "i" + std::to_string(Width);
@@ -849,10 +867,10 @@ IR::Type &souper::AliveDriver::getType(int Width) {
   return *TypeCache[n];
 }
 
-IR::Type &souper::AliveDriver::getOverflowType(int Width) {
+IR::Type &souper::AliveDriver::getOverflowType(int Width, const Inst *I) {
   std::string n = "o" + std::to_string(Width);
   if (TypeCache.find(n) == TypeCache.end()) {
-    std::vector<IR::Type *> Types = {&getType(Width), &getType(1)};
+    std::vector<IR::Type *> Types = {&getType(Width, I), &getType(1, I)};
     std::vector<bool> Padding = {false, false};
     TypeCache[n] = new IR::StructType(std::move(n),std::move(Types),
                                       std::move(Padding));

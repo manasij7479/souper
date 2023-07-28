@@ -1246,7 +1246,6 @@ FirstValidCombination(ParsedReplacement Input,
 
     for (auto &&[C, Val] : SymCS) {
       if (SymsInCurrent.find(C) == SymsInCurrent.end()) {
-        // llvm::errs() << "HERE "<<C->Name<<"\n";
         ReverseMap[C] = Builder(IC, Val)();
       }
     }
@@ -1582,7 +1581,8 @@ const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap,
   std::vector<std::vector<Inst *>> Results;
   for (auto R : RHS) {
     auto Cands = IOSynthesize(R->Val, ConstMap, IC, depth, false);
-    std::set<Inst *> Temp;
+
+    std::set<Inst *> Temp; // TODO: Push the sorting here
     for (auto C : Cands) {
       Temp.insert(C);
     }
@@ -1690,6 +1690,84 @@ const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap,
   return Results;
 }
 
+std::vector<Inst *> AllSubExprs(Inst *I, size_t W) {
+  std::set<Inst *> Visited;
+  std::vector<Inst *> Stack{I};
+
+  std::vector<Inst *> Result;
+
+  while (!Stack.empty()) {
+    auto *I = Stack.back();
+    Stack.pop_back();
+    if (Visited.count(I)) {
+      continue;
+    }
+    if (I->K == Inst::Var || I->K == Inst::Const) {
+      continue;
+    }
+    Visited.insert(I);
+    if (I->Width == W) {
+      Result.push_back(I);
+    }
+    Stack.insert(Stack.end(), I->Ops.begin(), I->Ops.end());
+  }
+
+  return Result;
+}
+
+std::vector<Inst *> ExtractSketchesSimple(InstContext &IC, ParsedReplacement Input,
+                                          const std::map<Inst *, Inst *> &SymConstMap,
+                                          size_t Width) {
+  std::vector<Inst *> Sketches;
+  std::vector<Inst *> Inputs;
+  findVars(Input.Mapping.LHS, Inputs);
+
+  if (Inputs.size() != 1) {
+    return Sketches;
+  }
+
+  std::vector<Inst *> ConstList = {IC.getConst(llvm::APInt(Inputs[0]->Width, 0)),
+                                   IC.getConst(llvm::APInt(Inputs[0]->Width, 1)),
+                                   IC.getConst(llvm::APInt::getAllOnesValue(Inputs[0]->Width))};
+
+  for (auto &&C : ConstList) {
+    auto MapCopy = SymConstMap;
+    MapCopy[Inputs[0]] = C;
+
+    if (MapCopy.empty()) {
+      continue;
+    }
+
+    auto Root = Replace(Input.Mapping.LHS, IC, MapCopy);
+
+    for (auto I : AllSubExprs(Root, Width)) {
+      Sketches.push_back(I);
+    }
+  }
+
+  return Sketches;
+}
+
+std::vector<std::vector<Inst *>> InferSketchExprs(std::vector<Inst *> RHS,
+                                                  ParsedReplacement Input,
+                                                  InstContext &IC,
+                                                  const std::map<Inst *, Inst *> &SymConstMap,
+                                                  const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap) {
+  std::vector<std::vector<Inst *>> Results;
+  bool HasResults = false;
+  for (auto Target : RHS) {
+    auto Cands = ExtractSketchesSimple(IC, Input, SymConstMap, Target->Width);
+    Results.push_back(FilterExprsByValue(Cands, Target->Val, ConstMap));
+    if (!Results.back().empty()) {
+      HasResults = true;
+    }
+  }
+  if (!HasResults) {
+    return {};
+  }
+  return Results;
+}
+
 std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
                                            std::set<Inst *> AtomicComps, InstContext &IC,
                                            const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap,
@@ -1708,7 +1786,7 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       Components.push_back(Builder(C, IC).Sub(1)());
       Components.push_back(Builder(C, IC).Xor(MinusOne)());
       if (SymbolizeHackersDelight) {
-        Components.push_back(Builder(IC, MinusOne).Shl(C)());
+        // Components.push_back(Builder(IC, MinusOne).Shl(C)());
         Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
 
         if (C->Width != 1 && C->K == Inst::Var) {
@@ -1841,9 +1919,6 @@ ParsedReplacement DeAugment(InstContext &IC,
     CountUses(M.RHS, LHSCount);
   }
   CountUses(Result.Mapping.RHS, RHSCount);
-
-
-
 
   if (LHSCount[SymDBVar] == 1 && RHSCount[SymDBVar] == 1) {
     // We can remove the SymDBVar
@@ -2108,6 +2183,19 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     Refresh("Unitary cands, rel constraints");
   }
 
+  std::vector<std::vector<Inst *>> SketchyCandidates =
+    InferSketchExprs(RHSFresh, Input, IC, SymConstMap, ConstMap);
+
+  if (!SketchyCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
+                                       InstCache, IC, S, SymCS,
+                                       true, false, false);
+    if (Clone) {
+      return Clone;
+    }
+  }
+  Refresh("Sketches, no constraints");
+
   std::vector<std::vector<Inst *>> SimpleCandidates =
     InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth=*/ 2);
 
@@ -2147,6 +2235,14 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     Refresh("Enumerated cands, no constraints");
   }
 
+  if (!SketchyCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
+                                        InstCache, IC, S, SymCS, true, false, false, Relations);
+    if (Clone) {
+      return Clone;
+    }
+    Refresh("Sketchy cands with relations");
+  }
 
   // Step 4.75 : Enumerate 2 instructions when single RHS Constant.
   std::vector<std::vector<Inst *>> EnumeratedCandidatesTwoInsts;
@@ -2226,8 +2322,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
     Refresh("Enumerated exprs with constraints and relations");
   }
-
-  // Step 5 : Simple exprs with constraints
 
   if (!SimpleCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
