@@ -90,7 +90,7 @@ static cl::opt<bool> Advanced("advanced",
 
 static cl::opt<bool> SymbolicDF("symbolic-df",
     cl::desc("Generalize with symbolic dataflow facts."),
-    cl::init(false));
+    cl::init(true));
 
 // This can probably be done more efficiently, but likely not the bottleneck anywhere
 std::vector<std::vector<int>> GetCombinations(std::vector<int> Counts) {
@@ -746,6 +746,14 @@ std::vector<Inst *> InferPotentialRelations(
             Results.push_back(Builder(XI, IC).LShr(YI).Eq(ZI)());
           }
 
+          if (C2 && XC * YC == ZC) {
+            Results.push_back(Builder(XI, IC).Mul(YI).Eq(ZI)());
+          }
+
+          if (C2 && XC + YC == ZC) {
+            Results.push_back(Builder(XI, IC).Add(YI).Eq(ZI)());
+          }
+
           // if (C2 && (XC & YC).eq(ZC)) {
           //   Results.push_back(Builder(XI, IC).And(YI).Eq(ZI)());
           // }
@@ -810,12 +818,12 @@ std::vector<Inst *> InferPotentialRelations(
       // }
 
       // Mul C
-      if (C2 && YC!= 0 && XC.urem(YC) == 0) {
-        auto Fact = XC.udiv(YC);
-        if (Fact != 1 && Fact != 0) {
-          Results.push_back(Builder(YI, IC).Mul(Fact).Eq(XI)());
-        }
-      }
+      // if (C2 && YC!= 0 && XC.urem(YC) == 0) {
+      //   auto Fact = XC.udiv(YC);
+      //   if (Fact != 1 && Fact != 0) {
+      //     Results.push_back(Builder(YI, IC).Mul(Fact).Eq(XI)());
+      //   }
+      // }
 
       // Add C
       // auto Diff = XC - YC;
@@ -2183,19 +2191,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     Refresh("Unitary cands, rel constraints");
   }
 
-  std::vector<std::vector<Inst *>> SketchyCandidates =
-    InferSketchExprs(RHSFresh, Input, IC, SymConstMap, ConstMap);
-
-  if (!SketchyCandidates.empty()) {
-    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
-                                       InstCache, IC, S, SymCS,
-                                       true, false, false);
-    if (Clone) {
-      return Clone;
-    }
-  }
-  Refresh("Sketches, no constraints");
-
   std::vector<std::vector<Inst *>> SimpleCandidates =
     InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth=*/ 2);
 
@@ -2235,16 +2230,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     Refresh("Enumerated cands, no constraints");
   }
 
-  if (!SketchyCandidates.empty()) {
-    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
-                                        InstCache, IC, S, SymCS, true, false, false, Relations);
-    if (Clone) {
-      return Clone;
-    }
-    Refresh("Sketchy cands with relations");
-  }
-
-  // Step 4.75 : Enumerate 2 instructions when single RHS Constant.
+    // Step 4.75 : Enumerate 2 instructions when single RHS Constant.
   std::vector<std::vector<Inst *>> EnumeratedCandidatesTwoInsts;
   if (RHSFresh.size() == 1) {
     EnumeratedCandidatesTwoInsts = Enumerate(RHSFresh, Components, IC, ConstMap, 2);
@@ -2295,6 +2281,28 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
   }
   Refresh("Enumerated 2 insts exprs with relations");
+
+  std::vector<std::vector<Inst *>> SketchyCandidates =
+    InferSketchExprs(RHSFresh, Input, IC, SymConstMap, ConstMap);
+
+  if (!SketchyCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
+                                       InstCache, IC, S, SymCS,
+                                       true, false, false);
+    if (Clone) {
+      return Clone;
+    }
+  }
+  Refresh("Sketches, no constraints");
+
+  if (!SketchyCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
+                                        InstCache, IC, S, SymCS, true, false, false, Relations);
+    if (Clone) {
+      return Clone;
+    }
+    Refresh("Sketchy cands with relations");
+  }
 
   // Step 4.8 : Special RHS constant exprs, with constants
 
@@ -2811,25 +2819,20 @@ int main(int argc, char **argv) {
             if (SymbolicDF) {
               // Refresh("PUSH SYMDF_KB_DB");
               auto [CM, Aug] = AugmentForSymKBDB(Input, IC);
+
               // auto [CM2, Aug2] = AugmentForSymKB(Aug1, IC);
               if (!CM.empty()) {
                 bool SymDFChanged = false;
 
-                // auto Clone = Verify(Aug, IC, S);
-                // if (Clone) {
-                //   // Symbolic db+kb can be unconstrained
-                //   // Is this actually possible in practice?
-                //   return Clone;
-                // }
-
-                // Aug.print(llvm::errs(), true);
-
-                // llvm::errs() << "\n\n";
-
-                auto Generalized = SuccessiveSymbolize(IC, S.get(), Aug, SymDFChanged, CM);
-                if (Generalized) {
-                  Result = DeAugment(IC, S.get(), Generalized.value());
-                  Changed = true;
+                auto Clone = Verify(Aug, IC, S.get());
+                if (Clone) {
+                  Result = ReduceBasic(IC, S.get(), Clone.value());
+                } else {
+                  auto Generalized = SuccessiveSymbolize(IC, S.get(), Aug, SymDFChanged, CM);
+                  if (Generalized) {
+                    Result = DeAugment(IC, S.get(), Generalized.value());
+                    Changed = true;
+                  }
                 }
               }
               // Refresh("POP SYMDF_KB_DB");
