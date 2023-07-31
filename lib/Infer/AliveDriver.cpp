@@ -193,19 +193,10 @@ private:
     if (auto It = identifiers.find(x); It != identifiers.end()) {
       return It->second;
     } else {
-      if (x.find("var_sym") != std::string::npos) {
-        auto i = std::make_unique<IR::ConstantInput>(t, std::move(x));
-        auto ptr = i.get();
-        F.addConstant(std::move(i));
-        identifiers[x] = ptr;
-        return ptr;
-      }
       IR::ParamAttrs Attrs;
-
-      // if (x.find("var_sym") != std::string::npos) {
-      //   Attrs = IR::ParamAttrs::NoUndef;
-      // }
-
+      if (x.find("var_sym") != std::string::npos) {
+        Attrs = IR::ParamAttrs::NoUndef;
+      }
       auto i = std::make_unique<IR::Input>(t, std::move(x), std::move(Attrs));
       auto ptr = i.get();
       F.addInput(std::move(i));
