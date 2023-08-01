@@ -279,7 +279,14 @@ struct ShrinkWrap {
 
   std::vector<Inst *> SynthConsts;
 
+  // bool TryFixWidths(Inst *Root, std::map<Inst *, size_t> &Widths, size_t ResultWidth) {
+  //   if (Widths.count(Root)) {
+  //     if (Widths[Root] == ResultWidth)
+  //   }
+  // }
+
   Inst *ShrinkInst(Inst *I, Inst *Parent, size_t ResultWidth) {
+    static size_t ReservedConstID = 1;
     if (InstCache.count(I)) {
       return InstCache[I];
     }
@@ -308,7 +315,7 @@ struct ShrinkWrap {
         InstCache[I] = C;
         return C;
       } else {
-        auto C = IC.createSynthesisConstant(ResultWidth, I->Val.getLimitedValue());
+        auto C = IC.createSynthesisConstant(ResultWidth, ReservedConstID++);
         SynthConsts.push_back(C);
         InstCache[I] = C;
         return C;
@@ -444,7 +451,6 @@ struct ShrinkWrap {
       }
     }
 
-    // New.print(llvm::errs(), true);
     if (!typeCheck(New)) {
       llvm::errs() << "Type check failed\n";
       return {};
@@ -456,6 +462,9 @@ struct ShrinkWrap {
     // Push Inequality PCs
     for (size_t i = 1; i < SynthConsts.size(); ++i) {
       for (size_t j = 0; j < i; ++j) {
+        if (SynthConsts[i]->Width != SynthConsts[j]->Width) {
+          continue;
+        }
         auto C1 = SynthConsts[i];
         auto C2 = SynthConsts[j];
         auto PC = IC.getInst(Inst::Ne, 1, {C1, C2});
