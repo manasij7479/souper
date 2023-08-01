@@ -1,5 +1,5 @@
-Optimize a program with a auto-generated matcher
-------------------------------------------------
+Optimize a program with a generated matcher
+-------------------------------------------
 
 - Build a souper branch with generalization support. (https://github.com/manasij7479/souper/tree/generalization)
 - Obtain or generate matcher source code and copy it to $SOUPER_SRC/tools/pass-generator/src/gen.cpp.inc
