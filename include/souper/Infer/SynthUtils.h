@@ -446,5 +446,182 @@ struct InfixPrinter {
 };
 
 
+// TODO print types in preamble (Alex)
+// TODO print type info for each instruction (Alex)
+// TODO handle constraints on symbolic constants (Alex)
+// TODO incorporate width checks (MM)
+
+static const std::map<Inst::Kind, std::string> ArithDialectMap = {
+  {Inst::Add, "arith.addi"},
+  {Inst::Sub, "arith.subi"},
+  {Inst::And, "arith.andi"},
+  {Inst::Or, "arith.ori"},
+  {Inst::Xor, "arith.xori"},
+};
+
+struct PDLGenerator {
+  PDLGenerator(ParsedReplacement P_, std::string Name_)
+    : P(P_), Name(Name_), Indent(0) {}
+
+  template <typename Stream>
+  bool operator()(Stream &S) {
+
+    std::ostringstream OS; // to bail out early without printing if needed
+    if (!pre(OS)) return false;
+    if (!LHS(OS)) return false;
+    if (!RHS(OS)) return false;
+    if (!post(OS)) return false;
+    S << OS.str();
+    return true;
+  }
+
+  template <typename Stream>
+  bool LHS(Stream &S) {
+    if (!printInsts(P.Mapping.LHS, S)) return false;
+    return true;
+  }
+
+  template <typename Stream>
+  bool RHS(Stream &S) {
+    if (!rhspre(S)) return false;
+    if (!printInsts(P.Mapping.LHS, S)) return false;
+    if (!rhspost(S)) return false;
+    return true;
+  }
+
+  template <typename Stream>
+  bool rhspre(Stream &S) {
+    if (SymbolTable.find(P.Mapping.LHS) == SymbolTable.end()) {
+      llvm::errs() << "LHS Root not found in SymbolTable\n";
+      return false;
+    }
+    indent(S);
+    S << "rewrite " << SymbolTable[P.Mapping.LHS] << " {\n";
+    Indent++;
+    return true;
+  }
+
+  template <typename Stream>
+  bool rhspost(Stream &S) {
+    if (SymbolTable.find(P.Mapping.LHS) == SymbolTable.end()) {
+      llvm::errs() << "LHS Root not found in SymbolTable\n";
+      return false;
+    }
+
+    if (SymbolTable.find(P.Mapping.RHS) == SymbolTable.end()) {
+      llvm::errs() << "RHS Root not found in SymbolTable\n";
+      return false;
+    }
+
+    indent(S);
+    S << "replace " << SymbolTable[P.Mapping.LHS] <<
+         " with " << SymbolTable[P.Mapping.RHS] << "\n";
+    Indent--;
+    indent(S);
+    S << "}\n";
+    return true;
+  }
+
+  template <typename Stream>
+  bool pre(Stream &S) {
+    S << "pdl.pattern @" << Name << " : benefit("
+      << souper::benefit(P.Mapping.LHS, P.Mapping.RHS) << ") {\n";
+    Indent++;
+    // Type declarations go here
+
+    std::vector<Inst *> Vars; // Operands
+    findVars(P.Mapping.LHS, Vars);
+
+    for (auto &&Var : Vars) {
+      if (SymbolTable.find(Var) == SymbolTable.end()) {
+        SymbolTable[Var] = "%v" + std::to_string(SymbolTable.size());
+      }
+      indent(S);
+      S << SymbolTable[Var] << " = operand\n";
+      Visited.insert(Var);
+    }
+    return true;
+  }
+
+  template <typename Stream>
+  bool post(Stream &S) {
+    S << "}\n";
+    return true;
+  }
+
+  template <typename Stream>
+  bool printInsts(Inst *I, Stream &S) {
+    for (auto &&Op : I->Ops) {
+      if (!printInsts(Op, S)) return false;
+    }
+    if (!printSingleInst(I, S)) return false;
+    return true;
+  }
+
+  template <typename Stream>
+  bool printSingleInst(Inst *I, Stream &S) {
+    static size_t extraSyms = 0;
+    if (Visited.find(I) != Visited.end()) return true;
+    Visited.insert(I);
+
+    if (SymbolTable.find(I) == SymbolTable.end()) {
+      SymbolTable[I] = "%i" + std::to_string(SymbolTable.size());
+    }
+
+    if (I->K == Inst::Const) {
+      indent(S);
+      S << "%" << extraSyms++ << " = attribute = " << llvm::toString(I->Val, 10, false)
+               << ":i" << I->Width << "\n";
+      indent(S);
+      S << SymbolTable[I] << " = operation \"arith.constant\" {\"value\" = %"
+                          << extraSyms - 1 << "}\n";
+      return true;
+      // TODO: This seems sketchy, figure out how a better way to write literal constants
+    }
+
+    if (ArithDialectMap.find(I->K) == ArithDialectMap.end()) {
+      llvm::errs() << Inst::getKindName(I->K) << " instruction not found in ArithDialectMap\n";
+      return false;
+    }
+
+    indent(S);
+    S << "%" << extraSyms++ << " = pdl.operation \"" << ArithDialectMap.at(I->K) << "\"(";
+
+    bool first = true;
+    for (auto &&Op : I->Ops) {
+      if (first) {
+        first = false;
+      } else {
+        S << ", ";
+      }
+      if (SymbolTable.find(Op) == SymbolTable.end()) {
+        llvm::errs() << "Operand not found in SymbolTable\n";
+        return false;
+      }
+      S << SymbolTable[Op];
+    }
+
+    // TODO: print type info
+    S << ")\n";
+
+    indent(S);
+    S << SymbolTable[I] << " = result 0 of %" << extraSyms - 1 << "\n";
+
+    return true;
+  }
+
+  template <typename Stream>
+  void indent(Stream &S) {
+    for (size_t i = 0; i < Indent; ++i) {
+      S << "  ";
+    }
+  }
+  std::set<Inst *> Visited;
+  std::map<Inst *, std::string> SymbolTable;
+  ParsedReplacement P;
+  std::string Name;
+  size_t Indent;
+};
+
 }
 #endif
