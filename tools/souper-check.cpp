@@ -493,6 +493,13 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         GoPrinter P(Rep);
         P(llvm::outs());
       }
+      if (PrettyPrint == "pdl") {
+        static size_t Counter = 0;
+        PDLGenerator P(Rep, "opt" + std::to_string(Counter++));
+        P(llvm::outs());
+      } else {
+        llvm_unreachable("unknown pretty-printer");
+      }
     } else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;
