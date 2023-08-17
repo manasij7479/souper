@@ -48,11 +48,6 @@ static llvm::cl::opt<int> High("high",
     llvm::cl::init(-1));
 
 
-// TODO Match trees
-// TODO Make the commutative operations work
-// This is critical because commutative operations
-// sometimes have the arguments inverted for canonicalization
-
 namespace {
 
 // Custom Creators
@@ -716,6 +711,13 @@ namespace util {
     }
     auto W = V->getType()->getIntegerBitWidth();
 
+    if (llvm::APInt::getBitsNeeded(L, 10) > W ||
+        llvm::APInt::getBitsNeeded(H, 10) > W) {
+      return false;
+    }
+
+//     llvm::errs() << L << " " << H << " " << W << "\n";
+
     if (((L.length()-1)*64)/22 > W || ((H.length()-1)*64)/22 > W) {
       return false;
       // FIXME: should never happen
@@ -897,7 +899,7 @@ namespace util {
 
   struct Stats {
     void hit(size_t opt, int cost) {
-      //llvm::errs() << "MATCH " << opt << " " << cost << "\n";
+//       llvm::errs() << "MATCH " << opt << " " << cost << "\n";
       Hits[opt]++;
       Cost[opt] = cost;
     }
