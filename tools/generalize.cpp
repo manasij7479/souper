@@ -827,12 +827,12 @@ std::vector<Inst *> InferPotentialRelations(
       // }
 
       // Mul C
-      // if (C2 && YC!= 0 && XC.urem(YC) == 0) {
-      //   auto Fact = XC.udiv(YC);
-      //   if (Fact != 1 && Fact != 0) {
-      //     Results.push_back(Builder(YI, IC).Mul(Fact).Eq(XI)());
-      //   }
-      // }
+      if (C2 && YC!= 0 && XC.urem(YC) == 0) {
+        auto Fact = XC.udiv(YC);
+        if (Fact != 1 && Fact != 0) {
+          Results.push_back(Builder(YI, IC).Mul(Fact).Eq(XI)());
+        }
+      }
 
       // Add C
       // auto Diff = XC - YC;
@@ -1681,14 +1681,6 @@ AugmentForSymKB(ParsedReplacement Original, InstContext &IC) {
   return {ConstMap, Input};
 }
 
-// // Harvest synthesis sketch from LHS
-// std::function<Inst *(std::vector<Inst *>)> GetSketch(Inst *LHS) {
-//   std::vector<Inst *> Inputs;
-//   findVars(LHS, Inputs);
-
-
-// }
-
 std::vector<std::vector<Inst *>>
 InferSpecialConstExprsWithConcretes(std::vector<Inst *> RHS,
 const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap,
@@ -1743,9 +1735,10 @@ std::vector<Inst *> ExtractSketchesSimple(InstContext &IC, ParsedReplacement Inp
     return Sketches;
   }
 
+  auto BoolOne = IC.getConst(llvm::APInt(1, 1));
   std::vector<Inst *> ConstList = {IC.getConst(llvm::APInt(Inputs[0]->Width, 0)),
                                    IC.getConst(llvm::APInt(Inputs[0]->Width, 1)),
-                                   IC.getConst(llvm::APInt::getAllOnesValue(Inputs[0]->Width))};
+                                   Builder(BoolOne, IC).SExt(Inputs[0]->Width)()};
 
   for (auto &&C : ConstList) {
     auto MapCopy = SymConstMap;
@@ -1793,17 +1786,17 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
 
     std::vector<Inst *> Components;
     for (auto &&C : AtomicComps) {
-      // auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
+      auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
 
       // auto MinusOne = Builder(IC, llvm::APInt(C->Width, 1)).AShr(Builder(IC, C).BitWidth())();
-      auto MinusOne = Builder(IC, llvm::APInt::getAllOnesValue(C->Width))();
+      // auto MinusOne = Builder(IC, llvm::APInt::getAllOnesValue(C->Width))();
       Components.push_back(C);
-      // Components.push_back(Builder(C, IC).BSwap()());
+      Components.push_back(Builder(C, IC).BSwap()());
       Components.push_back(Builder(C, IC).LogB()());
       Components.push_back(Builder(C, IC).Sub(1)());
       Components.push_back(Builder(C, IC).Xor(MinusOne)());
       if (SymbolizeHackersDelight) {
-        // Components.push_back(Builder(IC, MinusOne).Shl(C)());
+        Components.push_back(Builder(IC, MinusOne).Shl(C)());
         Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
 
         if (C->Width != 1 && C->K == Inst::Var) {
@@ -2204,9 +2197,9 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth=*/ 2);
 
   if (!SimpleCandidates.empty()) {
-    if (DebugLevel > 4) {
-      llvm::errs() << "InferSpecialConstExprsAllSym candidates: " << SimpleCandidates[0].size() << " x " << ConstantLimits.size() << "\n";
-    }
+    // if (DebugLevel > 4) {
+    //   llvm::errs() << "InferSpecialConstExprsAllSym candidates: " << SimpleCandidates[0].size() << " x " << ConstantLimits.size() << "\n";
+    // }
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
                                        InstCache, IC, S, SymCS,
                                        true, false, false);
@@ -2281,7 +2274,18 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     // Enumerated Expressions with some relational constraints
     if (ConstMap.size() == 2) {
       // llvm::errs() << "Enum2 : " << EnumeratedCandidatesTwoInsts.back().size()
-                  //  << "\tRels: " << Relations.size() << "\n";
+      //              << "\tRels: " << Relations.size() << "\n";
+      // for (auto I : Relations) {
+      //   ReplacementContext RC;
+      //   RC.printInst(I, llvm::errs(), true);
+      // }
+
+      for (auto I : EnumeratedCandidatesTwoInsts.back()) {
+        ReplacementContext RC;
+        RC.printInst(I, llvm::errs(), true);
+        llvm::errs() << "\n";
+      }
+
       auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidatesTwoInsts,
                                           InstCache, IC, S, SymCS, true, false, false, Relations);
       if (Clone) {
