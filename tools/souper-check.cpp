@@ -497,12 +497,10 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       if (PrettyPrint == "infix") {
         InfixPrinter P(Rep);
         P(llvm::outs());
-      }
-      if (PrettyPrint == "go" || PrettyPrint == "s-expr") {
+      } else if (PrettyPrint == "go" || PrettyPrint == "s-expr") {
         GoPrinter P(Rep);
         P(llvm::outs());
-      }
-      if (PrettyPrint == "pdl") {
+      } else if (PrettyPrint == "pdl") {
         static size_t Counter = 0;
         PDLGenerator P(Rep, "opt" + std::to_string(Counter++));
         P(llvm::outs());

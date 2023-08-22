@@ -1922,6 +1922,13 @@ ParsedReplacement DeAugment(InstContext &IC,
     return Result;
   }
 
+  if (SymDBVar->K == Inst::Const) {
+    Result.Mapping.LHS = Result.Mapping.LHS->Ops[0];
+    Result.Mapping.LHS->DemandedBits = SymDBVar->Val;
+    Result.Mapping.RHS = Result.Mapping.RHS->Ops[0];
+    return Result;
+  }
+
   std::map<Inst *, size_t> LHSCount, RHSCount;
   CountUses(Result.Mapping.LHS, LHSCount);
   for (auto M : Result.PCs) {
@@ -2163,6 +2170,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     if (Clone) {
       return Clone;
     }
+    Refresh("LHS DF Constraints");
   }
 
   Refresh("All LHS Constraints");
@@ -2831,7 +2839,7 @@ int main(int argc, char **argv) {
 
             if (SymbolicDF) {
               // Refresh("PUSH SYMDF_KB_DB");
-              auto [CM, Aug] = AugmentForSymKBDB(Input, IC);
+              auto [CM, Aug] = AugmentForSymKBDB(Result, IC);
 
               // auto [CM2, Aug2] = AugmentForSymKB(Aug1, IC);
               if (!CM.empty()) {
@@ -2840,9 +2848,11 @@ int main(int argc, char **argv) {
                 auto Clone = Verify(Aug, IC, S.get());
                 if (Clone) {
                   Result = ReduceBasic(IC, S.get(), Clone.value());
+                  Result = DeAugment(IC, S.get(), Result);
+                  SymDFChanged = true;
                 } else {
                   auto Generalized = SuccessiveSymbolize(IC, S.get(), Aug, SymDFChanged, CM);
-                  if (Generalized) {
+                  if (Generalized && SymDFChanged) {
                     Result = DeAugment(IC, S.get(), Generalized.value());
                     Changed = true;
                   }
