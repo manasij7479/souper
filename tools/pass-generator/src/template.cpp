@@ -763,6 +763,10 @@ namespace util {
       }
       Bind = B->getInt(Analyzed.Zero);
       return true;
+    } else if (ConstantInt *I = llvm::dyn_cast<ConstantInt>(V)) {
+      Bind = B->getInt(~I->getValue());
+      llvm::errs() << "HERE\n";
+      return true;
     }
 
     return false;
@@ -783,6 +787,9 @@ namespace util {
         return false;
       }
       Bind = B->getInt(Analyzed.One);
+      return true;
+    } else if (ConstantInt *I = llvm::dyn_cast<ConstantInt>(V)) {
+      Bind = B->getInt(I->getValue());
       return true;
     }
 
@@ -808,7 +815,6 @@ namespace util {
   bool symk1test(llvm::Value *Bound, llvm::Value *OtherSymConst) {
     llvm::Constant *BoundC = llvm::dyn_cast<llvm::Constant>(Bound);
     llvm::Constant *OtherC = llvm::dyn_cast<llvm::Constant>(OtherSymConst);
-
     if (!BoundC || !OtherC) {
       return false;
     }
@@ -818,10 +824,9 @@ namespace util {
       return false;
     }
 
-    // llvm::errs() << "SymK1Test: " << llvm::toString(OtherC->getUniqueInteger(), 2, false) << ' '
-    //              << llvm::toString(BoundC->getUniqueInteger(), 2, false) << "\n";
-
-    // llvm::errs() << "Result: " << KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger()) << "\n";
+     llvm::errs() << "SymK1Test: " << llvm::toString(OtherC->getUniqueInteger(), 2, false) << ' '
+                  << llvm::toString(BoundC->getUniqueInteger(), 2, false) << "\n";
+     llvm::errs() << "Result: " << KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger()) << "\n";
 
     return KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger());
   }
