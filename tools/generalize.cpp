@@ -338,6 +338,9 @@ struct ShrinkWrap {
           // Maintain ratio
           // llvm::errs() << "d\n";
           Target = ResultWidth * I->Ops[0]->Width * 1.0 / I->Width;
+          if (ResultWidth == 1 && I->Width != 1) {
+            ResultWidth = 2;
+          }
         }
         // llvm::errs() << "HERE: " << ResultWidth << " " << Target << '\n';
         // llvm::errs() << "Trunc " << I->Width << " " << ResultWidth << " " << Target << '\n';
@@ -2288,11 +2291,11 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       //   RC.printInst(I, llvm::errs(), true);
       // }
 
-      for (auto I : EnumeratedCandidatesTwoInsts.back()) {
-        ReplacementContext RC;
-        RC.printInst(I, llvm::errs(), true);
-        llvm::errs() << "\n";
-      }
+      // for (auto I : EnumeratedCandidatesTwoInsts.back()) {
+      //   ReplacementContext RC;
+      //   RC.printInst(I, llvm::errs(), true);
+      //   llvm::errs() << "\n";
+      // }
 
       auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidatesTwoInsts,
                                           InstCache, IC, S, SymCS, true, false, false, Relations);
@@ -2867,20 +2870,20 @@ int main(int argc, char **argv) {
             std::tie(Result, Indep) = InstantiateWidthChecks(IC, S.get(), Result);
           }
 //          Result.print(llvm::errs(), true);
-          if (!Result.Mapping.LHS && !NoWidth) {
-            Result = Input;
-            if (MaxTries == 1) MaxTries++;
-            NoWidth = true;
-            continue; // Retry with no width checks
-          }
+          // if (!Result.Mapping.LHS && !NoWidth) {
+          //   Result = Input;
+          //   if (MaxTries == 1) MaxTries++;
+          //   NoWidth = true;
+          //   continue; // Retry with no width checks
+          // }
 
-          if (!Indep && Result.Mapping.LHS && !NoWidth) {
-            if (MaxTries == 1) MaxTries++;
-            NoWidth = true;
-            PrintInputAndResult(Input, Result);
-            Result = Input;
-            continue; // Retry with no width checks
-          }
+          // if (!Indep && Result.Mapping.LHS && !NoWidth) {
+          //   if (MaxTries == 1) MaxTries++;
+          //   NoWidth = true;
+          //   PrintInputAndResult(Input, Result);
+          //   Result = Input;
+          //   continue; // Retry with no width checks
+          // }
           // Result = DeAugment(IC, S.get(), Result);
 
           if ((Changed || FirstTime) && Result.Mapping.LHS && Result.Mapping.RHS) {
