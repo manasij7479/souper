@@ -70,7 +70,7 @@ public:
         B && B->getType() && B->getType()->isSized() && B->getType()->isIntegerTy()) {
       return A->getType()->getScalarSizeInBits() == B->getType()->getScalarSizeInBits();
     } else {
-      return false; 
+      return false;
     }
   }
 

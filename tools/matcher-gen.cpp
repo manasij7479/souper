@@ -783,7 +783,11 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
       if (Child->Width > 64) {
         Str = "\"" + Str + "\"";
       }
-      if (OnlyExplicitWidths) {
+      if (Child->Val.isAllOnes()) {
+        Out << "m_AllOnes()";
+      } else if (Child->Val.isNullValue()) {
+        Out << "m_Zero()";
+      } else if (OnlyExplicitWidths) {
         Out << "m_ExtInt(\"" << Str << "\", " << Child->Width << ")";
       } else {
         Out << "m_SpecificInt( " << Child->Width << "," << Str << ")";

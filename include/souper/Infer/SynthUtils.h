@@ -278,7 +278,7 @@ struct InfixPrinter {
     }
 
     if (I->K == Inst::Const) {
-      if (I->Val.ule(16)) {
+      if (I->Val.ule(64)) {
         return llvm::toString(I->Val, 10, false);
       } else {
         return "0x" + llvm::toString(I->Val, 16, false);
