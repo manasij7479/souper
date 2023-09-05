@@ -188,6 +188,16 @@ if ($souper && $souperlib) {
   die "Unpecified SOUPER_MATCHER_LIB."
 }
 
+my $lo = "NONE";
+$lo = getenv("SOUPER_BISECT_LO");
+my $hi = "NONE";
+$hi = getenv("SOUPER_BISECT_HI");
+
+if ($lo && $hi) {
+  push @ARGV, ("-Xclang", "-low=", "$lo");
+  push @ARGV, ("-Xclang", "-high=", "$hi");
+}
+
 # if (getenv("SOUPER_DYNAMIC_PROFILE_ALL")) {
 #     if ($souper) {
 #         push @ARGV, ("-Xclang", "@SOUPER_PASS_PROFILE_ALL@");
