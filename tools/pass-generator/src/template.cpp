@@ -765,7 +765,7 @@ namespace util {
       return true;
     } else if (ConstantInt *I = llvm::dyn_cast<ConstantInt>(V)) {
       Bind = B->getInt(~I->getValue());
-      llvm::errs() << "HERE\n";
+//       llvm::errs() << "HERE\n";
       return true;
     }
 
@@ -824,9 +824,9 @@ namespace util {
       return false;
     }
 
-     llvm::errs() << "SymK1Test: " << llvm::toString(OtherC->getUniqueInteger(), 2, false) << ' '
-                  << llvm::toString(BoundC->getUniqueInteger(), 2, false) << "\n";
-     llvm::errs() << "Result: " << KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger()) << "\n";
+    // llvm::errs() << "SymK1Test: " << llvm::toString(OtherC->getUniqueInteger(), 2, false) << ' '
+    //              << llvm::toString(BoundC->getUniqueInteger(), 2, false) << "\n";
+    // llvm::errs() << "Result: " << KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger()) << "\n";
 
     return KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger());
   }
@@ -894,7 +894,7 @@ namespace util {
 
   bool filter(const std::set<size_t> &F, size_t id) {
     if (Low != -1 && High != -1) {
-      llvm::errs() << Low << " " << id << " " << High << " " << (Low <= id && id < High) << "\n";
+//       llvm::errs() << Low << " " << id << " " << High << " " << (Low <= id && id < High) << "\n";
       return Low <= id && id < High;
     }
     if (F.empty()) return true;
