@@ -1345,9 +1345,13 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
   // Handle width changes
   for (const auto &[I, Val] : ConstMap) {
     if (I == ParentConst) {
-      continue;
+      continue; // avoid no-ops
     }
     if (Target.getBitWidth() == I->Width || !Threshold ) {
+      continue;
+    }
+
+    if (I->Name == "symDF_DB") {
       continue;
     }
 
@@ -1789,6 +1793,10 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
 
     std::vector<Inst *> Components;
     for (auto &&C : AtomicComps) {
+      if (C->Name == "symDF_DB") {
+        continue;
+      }
+
       auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
 
       // auto MinusOne = Builder(IC, llvm::APInt(C->Width, 1)).AShr(Builder(IC, C).BitWidth())();
