@@ -198,6 +198,13 @@ if ($lo && $hi) {
   push @ARGV, ("-Xclang", "-high=", "$hi");
 }
 
+my $pba = "NONE";
+
+$pba = getenv("SOUPER_PRINT_BEFORE_AFTER");
+if ($pba) {
+  push @ARGV, ("-Xclang", "-pba");
+}
+
 # if (getenv("SOUPER_DYNAMIC_PROFILE_ALL")) {
 #     if ($souper) {
 #         push @ARGV, ("-Xclang", "@SOUPER_PASS_PROFILE_ALL@");
