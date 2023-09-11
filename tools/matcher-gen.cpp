@@ -1140,7 +1140,7 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
     Out << ";";
   }
   Out << "\nif (util::check_width(ret, I)) {\n";
-  Out << "  St.hit(" << OptID << ", " << prof  << ");\n";
+  Out << "  St.hit(I, " << OptID << ", " << prof  << ");\n";
   Out << "  return ret;\n";
   Out << "\n}\n}\n}";
 
