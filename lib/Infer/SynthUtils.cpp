@@ -408,13 +408,21 @@ void InfixPrinter::registerSymDBVar() {
 bool InfixPrinter::registerSymDFVars(Inst *I) {
   if (I->K == Inst::KnownOnesP && I->Ops[0]->K == Inst::Var &&
     I->Ops[1]->Name.starts_with("symDF_K")) {
-    Syms[I->Ops[1]] = I->Ops[0]->Name + ".k1";
+    auto CName = I->Ops[0]->Name;
+    if (CName.starts_with("symconst_")) {
+      CName = "C" + CName.substr(9);
+    }
+    Syms[I->Ops[1]] = CName + ".k1";
     // VisitedVars.insert(I->Ops[1]->Name);
     return true;
   }
   if (I->K == Inst::KnownZerosP && I->Ops[0]->K == Inst::Var &&
     I->Ops[1]->Name.starts_with("symDF_K")) {
-    Syms[I->Ops[1]] = I->Ops[0]->Name + ".k0";
+    auto CName = I->Ops[0]->Name;
+    if (CName.starts_with("symconst_")) {
+      CName = "C" + CName.substr(9);
+    }
+    Syms[I->Ops[1]] = CName + ".k0";
     // VisitedVars.insert(I->Ops[1]->Name);
     return true;
   }
