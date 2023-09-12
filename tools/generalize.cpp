@@ -923,14 +923,52 @@ std::vector<Inst *> InferPotentialRelations(
   Results = FilterRelationsByValue(Results, CMap, CEXs);
 
   if (LatticeChecks) {
+    std::vector<Inst *> Inputs;
+    findVars(Input.Mapping.LHS, Inputs);
+
+    std::vector<Inst *> WExprs;
+
+    for (auto X : Inputs) {
+      for (auto Y : Inputs) {
+        if (X == Y || X->Width >= Y->Width) {
+          continue;
+        }
+
+        // (-1 << zext(width(X)))
+        auto MinusOne = llvm::APInt::getAllOnesValue(Y->Width);
+        auto ZExt = Builder(X, IC).BitWidth().ZExt(Y->Width)();
+        auto OnesThenZeros = Builder(IC.getConst(MinusOne), IC).Shl(ZExt);
+        WExprs.push_back(OnesThenZeros());
+        // Flip Above
+        WExprs.push_back(OnesThenZeros.Flip()());
+
+        // (-1 >> zext(width(X)))
+        auto ZerosThenOnes = Builder(IC.getConst(MinusOne), IC).LShr(ZExt);
+        WExprs.push_back(ZerosThenOnes());
+        // Flip Above
+        WExprs.push_back(ZerosThenOnes.Flip()());
+
+      }
+    }
+
     // TODO Less brute force
     for (auto &&[XI, XC] : CMap) {
       for (auto &&[YI, YC] : CMap) {
         if (XI == YI || XC.getBitWidth() != YC.getBitWidth()) {
           continue;
         }
+        // llvm::errs() << "HERE: " << XI->Name << ' ' << YI->Name << ' ' << XC.getLimitedValue() << ' ' <<  YC.getLimitedValue() << '\n';
         Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {XI, YI}));
         Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {XI, YI}));
+      }
+    }
+
+    for (auto &&Expr : WExprs) {
+      for (auto &&[XI, XC] : CMap) {
+        Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {XI, Expr}));
+        Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {XI, Expr}));
+        Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {Expr, XI}));
+        Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {Expr, XI}));
       }
     }
   }
@@ -1765,6 +1803,127 @@ std::vector<Inst *> ExtractSketchesSimple(InstContext &IC, ParsedReplacement Inp
   return Sketches;
 }
 
+// precondition: operands are const, won't check here
+std::optional<llvm::APInt> Fold(Inst *I) {
+  switch (I->K) {
+    case Inst::Add:
+      return I->Ops[0]->Val + I->Ops[1]->Val;
+    case Inst::Sub:
+      return I->Ops[0]->Val - I->Ops[1]->Val;
+    case Inst::Mul:
+      return I->Ops[0]->Val * I->Ops[1]->Val;
+    case Inst::And:
+      return I->Ops[0]->Val & I->Ops[1]->Val;
+    case Inst::Or:
+      return I->Ops[0]->Val | I->Ops[1]->Val;
+    case Inst::Xor:{
+      return I->Ops[0]->Val ^ I->Ops[1]->Val;}
+    case Inst::Trunc:
+      return I->Ops[0]->Val.trunc(I->Width);
+    case Inst::SExt:
+     if (I->Ops[0]->Val == 0)
+       return I->Ops[0]->Val.sext(I->Width);
+     else
+       return std::nullopt;
+    case Inst::ZExt:
+      if (I->Ops[0]->Val == 0)
+       return I->Ops[0]->Val.zext(I->Width);
+     else
+       return std::nullopt;
+    default: return std::nullopt;
+  }
+}
+
+bool OpsConstP(Inst *I) {
+  for (auto &&Op : I->Ops) {
+    if (Op->K != Inst::Const) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LHSZ(Inst *I) {
+  return I->Ops.size() ==2 && I->Ops[0]->K == Inst::Const && I->Ops[0]->Val == 0;
+}
+bool RHSZ(Inst *I) {
+  return I->Ops.size() ==2 && I->Ops[1]->K == Inst::Const && I->Ops[1]->Val == 0;
+}
+bool LHSM1(Inst *I) {
+  return I->Ops.size() ==2 && I->Ops[0]->K == Inst::Const && I->Ops[0]->Val.isAllOnes();
+}
+bool RHSM1(Inst *I) {
+  return I->Ops.size() ==2 && I->Ops[1]->K == Inst::Const && I->Ops[1]->Val.isAllOnes();
+}
+
+Inst *ConstantFoldingLiteImpl(InstContext &IC, Inst *I, std::set<Inst *> &Visited) {
+  if (I->Ops.empty()) {
+    return I;
+  }
+  if (Visited.find(I) != Visited.end()) {
+    return I;
+  } else {
+    Visited.insert(I);
+  }
+
+  std::vector<Inst *> FoldedOps;
+  for (auto Op : I->Ops) {
+    FoldedOps.push_back(ConstantFoldingLiteImpl(IC, Op, Visited));
+  }
+  I->Ops = FoldedOps;
+
+  if (OpsConstP(I)) {
+    if (auto C = Fold(I)) {
+      return IC.getConst(C.value());
+    }
+  }
+
+  if (LHSZ(I)) {
+    if (I->K == Inst::Add || I->K == Inst::Sub ||
+        I->K == Inst::Xor || I->K == Inst::Or) {
+      return I->Ops[1];
+    }
+    if (I->K == Inst::Mul || I->K == Inst::And) {
+      return IC.getConst(llvm::APInt(I->Width, 0));
+    }
+  }
+
+  if (RHSZ(I)) {
+    if (I->K == Inst::Add || I->K == Inst::Sub ||
+        I->K == Inst::Xor || I->K == Inst::Or) {
+      return I->Ops[0];
+    }
+    if (I->K == Inst::Mul || I->K == Inst::And) {
+      return IC.getConst(llvm::APInt(I->Width, 0));
+    }
+  }
+
+  if (LHSM1(I)) {
+    if (I->K == Inst::Mul || I->K == Inst::And) {
+      return I->Ops[1];
+    }
+    if (I->K == Inst::Or) {
+      return I->Ops[0];
+    }
+  }
+
+  if (RHSM1(I)) {
+    if (I->K == Inst::Mul || I->K == Inst::And) {
+      return I->Ops[0];
+    }
+    if (I->K == Inst::Or) {
+      return I->Ops[1];
+    }
+  }
+
+  return I;
+}
+
+Inst *ConstantFoldingLite(InstContext &IC, Inst *I) {
+  std::set<Inst *> Visited;
+  return ConstantFoldingLiteImpl(IC, I, Visited);
+}
+
 std::vector<std::vector<Inst *>> InferSketchExprs(std::vector<Inst *> RHS,
                                                   ParsedReplacement Input,
                                                   InstContext &IC,
@@ -1774,6 +1933,9 @@ std::vector<std::vector<Inst *>> InferSketchExprs(std::vector<Inst *> RHS,
   bool HasResults = false;
   for (auto Target : RHS) {
     auto Cands = ExtractSketchesSimple(IC, Input, SymConstMap, Target->Width);
+    for (auto &C : Cands) {
+      C = ConstantFoldingLite(IC, C);
+    }
     Results.push_back(FilterExprsByValue(Cands, Target->Val, ConstMap));
     if (!Results.back().empty()) {
       HasResults = true;
@@ -2109,7 +2271,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         ValsMap.push_back({TargetConstMap[C1], SymCS[TargetConstMap[C1]]});
         ValsMap.push_back({TargetConstMap[C2], SymCS[TargetConstMap[C2]]});
 
-        auto Relations = InferPotentialRelations(ValsMap, IC, Rep, {}, false);
+        auto Relations = InferPotentialRelations(ValsMap, IC, Rep, {}, Nested);
 
         // for (auto R : Relations) {
         //   ReplacementContext RC;
@@ -2126,19 +2288,27 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       }
     }
   }
-
   Refresh("Symbolize common consts, two at a time");
 
   // Step 1.5 : Direct symbolize, simple rel constraints on LHS
 
+  std::vector<std::pair<Inst *, llvm::APInt>> ConstMapCurrent;
+
   for (auto &&C : LHSConsts) {
-    ConstMap.push_back({SymConstMap[C], C->Val});
+    ConstMapCurrent.push_back({SymConstMap[C], C->Val});
   }
+
+  for (auto &&P : ConstMap) {
+    ConstMapCurrent.push_back(P);
+  }
+  ConstMap = ConstMapCurrent;
+
   auto CounterExamples = GetMultipleCEX(Result, IC, S, 3);
   if (Nested) {
     CounterExamples = {};
     // FIXME : Figure out how to get CEX for symbolic dataflow
   }
+
   auto Relations = InferPotentialRelations(ConstMap, IC, Input, CounterExamples, Nested);
 
   std::map<Inst *, Inst *> JustLHSSymConstMap;
@@ -2314,28 +2484,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Enumerated 2 insts exprs with relations");
 
-  std::vector<std::vector<Inst *>> SketchyCandidates =
-    InferSketchExprs(RHSFresh, Input, IC, SymConstMap, ConstMap);
-
-  if (!SketchyCandidates.empty()) {
-    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
-                                       InstCache, IC, S, SymCS,
-                                       true, false, false);
-    if (Clone) {
-      return Clone;
-    }
-  }
-  Refresh("Sketches, no constraints");
-
-  if (!SketchyCandidates.empty()) {
-    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
-                                        InstCache, IC, S, SymCS, true, false, false, Relations);
-    if (Clone) {
-      return Clone;
-    }
-    Refresh("Sketchy cands with relations");
-  }
-
   // Step 4.8 : Special RHS constant exprs, with constants
 
   std::vector<std::vector<Inst *>> SimpleCandidatesWithConsts =
@@ -2416,6 +2564,28 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   //   }
   // }
 
+  std::vector<std::vector<Inst *>> SketchyCandidates =
+    InferSketchExprs(RHSFresh, Input, IC, SymConstMap, ConstMap);
+
+  if (!SketchyCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
+                                       InstCache, IC, S, SymCS,
+                                       true, false, false);
+    if (Clone) {
+      return Clone;
+    }
+  }
+  Refresh("Sketches, no constraints");
+
+  if (!SketchyCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
+                                        InstCache, IC, S, SymCS, true, false, false, Relations);
+    if (Clone) {
+      return Clone;
+    }
+    Refresh("Sketchy cands with relations");
+  }
+
   if (!EnumeratedCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
                                         InstCache, IC, S, SymCS, true, true, false, ConstantLimits);
@@ -2442,6 +2612,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
 
   }
+
 
   {
     auto Copy = Replace(Input, IC, JustLHSSymConstMap);
@@ -2849,8 +3020,12 @@ int main(int argc, char **argv) {
             // }
 
             if (SymbolicDF) {
-              // Refresh("PUSH SYMDF_KB_DB");
+              if (DebugLevel > 4) llvm::errs() << "PUSH SYMDF_KB_DB\n";
               auto [CM, Aug] = AugmentForSymKBDB(Result, IC);
+
+              if (DebugLevel > 4) {
+                Aug.print(llvm::errs(), true);
+              }
 
               // auto [CM2, Aug2] = AugmentForSymKB(Aug1, IC);
               if (!CM.empty()) {
@@ -2861,15 +3036,17 @@ int main(int argc, char **argv) {
                   Result = ReduceBasic(IC, S.get(), Clone.value());
                   Result = DeAugment(IC, S.get(), Result);
                   SymDFChanged = true;
+                  if (DebugLevel > 4) llvm::errs() << "MSG Unconstrained SYMDF\n";
                 } else {
                   auto Generalized = SuccessiveSymbolize(IC, S.get(), Aug, SymDFChanged, CM);
                   if (Generalized && SymDFChanged) {
                     Result = DeAugment(IC, S.get(), Generalized.value());
                     Changed = true;
+                    if (DebugLevel > 4) llvm::errs() << "MSG Synth SYMDF\n";
                   }
                 }
               }
-              // Refresh("POP SYMDF_KB_DB");
+              if (DebugLevel > 4) llvm::errs() << "POP SYMDF_KB_DB\n";
             }
 
           }
