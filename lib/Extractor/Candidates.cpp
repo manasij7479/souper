@@ -58,7 +58,7 @@ static llvm::cl::opt<bool> HarvestUses(
 static llvm::cl::opt<bool> MarkExternalUses(
     "souper-mark-external-uses",
     llvm::cl::desc("Mark external uses in harvesting (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
 static llvm::cl::opt<bool> PrintNegAtReturn(
     "print-neg-at-return",
     llvm::cl::desc("Print negative dfa in each value returned from a function (default=false)"),
