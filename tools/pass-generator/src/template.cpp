@@ -1110,6 +1110,9 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
   }
   void replace(Instruction *I, Value *V, IRBuilder &Builder) {
     W->pushUsersToWorkList(*I);
+    if (I->hasOneUse()) {
+      llvm::errs() << "HEEYYYY\n";
+    }
     I->replaceAllUsesWith(V);
   }
   bool runThroughWorklist(IRBuilder &Builder) {
