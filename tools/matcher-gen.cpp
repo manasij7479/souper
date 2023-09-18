@@ -692,8 +692,6 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
   }
 
   if (I->K == Inst::Phi) {
-    llvm::errs() << "\nFIXME Enable PHIs\n";
-    return false;
     for (int i = 0; i < I->Ops.size(); ++i) {
       for (int j = 0; j < I->Ops.size(); ++j) {
         if (i != j && I->Ops[i] == I->Ops[j]) {
@@ -1005,7 +1003,7 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
 
   int prof = profit(Input);
   size_t LHSSize = souper::instCount(Input.Mapping.LHS);
-  if (prof <= 0 || LHSSize > 15) {
+  if (prof <= 1 || LHSSize > 5) {
     llvm::errs() << "Skipping replacement profit < 0 or LHS size > 15\n";
     return false;
   }
