@@ -8,6 +8,8 @@ if(NOT CMAKE_BUILD_TYPE)
       "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
 endif()
 
+find_package(zstd)
+
 if (NOT LLVM_BUILD_TYPE)
   set(LLVM_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 endif()
@@ -51,6 +53,7 @@ execute_process(
 )
 
 set(PASS_LDFLAGS "${LLVM_LDFLAGS}")
+set(LLVM_LDFLAGS "${LLVM_LDFLAGS} -L /usr/local/lib")
 
 execute_process(
   COMMAND ${LLVM_CONFIG_EXECUTABLE} --bindir
