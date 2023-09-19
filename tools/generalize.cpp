@@ -979,9 +979,15 @@ std::vector<Inst *> InferPotentialRelations(
 #undef C2
 #undef C3
 
-std::set<Inst *> findConcreteConsts(Inst *I) {
+struct Cmp {
+  bool operator() (Inst *A, Inst *B) const {
+    return B->Val.ult(A->Val);
+  }
+};
+
+std::set<Inst *, Cmp> findConcreteConsts(Inst *I) {
   std::vector<Inst *> Results;
-  std::set<Inst *> Ret;
+  std::set<Inst *, Cmp> Ret;
   auto Pred = [](Inst *I) {return I->K == Inst::Const;};
   findInsts(I, Results, Pred);
   for (auto R : Results) {
@@ -1966,7 +1972,12 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       Components.push_back(C);
       Components.push_back(Builder(C, IC).BSwap()());
       Components.push_back(Builder(C, IC).LogB()());
-      Components.push_back(Builder(C, IC).Sub(1)());
+
+      if (C->Width != 1) {
+        Components.push_back(Builder(C, IC).Sub(1)());
+        Components.push_back(Builder(C, IC).Add(1)());
+      }
+
       Components.push_back(Builder(C, IC).Xor(MinusOne)());
       if (SymbolizeHackersDelight) {
         Components.push_back(Builder(IC, MinusOne).Shl(C)());
@@ -2228,10 +2239,26 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Direct Symbolize for common consts");
 
+  std::vector<std::vector<Inst *>> SimpleCandidates =
+    InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth=*/ 2);
+
+  if (!SimpleCandidates.empty()) {
+    // if (DebugLevel > 4) {
+    //   llvm::errs() << "InferSpecialConstExprsAllSym candidates: " << SimpleCandidates[0].size() << " x " << ConstantLimits.size() << "\n";
+    // }
+    auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
+                                       InstCache, IC, S, SymCS,
+                                       true, false, false);
+    if (Clone) {
+      return Clone;
+    }
+  }
+  Refresh("Special expressions, no constants");
+
   for (auto C : LHSConsts) {
+
     std::map<Inst *, Inst *> TargetConstMap;
     TargetConstMap[C] = SymConstMap[C];
-
     auto Rep = Replace(Input, IC, TargetConstMap);
 
     auto Clone = Verify(Rep, IC, S);
@@ -2243,8 +2270,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
       return changed ? Gen : Clone;
     }
-
-    //
   }
   Refresh("Symbolize common consts, one by one");
 
@@ -2381,22 +2406,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
     Refresh("Unitary cands, rel constraints");
   }
-
-  std::vector<std::vector<Inst *>> SimpleCandidates =
-    InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth=*/ 2);
-
-  if (!SimpleCandidates.empty()) {
-    // if (DebugLevel > 4) {
-    //   llvm::errs() << "InferSpecialConstExprsAllSym candidates: " << SimpleCandidates[0].size() << " x " << ConstantLimits.size() << "\n";
-    // }
-    auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                       InstCache, IC, S, SymCS,
-                                       true, false, false);
-    if (Clone) {
-      return Clone;
-    }
-  }
-  Refresh("Special expressions, no constants");
 
   // Step 4 : Enumerated expressions
 
@@ -3023,9 +3032,9 @@ int main(int argc, char **argv) {
               if (DebugLevel > 4) llvm::errs() << "PUSH SYMDF_KB_DB\n";
               auto [CM, Aug] = AugmentForSymKBDB(Result, IC);
 
-              if (DebugLevel > 4) {
-                Aug.print(llvm::errs(), true);
-              }
+              // if (DebugLevel > 4) {
+              //   Aug.print(llvm::errs(), true);
+              // }
 
               // auto [CM2, Aug2] = AugmentForSymKB(Aug1, IC);
               if (!CM.empty()) {
