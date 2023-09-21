@@ -858,10 +858,11 @@ std::vector<Inst *> InferPotentialRelations(
 
       auto GENComps = [&] (Inst *A, llvm::APInt AVal, Inst *B, llvm::APInt BVal) {
         if (AVal.ne(BVal)) Results.push_back(Builder(A, IC).Ne(B)());
-        if (AVal.sle(BVal)) Results.push_back(Builder(A, IC).Sle(B)());
-        if (AVal.ule(BVal)) Results.push_back(Builder(A, IC).Ule(B)());
-        if (AVal.slt(BVal)) Results.push_back(Builder(A, IC).Slt(B)());
-        if (AVal.ult(BVal)) Results.push_back(Builder(A, IC).Ult(B)());
+        // For width == 1, there is exactly one model, hence it isn't a generalization
+        if (AVal.sle(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Sle(B)());
+        if (AVal.ule(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Ule(B)());
+        if (AVal.slt(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Slt(B)());
+        if (AVal.ult(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Ult(B)());
       };
 
       GENComps(XI, XC, YI, YC);
