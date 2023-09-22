@@ -390,7 +390,6 @@ inline bind_apint m_APInt(APInt &V) { return bind_apint(V); }
 
 template <typename LHS, typename RHS>
 struct specific_icmp_matcher {
-  CmpClass_match<LHS, RHS, ICmpInst, ICmpInst::Predicate, true> M;
   ICmpInst::Predicate P;
   LHS L;
   RHS R;
