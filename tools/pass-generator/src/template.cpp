@@ -412,15 +412,15 @@ struct specific_icmp_matcher {
 
 
 #define ICMP_MAT(Souper, LLVM) template <typename LHS, typename RHS>  \
-specific_icmp_matcher<LHS, RHS> m_Souper(const LHS &L, const RHS &R) {\
-  return specific_icmp_matcher<LHS, RHS>(ICmpInst::LLVM, L, R);}
+specific_icmp_matcher<LHS, RHS> m_##Souper(const LHS &L, const RHS &R) {\
+  return specific_icmp_matcher<LHS, RHS>(ICmpInst::ICMP_##LLVM, L, R);}
 
-ICMP_MAT(Eq, ICMP_EQ)
-ICMP_MAT(Ne, ICMP_NE)
-ICMP_MAT(Ule, ICMP_ULE)
-ICMP_MAT(Ult, ICMP_ULT)
-ICMP_MAT(Sle, ICMP_SLE)
-ICMP_MAT(Slt, ICMP_SLT)
+ICMP_MAT(Eq, EQ)
+ICMP_MAT(Ne, NE)
+ICMP_MAT(Ule, ULE)
+ICMP_MAT(Ult, ULT)
+ICMP_MAT(Sle, SLE)
+ICMP_MAT(Slt, SLT)
 
 template <typename Op_t, unsigned Opcode> struct CastClass_match_width {
   size_t Width;
