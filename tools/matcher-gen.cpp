@@ -91,12 +91,12 @@ static const std::map<Inst::Kind, std::string> MatchOps = {
 
   {Inst::Freeze, "m_Freeze("},
 
-  {Inst::Eq, "m_c_ICmp("},
-  {Inst::Ne, "m_c_ICmp("},
-  {Inst::Ule, "m_ICmp("},
-  {Inst::Ult, "m_ICmp("},
-  {Inst::Sle, "m_ICmp("},
-  {Inst::Slt, "m_ICmp("},
+  {Inst::Eq, "m_Eq("},
+  {Inst::Ne, "m_Ne("},
+  {Inst::Ule, "m_Ule("},
+  {Inst::Ult, "m_Ult("},
+  {Inst::Sle, "m_Sle("},
+  {Inst::Slt, "m_Slt("},
 
   {Inst::SExt, "m_SExt("},
   {Inst::ZExt, "m_ZExt("},
@@ -139,15 +139,6 @@ static const std::map<Inst::Kind, std::string> CreateOps = {
   {Inst::Const, "dummy"},
 };
 
-static const std::map<Inst::Kind, std::string> PredNames = {
-  {Inst::Eq, "ICmpInst::ICMP_EQ"},
-  {Inst::Ne, "ICmpInst::ICMP_NE"},
-  {Inst::Ule, "ICmpInst::ICMP_ULE"},
-  {Inst::Ult, "ICmpInst::ICMP_ULT"},
-  {Inst::Sle, "ICmpInst::ICMP_SLE"},
-  {Inst::Slt, "ICmpInst::ICMP_SLT"},
-};
-
 struct Constraint {
   virtual std::string print() = 0;
 };
@@ -158,15 +149,6 @@ struct VarEq : public Constraint {
   std::string RHS;
   std::string print() override {
     return LHS + " == " + RHS;
-  }
-};
-
-struct PredEq : public Constraint {
-  PredEq(std::string P_, std::string K_) : P(P_), K(K_) {}
-  std::string P;
-  std::string K;
-  std::string print() override {
-    return P + " == " + K;
   }
 };
 
@@ -294,47 +276,16 @@ struct SymbolTable {
   std::map<Inst *, std::string> T;
   std::deque<Constraint *> Constraints;
 
-  std::map<Inst *, std::string> Preds;
   std::vector<Inst *> Vars;
   std::set<Inst *> ConstRefs;
 
   std::set<Inst *> Used;
-
-  void RegisterPred(Inst *I) {
-    if (PredNames.find(I->K) == PredNames.end()) {
-      return; // not a predicate
-    }
-    if (Preds.find(I) != Preds.end()) {
-      return; // already registered
-    }
-    auto Name = "P" + std::to_string(Preds.size());
-    Preds[I] = Name;
-    Constraints.push_back(new PredEq(Name, PredNames.at(I->K)));
-  }
 
   bool exists(Inst *I) {
     if (T.find(I) == T.end()) {
       return false;
     }
     return !T.at(I).empty();
-  }
-
-  template<typename Stream>
-  void PrintPreds(Stream &Out) {
-    if (Preds.empty()) {
-      return;
-    }
-    Out << "ICmpInst::Predicate ";
-    bool first = true;
-    for (auto &&P : Preds) {
-      if (first) {
-        first = false;
-      } else {
-        Out << ", ";
-      }
-      Out << P.second;
-    }
-    Out << ";\n";
   }
 
   // TODO: This needs a bit more work
@@ -763,10 +714,6 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
     }
   }
 
-  if (PredNames.find(I->K) != PredNames.end()) {
-    Out << Syms.Preds[I] << ", ";
-  }
-
   bool first = true;
   for (auto Child : I->Ops) {
     if (first) {
@@ -950,7 +897,6 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
     auto I = Stack.back();
     Stack.pop_back();
     Visited.insert(I);
-    Syms.RegisterPred(I);
     for (int i = 0; i < I->Ops.size(); ++i) {
       if (Visited.find(I->Ops[i]) == Visited.end()) {
         Stack.push_back(I->Ops[i]);
@@ -1049,7 +995,6 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
 //    Syms.T[P.first].push_back(Name);
 //  }
   // Syms.T[Root].push_back("I");
-  Syms.PrintPreds(Out);
   return true;
 }
 

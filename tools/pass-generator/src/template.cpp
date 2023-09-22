@@ -388,8 +388,39 @@ inline constant_matcher m_Constant(Value **V) {
 // Tested, matches APInts
 inline bind_apint m_APInt(APInt &V) { return bind_apint(V); }
 
-// TODO: Match (arbitrarily) constrained APInts
+template <typename LHS, typename RHS>
+struct specific_icmp_matcher {
+  CmpClass_match<LHS, RHS, ICmpInst, ICmpInst::Predicate, true> M;
+  ICmpInst::Predicate P;
+  LHS L;
+  RHS R;
+  specific_icmp_matcher(ICmpInst::Predicate P_, const LHS &L_, const RHS &R_) :
+    P(P_), L(L_), R(R_) {}
 
+  template <typename OpTy> bool match(OpTy *V) {
+    if (auto *I = dyn_cast<ICmpInst>(V)) {
+      if (P == I->getPredicate() && L.match(I->getOperand(0)) && R.match(I->getOperand(1))) {
+        return true;
+      } else if (P == I->getSwappedPredicate() && L.match(I->getOperand(1)) &&
+                 R.match(I->getOperand(0))) {
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+
+#define ICMP_MAT(Souper, LLVM) template <typename LHS, typename RHS>  \
+specific_icmp_matcher<LHS, RHS> m_Souper(const LHS &L, const RHS &R) {\
+  return specific_icmp_matcher<LHS, RHS>(ICmpInst::LLVM, L, R);}
+
+ICMP_MAT(Eq, ICMP_EQ)
+ICMP_MAT(Ne, ICMP_NE)
+ICMP_MAT(Ule, ICMP_ULE)
+ICMP_MAT(Ult, ICMP_ULT)
+ICMP_MAT(Sle, ICMP_SLE)
+ICMP_MAT(Slt, ICMP_SLT)
 
 template <typename Op_t, unsigned Opcode> struct CastClass_match_width {
   size_t Width;
