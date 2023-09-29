@@ -66,7 +66,8 @@ public:
 
   Builder Flip() {
     auto L = I;
-    auto AllOnes = IC.getConst(llvm::APInt::getAllOnesValue(L->Width));
+    // auto AllOnes = IC.getConst(llvm::APInt::getAllOnesValue(L->Width));
+    auto AllOnes = Builder(IC, llvm::APInt(1, 1)).SExt(L->Width)();
     return Builder(IC.getInst(Inst::Xor, L->Width, {L, AllOnes}), IC);
   }
   Builder Negate() {
