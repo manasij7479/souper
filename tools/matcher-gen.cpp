@@ -1003,7 +1003,7 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
 
   int prof = profit(Input);
   size_t LHSSize = souper::instCount(Input.Mapping.LHS);
-  if (prof < 1 || LHSSize > 15) {
+  if (prof < 0 || LHSSize > 15) {
     llvm::errs() << "Skipping replacement profit < 0 or LHS size > 15\n";
     return false;
   }
