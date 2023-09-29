@@ -54,10 +54,6 @@ static llvm::cl::opt<bool> SymbolizeConstSynthesis("symbolize-constant-synthesis
     llvm::cl::desc("Allow concrete constants in the generated code."),
     llvm::cl::init(false));
 
-static llvm::cl::opt<bool> SymbolizeHackersDelight("symbolize-bit-hacks",
-    llvm::cl::desc("Include bit hacks in the components."),
-    llvm::cl::init(true));
-
 static llvm::cl::opt<bool> FixIt("fixit",
     llvm::cl::desc("Given an invalid optimization, generate a valid one."
                    "(default=false)"),
@@ -83,9 +79,8 @@ static cl::opt<bool> NoWidth("no-width",
     cl::desc("No width independence checks."),
     cl::init(false));
 
-
-static cl::opt<bool> Advanced("advanced",
-    cl::desc("Just run more advanced stuff. Assume -basic."),
+static cl::opt<bool> IgnoreCost("generalize-ignore-cost",
+    cl::desc("Ignore cost, generalize patterns that are not cheaper."),
     cl::init(false));
 
 static cl::opt<bool> SymbolicDF("symbolic-df",
@@ -1954,6 +1949,8 @@ std::vector<std::vector<Inst *>> InferSketchExprs(std::vector<Inst *> RHS,
   return Results;
 }
 
+
+
 std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
                                            std::set<Inst *> AtomicComps, InstContext &IC,
                                            const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap,
@@ -1980,19 +1977,31 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       }
 
       Components.push_back(Builder(C, IC).Xor(MinusOne)());
-      if (SymbolizeHackersDelight) {
-        Components.push_back(Builder(IC, MinusOne).Shl(C)());
-        Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
 
-        if (C->Width != 1 && C->K == Inst::Var) {
-          Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
-          Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
-          auto CModWidth = Builder(IC, C).URem(Builder(IC, C).BitWidth());
-          Components.push_back(CModWidth());
-          Components.push_back(Builder(IC, C).BitWidth().Sub(CModWidth)());
-        }
+      Components.push_back(Builder(IC, MinusOne).Shl(C)());
+      Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
+
+      if (C->Width != 1 && C->K == Inst::Var) {
+        Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
+        Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
+        auto CModWidth = Builder(IC, C).URem(Builder(IC, C).BitWidth());
+        Components.push_back(CModWidth());
+        Components.push_back(Builder(IC, C).BitWidth().Sub(CModWidth)());
+      }
 
         // TODO: Add a few more, we can afford to run generalization longer
+    }
+
+    std::set<size_t> VisitedWidths{1};
+    for (auto &&C : AtomicComps) {
+      if (VisitedWidths.find(C->Width) == VisitedWidths.end()) {
+        VisitedWidths.insert(C->Width);
+        auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
+        Components.push_back(MinusOne);
+        Components.push_back(Builder(IC, MinusOne).LShr(1)());
+        Components.push_back(Builder(IC, MinusOne).Shl(1)());
+        // Components.push_back(Builder(IC, MinusOne).Add(1)()); // zero
+        Components.push_back(Builder(IC, MinusOne).Sub(1)());
       }
     }
 
@@ -2753,11 +2762,17 @@ bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
   return false;
 }
 
-ParsedReplacement ReplaceMinusOne(InstContext &IC, ParsedReplacement Input) {
+ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement Input) {
   std::map<Inst *, Inst *> Map;
   for (size_t i = 2; i <= 64; ++i) {
     Map[IC.getConst(llvm::APInt::getAllOnesValue(i))] =
       Builder(IC, llvm::APInt(1, 1)).SExt(i)();
+    Map[IC.getConst(llvm::APInt::getAllOnesValue(i) - 1)] =
+      Builder(IC, llvm::APInt(1, 1)).SExt(i).Sub(1)();
+    Map[IC.getConst(llvm::APInt::getSignedMaxValue(i))] =
+      Builder(IC, llvm::APInt(1, 1)).SExt(i).LShr(1)();
+    Map[IC.getConst(llvm::APInt::getSignedMinValue(i))] =
+      Builder(IC, llvm::APInt(1, 1)).SExt(i).LShr(1).Flip()();
   }
   return Replace(Input, IC, Map);
 }
@@ -2766,11 +2781,20 @@ std::pair<ParsedReplacement, bool>
 InstantiateWidthChecks(InstContext &IC,
   Solver *S, ParsedReplacement Input) {
 
+  // llvm::errs() << "A\n";
+  // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
+
+  Input = ReplaceMinusOneAndFamily(IC, Input);
+
+  // llvm::errs() << "B\n";
+  // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
+
   if (IsStaticallyWidthIndependent(Input)) {
     return {Input, true};
   }
 
-  Input = ReplaceMinusOne(IC, Input);
+  // llvm::errs() << "C\n";
+  // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
 
   if (!NoWidth && !hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
     // Instantiate Alive driver with Symbolic width.
@@ -2989,7 +3013,7 @@ int main(int argc, char **argv) {
     if (Input.Mapping.LHS == Input.Mapping.RHS) {
       if (DebugLevel > 4) llvm::errs() << "Input == Output\n";
       continue;
-    } else if (profit(Input) < 0) {
+    } else if (profit(Input) < 0 && !IgnoreCost) {
       if (DebugLevel > 4) llvm::errs() << "Not an optimization\n";
       continue;
     } else if (!Verify(Input, IC, S.get())) {
