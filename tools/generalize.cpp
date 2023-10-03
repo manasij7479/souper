@@ -524,13 +524,13 @@ std::vector<Inst *> FilterExprsByValue(const std::vector<Inst *> &Exprs,
   ConcreteInterpreter CPos(ValueCache);
   for (auto &&E : Exprs) {
     auto Result = CPos.evaluateInst(E);
-    if (!Result.hasValue()) {
-      // Don't want to drop a candidate just because we couldn't evaluate it
-      FilteredExprs.push_back(E);
-    } else {
+    if (Result.hasValue()) {
+      // llvm::errs() << Result.getValue() << "\t" <<  TargetVal << "\n";
       if (Result.getValue() == TargetVal) {
         FilteredExprs.push_back(E);
       }
+    } else if (Result.K == EvalValue::ValueKind::Unimplemented) {
+      FilteredExprs.push_back(E);
     }
   }
   return FilteredExprs;
@@ -795,34 +795,37 @@ std::vector<Inst *> InferPotentialRelations(
       }
 
 
-      // if (C2 && XC == YC) {
-      //   Results.push_back(Builder(XI, IC).Eq(YI)());
-      // }
+      if (C2 && XC == YC) {
+        Results.push_back(Builder(XI, IC).Eq(YI)());
+      }
 
-      // if ((XC & YC) == XC) {
-      //   Results.push_back(Builder(XI, IC).And(YI).Eq(XI)());
+      if ((XC & YC) == XC) {
+        Results.push_back(Builder(XI, IC).And(YI).Eq(XI)());
 
-      // }
+      }
 
-      // if ((XC & YC) == YC) {
-      //   auto W = XI->Width;
-      //   Results.push_back(IC.getInst(Inst::KnownOnesP, W, {XI, YI}));
-      // }
+      if ((XC | YC) == XC) {
+        Results.push_back(Builder(XI, IC).Or(YI).Eq(XI)());
+      }
+      if ((XC | YC) == YC) {
+        Results.push_back(Builder(XI, IC).Or(YI).Eq(YI)());
+      }
 
-      // TODO guard
-      // Results.back()->Print();
+      if (XC == (XC.lshr(YC).shl(YC))) {
+        Results.push_back(Builder(XI, IC).LShr(YI).Shl(YI).Eq(XI)());
+      }
 
-      // Results.push_back(IC.getInst(Inst::KnownZerosP, W, {XI, YI}));
+      if (XC == (XC.ashr(YC).shl(YC))) {
+        Results.push_back(Builder(XI, IC).AShr(YI).Shl(YI).Eq(XI)());
+      }
 
-      // todo knownzerosp
+      if (XC == (XC.shl(YC).lshr(YC))) {
+        Results.push_back(Builder(XI, IC).Shl(YI).LShr(YI).Eq(XI)());
+      }
 
-      // if ((XC | YC) == XC) {
-      //   Results.push_back(Builder(XI, IC).Or(YI).Eq(XI)());
-      // }
-
-      // if ((XC | YC) == YC) {
-      //   Results.push_back(Builder(XI, IC).Or(YI).Eq(YI)());
-      // }
+      if (XC == (XC.shl(YC).ashr(YC))) {
+        Results.push_back(Builder(XI, IC).Shl(YI).AShr(YI).Eq(XI)());
+      }
 
       // Mul C
       if (C2 && YC!= 0 && XC.urem(YC) == 0) {
@@ -1992,9 +1995,12 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       Components.push_back(Builder(C, IC).BSwap()());
       Components.push_back(Builder(C, IC).LogB()());
 
-      if (C->Width != 1) {
+      if (C->Width != 1 && NumInsts < 2) {
         Components.push_back(Builder(C, IC).Sub(1)());
         Components.push_back(Builder(C, IC).Add(1)());
+
+        auto TwoC = Builder(C, IC).Add(C);
+        Components.push_back(TwoC.Flip()());
       }
 
       Components.push_back(Builder(C, IC).Xor(MinusOne)());
@@ -2030,7 +2036,7 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       if (VisitedWidths.find(C->Width) == VisitedWidths.end()) {
         VisitedWidths.insert(C->Width);
         auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
-        Components.push_back(MinusOne);
+        // Components.push_back(MinusOne);
         Components.push_back(Builder(IC, MinusOne).LShr(1)());
         Components.push_back(Builder(IC, MinusOne).Shl(1)());
         // Components.push_back(Builder(IC, MinusOne).Add(1)()); // zero
@@ -2040,6 +2046,11 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
 
     for (auto &&Target : RHSConsts) {
       std::vector<Inst *> CandsForTarget;
+      for (auto Comp : Components) {
+        if (Comp->Width == Target->Width) {
+          CandsForTarget.push_back(Comp);
+        }
+      }
       EnumerativeSynthesis ES;
       auto Guesses = ES.generateExprs(IC, NumInsts, Components,
                                       Target->Width);
@@ -2054,7 +2065,7 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
           CandsForTarget.push_back(Guess);
         }
       }
-      // Filter by value
+      // llvm::errs() << "HERE:\t" << Target->Val << "\n";
       Candidates.push_back(FilterExprsByValue(CandsForTarget, Target->Val, ConstMap));
       // Candidates.push_back(CandsForTarget);
     }
@@ -2249,8 +2260,13 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   for (auto C : RHSConsts) {
     if (LHSConsts.find(C) == LHSConsts.end()) {
       RHSFresh.push_back(C);
+    } else {
+      if (C != *LHSConsts.find(C)) {
+        RHSFresh.push_back(C);
+      }
     }
   }
+
 
   Refresh("Prelude");
   // Step 1 : Just direct symbolize for common consts, no constraints
@@ -2282,12 +2298,25 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Direct Symbolize for common consts");
 
+  std::vector<std::pair<Inst *, llvm::APInt>> ConstMapCurrent;
+
+  for (auto &&C : LHSConsts) {
+    ConstMapCurrent.push_back({SymConstMap[C], C->Val});
+  }
+
+  for (auto &&P : ConstMap) {
+    ConstMapCurrent.push_back(P);
+  }
+  ConstMap = ConstMapCurrent;
+
   std::vector<std::vector<Inst *>> SimpleCandidates =
     InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth=*/ 2);
 
   if (!SimpleCandidates.empty()) {
     // if (DebugLevel > 4) {
-    //   llvm::errs() << "InferSpecialConstExprsAllSym candidates: " << SimpleCandidates[0].size() << " x " << ConstantLimits.size() << "\n";
+    //   llvm::errs() << "InferSpecialConstExprsAllSym candidates: " << SimpleCandidates[0].size() << "\n";
+    //   llvm::errs() << ConstMap.size() << "\n";
+    //   llvm::errs() << RHSFresh.size() << "\n";
     // }
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
                                        InstCache, IC, S, SymCS,
@@ -2296,7 +2325,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       return Clone;
     }
   }
-  Refresh("Special expressions, no constants");
+  Refresh("Special expressions, no constants, no constraints");
 
   for (auto C : LHSConsts) {
 
@@ -2359,17 +2388,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   Refresh("Symbolize common consts, two at a time");
 
   // Step 1.5 : Direct symbolize, simple rel constraints on LHS
-
-  std::vector<std::pair<Inst *, llvm::APInt>> ConstMapCurrent;
-
-  for (auto &&C : LHSConsts) {
-    ConstMapCurrent.push_back({SymConstMap[C], C->Val});
-  }
-
-  for (auto &&P : ConstMap) {
-    ConstMapCurrent.push_back(P);
-  }
-  ConstMap = ConstMapCurrent;
 
   auto CounterExamples = GetMultipleCEX(Result, IC, S, 3);
   if (Nested) {
@@ -2435,9 +2453,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
 
   Refresh("All LHS Constraints");
-
-  auto ConstantLimits = InferConstantLimits(ConstMap, IC, Input, CounterExamples);
-
   // Step 3 : Special RHS constant exprs, no constants
 
   if (!RHSFresh.empty()) {
@@ -2470,10 +2485,22 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
 
   auto EnumeratedCandidates = Enumerate(RHSFresh, Components, IC, ConstMap);
-  //   if (DebugLevel > 4) {
+  // if (DebugLevel > 4) {
+  //   llvm::errs() << "ConstMap: " << ConstMap.size() << "\n";
   //   llvm::errs() << "RHSFresh: " << RHSFresh.size() << "\n";
   //   llvm::errs() << "Components: " << Components.size() << "\n";
   //   llvm::errs() << "EnumeratedCandidates: " << EnumeratedCandidates[0].size() << "\n";
+  //   for (auto &&C : EnumeratedCandidates[0]) {
+  //     ReplacementContext RC;
+  //     RC.printInst(C, llvm::errs(), true);
+  //   }
+
+  //   llvm::errs() << "\n\nEnumeratedCandidates: " << EnumeratedCandidates[1].size() << "\n";
+  //   for (auto &&C : EnumeratedCandidates[1]) {
+  //     ReplacementContext RC;
+  //     RC.printInst(C, llvm::errs(), true);
+  //   }
+
   // }
 
   if (!EnumeratedCandidates.empty()) {
@@ -2499,6 +2526,16 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
   }
   Refresh("Enumerated 2 insts for single RHS const cases");
+
+  if (!SimpleCandidates.empty()) {
+    auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
+                                       InstCache, IC, S, SymCS,
+                                       false, true, false);
+    if (Clone) {
+      return Clone;
+    }
+  }
+  Refresh("Special expressions, simpledf constraints");
 
   if (!EnumeratedCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
@@ -2650,35 +2687,35 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     Refresh("Sketchy cands with relations");
   }
 
-  if (!EnumeratedCandidates.empty()) {
-    auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                        InstCache, IC, S, SymCS, true, true, false, ConstantLimits);
-    if (Clone) {
-      return Clone;
-    }
-    Refresh("Enumerated expressions+consts and constant limits");
-  }
+  // if (!EnumeratedCandidates.empty()) {
+  //   auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
+  //                                       InstCache, IC, S, SymCS, true, true, false, ConstantLimits);
+  //   if (Clone) {
+  //     return Clone;
+  //   }
+  //   Refresh("Enumerated expressions+consts and constant limits");
+  // }
 
-  if (!SimpleCandidates.empty()) {
-      auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                  InstCache, IC, S, SymCS, true, false, false, ConstantLimits);
-    if (Clone) {
-      return Clone;
-    }
-  }
-  if (!SimpleCandidatesWithConsts.empty()) {
-    auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidatesWithConsts,
-                                        InstCache, IC, S, SymCS, true, false, false, ConstantLimits);
-    if (Clone) {
-      return Clone;
-    }
-    Refresh("Simple expressions+consts and constant limits");
-  }
+  // if (!SimpleCandidates.empty()) {
+  //     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
+  //                                 InstCache, IC, S, SymCS, true, false, false, ConstantLimits);
+  //   if (Clone) {
+  //     return Clone;
+  //   }
+  // }
+  // if (!SimpleCandidatesWithConsts.empty()) {
+  //   auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidatesWithConsts,
+  //                                       InstCache, IC, S, SymCS, true, false, false, ConstantLimits);
+  //   if (Clone) {
+  //     return Clone;
+  //   }
+  //   Refresh("Simple expressions+consts and constant limits");
+  // }
 
   }
-
 
   {
+    auto ConstantLimits = InferConstantLimits(ConstMap, IC, Input, CounterExamples);
     auto Copy = Replace(Input, IC, JustLHSSymConstMap);
     if (auto VRel = VerifyWithRels(IC, S, Copy, ConstantLimits)) {
       return VRel.value();

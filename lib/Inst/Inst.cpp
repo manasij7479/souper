@@ -594,22 +594,25 @@ void Inst::Print() {
 }
 #endif
 
-Inst *InstContext::getConst(const llvm::APInt &Val) {
-  llvm::FoldingSetNodeID ID;
-  ID.AddInteger(Inst::Const);
-  ID.AddInteger(Val.getBitWidth());
-  Val.Profile(ID);
-
+Inst *InstContext::getConst(const llvm::APInt &Val, bool Deduplicate) {
   void *IP = 0;
-  if (Inst *I = InstSet.FindNodeOrInsertPos(ID, IP))
-    return I;
+  if (Deduplicate) {
+    llvm::FoldingSetNodeID ID;
+    ID.AddInteger(Inst::Const);
+    ID.AddInteger(Val.getBitWidth());
+    Val.Profile(ID);
+    if (Inst *I = InstSet.FindNodeOrInsertPos(ID, IP))
+      return I;
+  }
 
   auto N = new Inst;
-  Insts.emplace_back(N);
   N->K = Inst::Const;
   N->Width = Val.getBitWidth();
   N->Val = Val;
-  InstSet.InsertNode(N, IP);
+  if (Deduplicate) {
+    Insts.emplace_back(N);
+    InstSet.InsertNode(N, IP);
+  }
   return N;
 }
 
