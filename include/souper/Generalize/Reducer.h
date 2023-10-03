@@ -44,6 +44,7 @@ public:
   ParsedReplacement WeakenOther(ParsedReplacement Input);
 
   ParsedReplacement ReducePCsToDF(ParsedReplacement Input);
+  ParsedReplacement ReducePCsToSimpleDF(ParsedReplacement Input);
 
   ParsedReplacement ReducePoison(ParsedReplacement Input);
 
