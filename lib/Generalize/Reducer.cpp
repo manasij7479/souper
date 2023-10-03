@@ -681,8 +681,28 @@ size_t WeakenSingleKB(ParsedReplacement Input, InstContext &IC, Solver *S,
 
   return BitsWeakened;
 }
+ParsedReplacement Reducer::ReducePCsToSimpleDF(ParsedReplacement Input) {
+  std::vector<InstMapping> NewPCs;
+  for (auto PC : Input.PCs) {
+    // NonZero
+    if (PC.LHS->K == Inst::Ne && PC.RHS->K == Inst::Const && PC.RHS->Val.isOne()) {
+      auto V = PC.LHS->Ops[0];
+      auto C = PC.LHS->Ops[1];
+      if (V->K == Inst::Var && C->K == Inst::Const && C->Val.getLimitedValue() == 0) {
+        V->NonZero = true;
+        continue;
+      }
+    }
+
+    NewPCs.push_back(PC);
+  }
+
+  Input.PCs = NewPCs;
+  return Input;
+}
 
 ParsedReplacement Reducer::ReducePCsToDF(ParsedReplacement Input) {
+  Input = ReducePCsToSimpleDF(Input);
   std::vector<Inst *> FoundVars;
   for (auto &&PC : Input.PCs) {
     findVars(PC.LHS, FoundVars);
