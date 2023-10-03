@@ -28,6 +28,12 @@ public:
     return I;
   }
 
+  template<typename T, typename F> Builder Select(T t, F f) {
+    auto left = i(t, *this);
+    auto right = i(f, *this);
+    return Builder(IC.getInst(Inst::Select, 1, {I, left, right}), IC);
+  }
+
 #define BINOP(K)                                                 \
   template<typename T> Builder K(T t) {                          \
     auto L = I; auto R = i(t, *this);                            \

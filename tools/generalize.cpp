@@ -891,24 +891,40 @@ std::vector<Inst *> InferPotentialRelations(
     }
   }
 
-  // TODO: Make sure this works.
   for (auto &&[XI, XC] : CMap) {
     for (auto &&[YI, YC] : CMap) {
       if (XI == YI || XC.getBitWidth() == YC.getBitWidth()) {
         continue;
       }
 
-      // llvm::errs() << "HERE: " << XI->Name << ' ' << YI->Name << ' ' << XC.getLimitedValue() << ' ' <<  YC.getLimitedValue() << '\n';
-
-      // llvm::errs() << "HERE: " << XC.getLimitedValue() << ' ' <<  YC.getLimitedValue() << '\n';
       if (XC.getLimitedValue() == YC.getLimitedValue()) {
         if (XI->Width > YI->Width) {
-          // Builder(YI, IC).ZExt(XI->Width).Eq(XI)()->Print();
           Results.push_back(Builder(YI, IC).ZExt(XI->Width).Eq(XI)());
         } else if (XI->Width < YI->Width) {
           Results.push_back(Builder(XI, IC).ZExt(YI->Width).Eq(YI)());
         }
+      } else {
+        if (XI->Width > YI->Width) {
+          Results.push_back(Builder(YI, IC).ZExt(XI->Width).Ne(XI)());
+        } else if (XI->Width < YI->Width) {
+          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Ne(YI)());
+        }
       }
+
+      if (XC.getLimitedValue() < YC.getLimitedValue()) {
+        if (XI->Width > YI->Width) {
+          Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).ZExt(XI->Width))());
+          Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).ZExt(XI->Width))());
+          // Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).SExt(XI->Width))());
+          // Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).SExt(XI->Width))());
+        } else if (XI->Width < YI->Width) {
+          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Ult(YI)());
+          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Slt(YI)());
+          // Results.push_back(Builder(XI, IC).SExt(YI->Width).Ult(YI)());
+          // Results.push_back(Builder(XI, IC).SExt(YI->Width).Slt(YI)());
+        }
+      }
+
     }
   }
 
@@ -977,7 +993,7 @@ std::vector<Inst *> InferPotentialRelations(
 
 struct Cmp {
   bool operator() (Inst *A, Inst *B) const {
-    return B->Val.ult(A->Val);
+    return B->Val.getLimitedValue() < A->Val.getLimitedValue();
   }
 };
 
@@ -1187,10 +1203,16 @@ std::optional<ParsedReplacement> VerifyWithRels(InstContext &IC, Solver *S,
 
   for (auto Rel : Rels) {
     Input.PCs.push_back({Rel, IC.getConst(llvm::APInt(1, 1))});
+
+    // InfixPrinter IP(Input);
+    // IP(llvm::errs());
+
     auto Clone = Verify(Input, IC, S);
 
     // InfixPrinter IP(Input);
     // IP(llvm::errs());
+
+    // Input.print(llvm::errs(), true);
 
     // llvm::errs() << "RESULT: " << Clone.has_value() << "\n";
 
@@ -1227,7 +1249,6 @@ std::optional<ParsedReplacement> VerifyWithRels(InstContext &IC, Solver *S,
   }
 
   SortPredsByModelCount(ValidRels);
-  // TODO: Construct WP
   // For now, return the weakest valid result
   Input.PCs.push_back({ValidRels[0], IC.getConst(llvm::APInt(1, 1))});
   return Input;
@@ -1989,7 +2010,19 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
         Components.push_back(Builder(IC, C).BitWidth().Sub(CModWidth)());
       }
 
-        // TODO: Add a few more, we can afford to run generalization longer
+      for (auto &&C2 : AtomicComps) {
+        if (C == C2) {
+          continue;
+        }
+        auto UL = Builder(IC, C).Ult(C2);
+        auto SL = Builder(IC, C).Slt(C2);
+
+        Components.push_back(UL.Select(C, C2)());
+        Components.push_back(SL.Select(C, C2)());
+        // Components.push_back(ULT.Select(C2, C)());
+        // Components.push_back(SLT.Select(C2, C)());
+      }
+
     }
 
     std::set<size_t> VisitedWidths{1};
@@ -2379,6 +2412,18 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     if (Clone) {
       return Clone;
     }
+
+    if (Relations.size() < 10) {
+      for (auto &&R : Relations) {
+        Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
+        auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+        if (Clone) {
+          return Clone;
+        }
+        Copy.PCs.pop_back();
+      }
+    }
+
 
     Refresh("LHS Constraints");
 
@@ -2792,9 +2837,6 @@ InstantiateWidthChecks(InstContext &IC,
   if (IsStaticallyWidthIndependent(Input)) {
     return {Input, true};
   }
-
-  // llvm::errs() << "C\n";
-  // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
 
   if (!NoWidth && !hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
     // Instantiate Alive driver with Symbolic width.
