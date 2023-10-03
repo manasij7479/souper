@@ -356,6 +356,9 @@ namespace souper {
                           ARG0.countTrailingZeros())};
 
     case Inst::BSwap:
+      if (ARG0.getBitWidth() < 16 || ARG0.getBitWidth() % 8 != 0) {
+        return EvalValue::poison(ARG0.getBitWidth());
+      }
       return {ARG0.byteSwap()};
 
     case Inst::BitReverse:
