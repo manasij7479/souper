@@ -795,13 +795,16 @@ std::vector<Inst *> InferPotentialRelations(
       }
 
 
-      if (C2 && XC == YC) {
-        Results.push_back(Builder(XI, IC).Eq(YI)());
-      }
+      // if (C2 && XC == YC) {
+      //   Results.push_back(Builder(XI, IC).Eq(YI)());
+      // }
 
       if ((XC & YC) == XC) {
         Results.push_back(Builder(XI, IC).And(YI).Eq(XI)());
+      }
 
+      if ((XC & YC) == YC) {
+        Results.push_back(Builder(XI, IC).And(YI).Eq(YI)());
       }
 
       if ((XC | YC) == XC) {
@@ -937,56 +940,58 @@ std::vector<Inst *> InferPotentialRelations(
   // llvm::errs() << "HERE: " << Results.size() << '\n';
   Results = FilterRelationsByValue(Results, CMap, CEXs);
 
-  if (LatticeChecks) {
-    std::vector<Inst *> Inputs;
-    findVars(Input.Mapping.LHS, Inputs);
+  // llvm::errs() << "HERE: " << Results.size() << "\t" << LatticeChecks << '\n';
+  // if (LatticeChecks) {
+  //   std::vector<Inst *> Inputs;
+  //   findVars(Input.Mapping.LHS, Inputs);
 
-    std::vector<Inst *> WExprs;
+  //   std::vector<Inst *> WExprs;
 
-    for (auto X : Inputs) {
-      for (auto Y : Inputs) {
-        if (X == Y || X->Width >= Y->Width) {
-          continue;
-        }
+  //   for (auto X : Inputs) {
+  //     for (auto Y : Inputs) {
+  //       if (X == Y || X->Width >= Y->Width) {
+  //         continue;
+  //       }
 
-        // (-1 << zext(width(X)))
-        auto MinusOne = llvm::APInt::getAllOnesValue(Y->Width);
-        auto ZExt = Builder(X, IC).BitWidth().ZExt(Y->Width)();
-        auto OnesThenZeros = Builder(IC.getConst(MinusOne), IC).Shl(ZExt);
-        WExprs.push_back(OnesThenZeros());
-        // Flip Above
-        WExprs.push_back(OnesThenZeros.Flip()());
+  //       // (-1 << zext(width(X)))
+  //       auto MinusOne = llvm::APInt::getAllOnesValue(Y->Width);
+  //       auto ZExt = Builder(X, IC).BitWidth().ZExt(Y->Width)();
+  //       auto OnesThenZeros = Builder(IC.getConst(MinusOne), IC).Shl(ZExt);
+  //       WExprs.push_back(OnesThenZeros());
+  //       // Flip Above
+  //       WExprs.push_back(OnesThenZeros.Flip()());
 
-        // (-1 >> zext(width(X)))
-        auto ZerosThenOnes = Builder(IC.getConst(MinusOne), IC).LShr(ZExt);
-        WExprs.push_back(ZerosThenOnes());
-        // Flip Above
-        WExprs.push_back(ZerosThenOnes.Flip()());
+  //       // (-1 >> zext(width(X)))
+  //       auto ZerosThenOnes = Builder(IC.getConst(MinusOne), IC).LShr(ZExt);
+  //       WExprs.push_back(ZerosThenOnes());
+  //       // Flip Above
+  //       WExprs.push_back(ZerosThenOnes.Flip()());
 
-      }
-    }
+  //     }
+  //   }
 
-    // TODO Less brute force
-    for (auto &&[XI, XC] : CMap) {
-      for (auto &&[YI, YC] : CMap) {
-        if (XI == YI || XC.getBitWidth() != YC.getBitWidth()) {
-          continue;
-        }
-        // llvm::errs() << "HERE: " << XI->Name << ' ' << YI->Name << ' ' << XC.getLimitedValue() << ' ' <<  YC.getLimitedValue() << '\n';
-        Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {XI, YI}));
-        Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {XI, YI}));
-      }
-    }
+  //   // TODO Less brute force
+  //   for (auto &&[XI, XC] : CMap) {
+  //     for (auto &&[YI, YC] : CMap) {
+  //       if (XI == YI || XC.getBitWidth() != YC.getBitWidth()) {
+  //         continue;
+  //       }
+  //       // llvm::errs() << "HERE: " << XI->Name << ' ' << YI->Name << ' ' << XC.getLimitedValue() << ' ' <<  YC.getLimitedValue() << '\n';
+  //       Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {XI, YI}));
+  //       Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {XI, YI}));
+  //     }
+  //   }
 
-    for (auto &&Expr : WExprs) {
-      for (auto &&[XI, XC] : CMap) {
-        Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {XI, Expr}));
-        Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {XI, Expr}));
-        Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {Expr, XI}));
-        Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {Expr, XI}));
-      }
-    }
-  }
+  //   for (auto &&Expr : WExprs) {
+  //     for (auto &&[XI, XC] : CMap) {
+  //       Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {XI, Expr}));
+  //       Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {XI, Expr}));
+  //       Results.push_back(IC.getInst(Inst::KnownOnesP, 1, {Expr, XI}));
+  //       Results.push_back(IC.getInst(Inst::KnownZerosP, 1, {Expr, XI}));
+  //     }
+  //   }
+  // }
+  // llvm::errs() << "THERE: " << Results.size() << "\t" << LatticeChecks << '\n';
 
   return Results;
 }
@@ -1415,9 +1420,9 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
       continue;
     }
 
-    if (I->Name == "symDF_DB") {
-      continue;
-    }
+    // if (I->Name == "symDF_DB") {
+    //   continue;
+    // }
 
     llvm::APInt NewTarget = Target;
     if (Target.getBitWidth() < I->Width) {
@@ -1983,9 +1988,9 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
 
     std::vector<Inst *> Components;
     for (auto &&C : AtomicComps) {
-      if (C->Name == "symDF_DB") {
-        continue;
-      }
+      // if (C->Name == "symDF_DB") {
+      //   continue;
+      // }
 
       auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
 
@@ -2441,15 +2446,13 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         Copy.PCs.pop_back();
       }
     }
-
-
     Refresh("LHS Constraints");
 
-    Clone = DFPreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
-    if (Clone) {
-      return Clone;
-    }
-    Refresh("LHS DF Constraints");
+    // Clone = DFPreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+    // if (Clone) {
+    //   return Clone;
+    // }
+    // Refresh("LHS DF Constraints");
   }
 
   Refresh("All LHS Constraints");
@@ -2714,14 +2717,14 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   }
 
-  {
-    auto ConstantLimits = InferConstantLimits(ConstMap, IC, Input, CounterExamples);
-    auto Copy = Replace(Input, IC, JustLHSSymConstMap);
-    if (auto VRel = VerifyWithRels(IC, S, Copy, ConstantLimits)) {
-      return VRel.value();
-    }
-    Refresh("Constant limit constraints on LHS");
-  }
+  // {
+  //   auto ConstantLimits = InferConstantLimits(ConstMap, IC, Input, CounterExamples);
+  //   auto Copy = Replace(Input, IC, JustLHSSymConstMap);
+  //   if (auto VRel = VerifyWithRels(IC, S, Copy, ConstantLimits)) {
+  //     return VRel.value();
+  //   }
+  //   Refresh("Constant limit constraints on LHS");
+  // }
 
   Refresh("END");
   Changed = false;
@@ -3133,12 +3136,16 @@ int main(int argc, char **argv) {
             // }
 
             if (SymbolicDF) {
+              if (DebugLevel > 4) {
+                Result.print(llvm::errs(), true);
+              }
+
               if (DebugLevel > 4) llvm::errs() << "PUSH SYMDF_KB_DB\n";
               auto [CM, Aug] = AugmentForSymKBDB(Result, IC);
 
-              // if (DebugLevel > 4) {
-              //   Aug.print(llvm::errs(), true);
-              // }
+              if (DebugLevel > 4) {
+                Aug.print(llvm::errs(), true);
+              }
 
               // auto [CM2, Aug2] = AugmentForSymKB(Aug1, IC);
               if (!CM.empty()) {
