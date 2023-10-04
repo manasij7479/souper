@@ -168,6 +168,25 @@ AugmentForSymKBDB(ParsedReplacement Original, InstContext &IC) {
 
   for (auto &&I : Inputs) {
     auto Width = I->Width;
+    if (!I->Range.isFullSet() && !I->Range.isEmptySet() && !I->Range.isSingleElement()) {
+      Inst *LO = IC.createVar(Width, "symDF_LO");
+      Inst *HI = IC.createVar(Width, "symDF_HI");
+
+      // When signed?
+
+      // larger than LO
+      Inst *LargerThanEqLO = IC.getInst(Inst::Ule, 1, {LO, I});
+      Input.PCs.push_back({LargerThanEqLO, IC.getConst(llvm::APInt(1, 1))});
+      ConstMap.push_back({LO, I->Range.getLower()});
+
+      // smaller than HI
+      Inst *SmallerThanHI = IC.getInst(Inst::Ult, 1, {I, HI});
+      Input.PCs.push_back({SmallerThanHI, IC.getConst(llvm::APInt(1, 1))});
+      ConstMap.push_back({HI, I->Range.getUpper()});
+
+      I->Range = llvm::ConstantRange::getFull(Width);
+    }
+
     if (I->KnownZeros.getBitWidth() == I->Width &&
         I->KnownOnes.getBitWidth() == I->Width &&
         !(I->KnownZeros == 0 && I->KnownOnes == 0)) {
@@ -1696,73 +1715,6 @@ const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap,
               [](Inst *A, Inst *B) { return instCount(A) < instCount(B);});
   }
   return Results;
-}
-
-std::pair<ConstMapT, ParsedReplacement>
-AugmentForSymDB(ParsedReplacement Original, InstContext &IC) {
-  auto Input = Clone(Original, IC);
-  std::vector<std::pair<Inst *, llvm::APInt>> ConstMap;
-  if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
-    !Input.Mapping.LHS->DemandedBits.isAllOnesValue()) {
-    auto DB = Input.Mapping.LHS->DemandedBits;
-    auto SymDFVar = IC.createVar(DB.getBitWidth(), "symDF_DB");
-    // SymDFVar->Name = "symDF_DB";
-
-    SymDFVar->KnownOnes = llvm::APInt(DB.getBitWidth(), 0);
-    SymDFVar->KnownZeros = llvm::APInt(DB.getBitWidth(), 0);
-    // SymDFVar->Val = DB;
-
-    Input.Mapping.LHS->DemandedBits.setAllBits();
-    Input.Mapping.RHS->DemandedBits.setAllBits();
-
-    auto W = Input.Mapping.LHS->Width;
-
-    Input.Mapping.LHS = IC.getInst(Inst::DemandedMask, W, {Input.Mapping.LHS, SymDFVar});
-    Input.Mapping.RHS = IC.getInst(Inst::DemandedMask, W, {Input.Mapping.RHS, SymDFVar});
-
-    ConstMap.push_back({SymDFVar, DB});
-  }
-  return {ConstMap, Input};
-}
-
-std::pair<ConstMapT, ParsedReplacement>
-AugmentForSymKB(ParsedReplacement Original, InstContext &IC) {
-  auto Input = Clone(Original, IC);
-  ConstMapT ConstMap;
-  std::vector<Inst *> Inputs;
-  findVars(Input.Mapping.LHS, Inputs);
-
-  for (auto &&I : Inputs) {
-    auto Width = I->Width;
-    if (I->KnownZeros.getBitWidth() == I->Width &&
-        I->KnownOnes.getBitWidth() == I->Width &&
-        !(I->KnownZeros == 0 && I->KnownOnes == 0)) {
-      if (I->KnownZeros != 0) {
-        Inst *Zeros = IC.createVar(Width, "symDF_K0");
-
-        // Inst *AllOnes = IC.getConst(llvm::APInt::getAllOnesValue(Width));
-        // Inst *NotZeros = IC.getInst(Inst::Xor, Width,
-        //                         {Zeros, AllOnes});
-        // Inst *VarNotZero = IC.getInst(Inst::Or, Width, {I, NotZeros});
-        // Inst *ZeroBits = IC.getInst(Inst::Eq, 1, {VarNotZero, NotZeros});
-        Inst *ZeroBits = IC.getInst(Inst::KnownZerosP, 1, {I, Zeros});
-        Input.PCs.push_back({ZeroBits, IC.getConst(llvm::APInt(1, 1))});
-        ConstMap.push_back({Zeros, I->KnownZeros});
-        I->KnownZeros = llvm::APInt(I->Width, 0);
-      }
-
-      if (I->KnownOnes != 0) {
-        Inst *Ones = IC.createVar(Width, "symDF_K1");
-        // Inst *VarAndOnes = IC.getInst(Inst::And, Width, {I, Ones});
-        // Inst *OneBits = IC.getInst(Inst::Eq, 1, {VarAndOnes, Ones});
-        Inst *OneBits = IC.getInst(Inst::KnownOnesP, 1, {I, Ones});
-        Input.PCs.push_back({OneBits, IC.getConst(llvm::APInt(1, 1))});
-        ConstMap.push_back({Ones, I->KnownOnes});
-        I->KnownOnes = llvm::APInt(I->Width, 0);
-      }
-    }
-  }
-  return {ConstMap, Input};
 }
 
 std::vector<std::vector<Inst *>>
