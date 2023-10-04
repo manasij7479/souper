@@ -794,18 +794,26 @@ std::vector<Inst *> InferPotentialRelations(
         Results.push_back(Builder(XI, IC).Flip().Eq(YI)());
       }
 
-
-      // if (C2 && XC == YC) {
-      //   Results.push_back(Builder(XI, IC).Eq(YI)());
-      // }
-
       if ((XC & YC) == XC) {
         Results.push_back(Builder(XI, IC).And(YI).Eq(XI)());
+      }
+
+      if ((XC | ~YC) == ~YC) {
+        auto YFlip = Builder(YI, IC).Flip();
+        Results.push_back(Builder(XI, IC).Or(YFlip).Eq(YFlip)());
+      }
+
+      if ((XC | ~YC) == ~XC) {
+        auto YFlip = Builder(YI, IC).Flip();
+        auto XFlip = Builder(XI, IC).Flip();
+        Results.push_back(Builder(XI, IC).Or(YFlip).Eq(XFlip)());
       }
 
       if ((XC & YC) == YC) {
         Results.push_back(Builder(XI, IC).And(YI).Eq(YI)());
       }
+
+
 
       if ((XC | YC) == XC) {
         Results.push_back(Builder(XI, IC).Or(YI).Eq(XI)());
