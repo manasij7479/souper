@@ -426,6 +426,29 @@ bool InfixPrinter::registerSymDFVars(Inst *I) {
     // VisitedVars.insert(I->Ops[1]->Name);
     return true;
   }
+
+  if (I->K == Inst::Ult && I->Ops[0]->K == Inst::Var &&
+    I->Ops[1]->Name.starts_with("symDF_HI")) {
+    auto CName = I->Ops[0]->Name;
+    if (CName.starts_with("symconst_")) {
+      CName = "C" + CName.substr(9);
+    }
+    Syms[I->Ops[1]] = CName + ".hi";
+    // VisitedVars.insert(I->Ops[1]->Name);
+    return true;
+  }
+
+  if (I->K == Inst::Ule && I->Ops[1]->K == Inst::Var &&
+    I->Ops[0]->Name.starts_with("symDF_LO")) {
+    auto CName = I->Ops[1]->Name;
+    if (CName.starts_with("symconst_")) {
+      CName = "C" + CName.substr(9);
+    }
+    Syms[I->Ops[0]] = CName + ".lo";
+    // VisitedVars.insert(I->Ops[1]->Name);
+    return true;
+  }
+
   return false;
 }
 
