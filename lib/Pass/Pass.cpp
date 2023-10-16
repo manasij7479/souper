@@ -212,7 +212,7 @@ public:
 
     return false;
   }
-  
+
   bool runOnFunction(Function &F, FunctionAnalysisManager &FAM) {
     std::string FunctionName;
     if (F.hasLocalLinkage()) {
@@ -275,7 +275,7 @@ public:
         ReplacementContext Context;
         PrintReplacementLHS(errs(), Cand.BPCs, Cand.PCs, Cand.Mapping.LHS, Context);
       }
-      
+
       if (StaticProfile) {
         std::string Str;
         llvm::raw_string_ostream Loc(Str);
@@ -412,13 +412,13 @@ public:
 
       if (DebugLevel > 1)
         errs() << "done with LHS number " << LHSNum << " after doing a replacement\n";
-      
+
       return true;
     }
 
     return false;
   }
-  
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
     if (!S) {
       S = GetSolver(KV);
@@ -435,7 +435,7 @@ public:
       if (res && verifyFunction(F))
         llvm::report_fatal_error("function broken after Souper changed it");
     } while (res);
-    
+
     return PreservedAnalyses::none();
   }
 
