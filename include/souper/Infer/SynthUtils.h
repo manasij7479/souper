@@ -243,8 +243,7 @@ struct InfixPrinter {
 
   void countUses(Inst *I);
 
-  template<typename Stream>
-  void operator()(Stream &S) {
+  virtual void operator()(llvm::raw_fd_ostream &S) {
     if (!P.PCs.empty()) {
       printPCs(S);
       S << "\n  |= \n";
@@ -255,13 +254,16 @@ struct InfixPrinter {
        << Inst::getDemandedBitsString(P.Mapping.LHS->DemandedBits)
        << ")";
     }
-    S << "\n  =>\n";
-
-    S << printInst(P.Mapping.RHS, S, true) << "\n";
+    S << "\n  =>";
+    if (!P.Mapping.RHS) {
+      S << " ? \n";
+    } else {
+      S << "\n";
+      S << printInst(P.Mapping.RHS, S, true) << "\n";
+    }
   }
 
-  template<typename Stream>
-  std::string printInst(Inst *I, Stream &S, bool Root = false) {
+  virtual std::string printInst(Inst *I, llvm::raw_fd_ostream &S, bool Root = false) {
     if (Syms.count(I)) {
       return Syms[I];
     }
@@ -424,8 +426,7 @@ struct InfixPrinter {
     }
   }
 
-  template<typename Stream>
-  void printPCs(Stream &S) {
+  virtual void printPCs(llvm::raw_fd_ostream &S) {
     bool first = true;
     for (auto &&PC : P.PCs) {
       if (first) {
@@ -452,6 +453,209 @@ struct InfixPrinter {
   bool ShowImplicitWidths;
 };
 
+struct LatexPrinter : public InfixPrinter {
+  LatexPrinter(ParsedReplacement P, bool ShowImplicitWidths = true) : InfixPrinter(P, ShowImplicitWidths) {}
+  void operator() (llvm::raw_fd_ostream &S) override {
+    if (!P.PCs.empty()) {
+      printPCs(S);
+      S << " \\models ";
+    }
+    S << printInst(P.Mapping.LHS, S, true);
+    if (!P.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+      S << " (" << "\\text{demandedBits} ="
+       << Inst::getDemandedBitsString(P.Mapping.LHS->DemandedBits)
+       << ")";
+    }
+    S << " \\Rightarrow ";
+    if (!P.Mapping.RHS) {
+      S << " ?";
+    } else {
+      S << "";
+      S << printInst(P.Mapping.RHS, S, true) << "\n";
+    }
+  }
+
+  void printPCs(llvm::raw_fd_ostream &S) override {
+    bool first = true;
+    for (auto &&PC : P.PCs) {
+      if (first) {
+        first = false;
+      } else {
+        S << " \\land ";
+      }
+      if (PC.RHS->K == Inst::Const && PC.RHS->Val == 0) {
+        S << "!(" << printInst(PC.LHS, S, true) << ")";
+      } else if (PC.RHS->K == Inst::Const && PC.RHS->Val == 1) {
+        S << printInst(PC.LHS, S, true);
+      } else {
+        S << printInst(PC.LHS, S, true) << " = " << printInst(PC.RHS, S);
+      }
+    }
+  }
+
+  virtual std::string printInst(Inst *I, llvm::raw_fd_ostream &S, bool Root = false) override {
+
+    std::ostringstream OS;
+
+    // if (UseCount[I] > 1) {
+    //   std::string Name = "var" + std::to_string(varnum++);
+    //   Syms[I] = Name;
+    //   OS << "let " << Name << " = ";
+    // }
+
+    // // x ^ -1 => ~x
+    // if (I->K == Inst::Xor && I->Ops[1]->K == Inst::Const &&
+    //     I->Ops[1]->Val.isAllOnesValue()) {
+    //   return "~" + printInst(I->Ops[0], S);
+    // }
+    // if (I->K == Inst::Xor && I->Ops[0]->K == Inst::Const &&
+    //     I->Ops[0]->Val.isAllOnesValue()) {
+    //   return "~" + printInst(I->Ops[1], S);
+    // }
+
+    if (I->K == Inst::Const) {
+      if (I->Val.ule(64)) {
+        return llvm::toString(I->Val, 10, false);
+      } else {
+        return "0x" + llvm::toString(I->Val, 16, false);
+      }
+    } else if (I->K == Inst::Var) {
+      auto Name = I->Name;
+      if (isdigit(Name[0])) {
+        Name = "x" + Name;
+      }
+      if (I->Name.starts_with("symconst_")) {
+        Name = "C" + I->Name.substr(9);
+      }
+      if (VisitedVars.count(I->Name)) {
+        return Name;
+      } else {
+        VisitedVars.insert(I->Name);
+        Inst::getKnownBitsString(I->KnownZeros, I->KnownOnes);
+
+        std::string Buf;
+        llvm::raw_string_ostream Out(Buf);
+
+        if (I->KnownZeros.getBoolValue() || I->KnownOnes.getBoolValue())
+          Out << " (knownBits=" << Inst::getKnownBitsString(I->KnownZeros, I->KnownOnes)
+              << ")";
+        if (I->NonNegative)
+          Out << " (nonNegative)";
+        if (I->Negative)
+          Out << " (negative)";
+        if (I->NonZero)
+          Out << " (nonZero)";
+        if (I->PowOfTwo)
+          Out << " (powerOfTwo)";
+        if (I->NumSignBits > 1)
+          Out << " (signBits=" << I->NumSignBits << ")";
+        if (!I->Range.isFullSet())
+          Out << " (range=[" << I->Range.getLower()
+              << "," << I->Range.getUpper() << "))";
+
+        std::string W = ShowImplicitWidths ? "\\iN{" + std::to_string(I->Width) + "}" : "";
+
+        if (WidthConstraints.count(I)) {
+          W = "\\iN{" + std::to_string(WidthConstraints[I]) + "}";
+        }
+
+        return Name + W + Out.str();
+      }
+    } else {
+      std::string Op;
+      switch (I->K) {
+      case Inst::Add: Op = "+"; break;
+      case Inst::AddNSW: Op = "+_\\text{nsw}"; break;
+      case Inst::AddNUW: Op = "+_\\text{nuw}"; break;
+      case Inst::AddNW: Op = "+_\\text{nw}"; break;
+      case Inst::Sub: Op = "-"; break;
+      case Inst::SubNSW: Op = "-_\\text{nsw}"; break;
+      case Inst::SubNUW: Op = "-\\text{nuw}"; break;
+      case Inst::SubNW: Op = "-nw"; break;
+      case Inst::Mul: Op = "*"; break;
+      case Inst::MulNSW: Op = "*_\\text{nsw}"; break;
+      case Inst::MulNUW: Op = "*_\\text{nuw}"; break;
+      case Inst::MulNW: Op = "*_\\text{nw}"; break;
+      case Inst::UDiv: Op = "/_u"; break;
+      case Inst::SDiv: Op = "/_s"; break;
+      case Inst::URem: Op = "\\\%_u"; break;
+      case Inst::SRem: Op = "\\\%_s"; break;
+      case Inst::And: Op = "\\: \\& \\:"; break;
+      case Inst::Or: Op = "\\: | \\:"; break;
+      case Inst::Xor: Op = "\\oplus"; break;
+      case Inst::Shl: Op = "\\ll"; break;
+      case Inst::ShlNSW: Op = "\\ll_\\text{nsw}"; break;
+      case Inst::ShlNUW: Op = "\\ll\\text{nuw}"; break;
+      case Inst::ShlNW: Op = "\\ll_\\text{nw}"; break;
+      case Inst::LShr: Op = "\\gg_u"; break;
+      case Inst::AShr: Op = "\\gg_s"; break;
+      case Inst::Eq: Op = "="; break;
+      case Inst::Ne: Op = "\\ne"; break;
+      case Inst::Ult: Op = "<_u"; break;
+      case Inst::Slt: Op = "<_s"; break;
+      case Inst::Ule: Op = "\\le_u"; break;
+      case Inst::Sle: Op = "\\le_s"; break;
+      // case Inst::KnownOnesP : Op = "<<=1"; break;
+      // case Inst::KnownZerosP : Op = "<<=0"; break;
+      default: Op = std::string("\\text{") + Inst::getKindName(I->K) + "}"; break;
+      }
+
+      std::string Result;
+
+      std::vector<Inst *> Ops = I->orderedOps();
+
+      if (Inst::isCommutative(I->K)) {
+        std::sort(Ops.begin(), Ops.end(), [](Inst *A, Inst *B) {
+          if (A->K == Inst::Const) {
+            return false; // c OP expr
+          } else if (B->K == Inst::Const) {
+            return true; // expr OP c
+          } else if (A->K == Inst::Var && B->K != Inst::Var) {
+            return true; // var OP expr
+          } else if (A->K != Inst::Var && B->K == Inst::Var) {
+            return false; // expr OP var
+          } else if (A->K == Inst::Var && B->K == Inst::Var) {
+            return A->Name > B->Name; // Tends to put vars before symconsts
+          } else {
+            return A->K < B->K; // expr OP expr
+          }
+        });
+      }
+
+      if (Ops.size() == 2) {
+        auto Meat = printInst(Ops[0], S) + " " + Op + " " + printInst(Ops[1], S);
+        Result = Root ? Meat : "(" + Meat + ")";
+      } else if (Ops.size() == 1) {
+        Result = Op + "(" + printInst(Ops[0], S) + ")";
+      }
+      else {
+        std::string Ret = Root ? "" : "(";
+        Ret += Op;
+        Ret += " ";
+        for (auto &&Op : Ops) {
+          Ret += printInst(Op, S) + " ";
+        }
+        while (Ret.back() == ' ') {
+          Ret.pop_back();
+        }
+        if (!Root) {
+          Ret += ")";
+        }
+        Result = Ret;
+      }
+      // if (UseCount[I] > 1) {
+      //   OS << Result << ";\n";
+      //   S << OS.str();
+      //   return Syms[I];
+      // } else {
+        return Result;
+      // }
+    }
+  }
+
+
+
+};
 
 // TODO print types in preamble (Alex)
 // TODO print type info for each instruction (Alex)
