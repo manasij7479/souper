@@ -217,6 +217,8 @@ add_library(souperInfer STATIC
 set(SOUPER_GENERALIZE_FILES
   lib/Generalize/Reducer.cpp
   include/souper/Generalize/Reducer.h
+  lib/Generalize/Generalize.cpp
+  include/souper/Generalize/Generalize.h
 )
 
 add_library(souperGeneralize STATIC
@@ -319,6 +321,10 @@ add_executable(generalize
   tools/generalize.cpp
 )
 
+add_executable(souper-repl
+  tools/souper-repl.cpp
+)
+
 add_executable(matcher-gen
   tools/matcher-gen.cpp
 )
@@ -394,7 +400,7 @@ configure_file(
 )
 
 foreach(target souper internal-solver-test lexer-test parser-test souper-check count-insts
-               souper2llvm souper-interpret generalize matcher-gen
+               souper2llvm souper-interpret generalize souper-repl matcher-gen
                souperExtractor souperInfer souperGeneralize souperInst souperKVStore souperParser
                souperSMTLIB2 souperTool souperPass souperPassProfileAll kleeExpr
                souperCodegen)
@@ -430,6 +436,7 @@ target_link_libraries(lexer-test souperParser)
 target_link_libraries(parser-test souperParser)
 target_link_libraries(souper-check souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(generalize souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser souperInfer souperGeneralize ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+target_link_libraries(souper-repl souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser souperInfer souperGeneralize ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(matcher-gen souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(souper-interpret souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(count-insts souperParser)

@@ -505,6 +505,9 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       if (PrettyPrint == "infix") {
         InfixPrinter P(Rep);
         P(llvm::outs());
+      } else if (PrettyPrint == "latex" || PrettyPrint == "tex") {
+        LatexPrinter P(Rep);
+        P(llvm::outs());
       } else if (PrettyPrint == "go" || PrettyPrint == "s-expr") {
         GoPrinter P(Rep);
         P(llvm::outs());
