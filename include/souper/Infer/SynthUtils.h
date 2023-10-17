@@ -243,7 +243,7 @@ struct InfixPrinter {
 
   void countUses(Inst *I);
 
-  virtual void operator()(llvm::raw_fd_ostream &S) {
+  virtual void operator()(llvm::raw_ostream &S) {
     if (!P.PCs.empty()) {
       printPCs(S);
       S << "\n  |= \n";
@@ -263,7 +263,7 @@ struct InfixPrinter {
     }
   }
 
-  virtual std::string printInst(Inst *I, llvm::raw_fd_ostream &S, bool Root = false) {
+  virtual std::string printInst(Inst *I, llvm::raw_ostream &S, bool Root = false) {
     if (Syms.count(I)) {
       return Syms[I];
     }
@@ -426,7 +426,7 @@ struct InfixPrinter {
     }
   }
 
-  virtual void printPCs(llvm::raw_fd_ostream &S) {
+  virtual void printPCs(llvm::raw_ostream &S) {
     bool first = true;
     for (auto &&PC : P.PCs) {
       if (first) {
@@ -455,7 +455,7 @@ struct InfixPrinter {
 
 struct LatexPrinter : public InfixPrinter {
   LatexPrinter(ParsedReplacement P, bool ShowImplicitWidths = true) : InfixPrinter(P, ShowImplicitWidths) {}
-  void operator() (llvm::raw_fd_ostream &S) override {
+  void operator() (llvm::raw_ostream &S) override {
     if (!P.PCs.empty()) {
       printPCs(S);
       S << " \\models ";
@@ -475,7 +475,7 @@ struct LatexPrinter : public InfixPrinter {
     }
   }
 
-  void printPCs(llvm::raw_fd_ostream &S) override {
+  void printPCs(llvm::raw_ostream &S) override {
     bool first = true;
     for (auto &&PC : P.PCs) {
       if (first) {
@@ -493,7 +493,7 @@ struct LatexPrinter : public InfixPrinter {
     }
   }
 
-  virtual std::string printInst(Inst *I, llvm::raw_fd_ostream &S, bool Root = false) override {
+  virtual std::string printInst(Inst *I, llvm::raw_ostream &S, bool Root = false) override {
 
     std::ostringstream OS;
 
