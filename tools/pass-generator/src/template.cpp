@@ -951,8 +951,8 @@ namespace util {
       total_hits++;
       if (PBA) {
         std::error_code EC;
-        llvm::raw_fd_ostream Out(std::to_string(opt) + "-" + std::to_string(Hits[opt] + "-" +
-        std::to_string(counter)) + ".src.ll", EC);
+        llvm::raw_fd_ostream Out(std::to_string(opt) + "-" + std::to_string(Hits[opt]) + "-" +
+        std::to_string(counter) + ".src.ll", EC);
         if (!EC) I->getModule()->print(Out, nullptr);
       }
 
