@@ -532,8 +532,11 @@ std::vector<Inst *> FilterExprsByValue(const std::vector<Inst *> &Exprs,
   std::vector<Inst *> FilteredExprs;
   ConcreteInterpreter CPos(ValueCache);
   for (auto &&E : Exprs) {
+    if (E->Width != TargetVal.getBitWidth()) {
+      continue;
+    }
     auto Result = CPos.evaluateInst(E);
-    if (Result.hasValue()) {
+    if (Result.hasValue() && Result.getValue().getBitWidth() == TargetVal.getBitWidth()) {
       // llvm::errs() << Result.getValue() << "\t" <<  TargetVal << "\n";
       if (Result.getValue() == TargetVal) {
         FilteredExprs.push_back(E);
