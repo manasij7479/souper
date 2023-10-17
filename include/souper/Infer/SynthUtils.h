@@ -484,7 +484,7 @@ struct LatexPrinter : public InfixPrinter {
         S << " \\land ";
       }
       if (PC.RHS->K == Inst::Const && PC.RHS->Val == 0) {
-        S << "!(" << printInst(PC.LHS, S, true) << ")";
+        S << "(" << printInst(PC.LHS, S, true) << ") = 0";
       } else if (PC.RHS->K == Inst::Const && PC.RHS->Val == 1) {
         S << printInst(PC.LHS, S, true);
       } else {
@@ -570,22 +570,22 @@ struct LatexPrinter : public InfixPrinter {
       case Inst::AddNW: Op = "+_\\text{nw}"; break;
       case Inst::Sub: Op = "-"; break;
       case Inst::SubNSW: Op = "-_\\text{nsw}"; break;
-      case Inst::SubNUW: Op = "-\\text{nuw}"; break;
-      case Inst::SubNW: Op = "-nw"; break;
-      case Inst::Mul: Op = "*"; break;
-      case Inst::MulNSW: Op = "*_\\text{nsw}"; break;
-      case Inst::MulNUW: Op = "*_\\text{nuw}"; break;
-      case Inst::MulNW: Op = "*_\\text{nw}"; break;
-      case Inst::UDiv: Op = "/_u"; break;
-      case Inst::SDiv: Op = "/_s"; break;
-      case Inst::URem: Op = "\\\%_u"; break;
-      case Inst::SRem: Op = "\\\%_s"; break;
+      case Inst::SubNUW: Op = "-_\\text{nuw}"; break;
+      case Inst::SubNW: Op = "-_\\text{nw}"; break;
+      case Inst::Mul: Op = "\\times"; break;
+      case Inst::MulNSW: Op = "\\times_\\text{nsw}"; break;
+      case Inst::MulNUW: Op = "\\times_\\text{nuw}"; break;
+      case Inst::MulNW: Op = "\\times_\\text{nw}"; break;
+      case Inst::UDiv: Op = "\\: /_u \\:"; break;
+      case Inst::SDiv: Op = "\\: /_s \\:"; break;
+      case Inst::URem: Op = "\\: \\\%_u \\:"; break;
+      case Inst::SRem: Op = "\\: \\\%_s \\:"; break;
       case Inst::And: Op = "\\: \\& \\:"; break;
       case Inst::Or: Op = "\\: | \\:"; break;
       case Inst::Xor: Op = "\\oplus"; break;
       case Inst::Shl: Op = "\\ll"; break;
       case Inst::ShlNSW: Op = "\\ll_\\text{nsw}"; break;
-      case Inst::ShlNUW: Op = "\\ll\\text{nuw}"; break;
+      case Inst::ShlNUW: Op = "\\ll_\\text{nuw}"; break;
       case Inst::ShlNW: Op = "\\ll_\\text{nw}"; break;
       case Inst::LShr: Op = "\\gg_u"; break;
       case Inst::AShr: Op = "\\gg_s"; break;
@@ -595,6 +595,11 @@ struct LatexPrinter : public InfixPrinter {
       case Inst::Slt: Op = "<_s"; break;
       case Inst::Ule: Op = "\\le_u"; break;
       case Inst::Sle: Op = "\\le_s"; break;
+      case Inst::UAddSat: Op = "+_\\text{u}^\\text{sat}"; break;
+      case Inst::SAddSat: Op = "+_\\text{s}^\\text{sat}"; break;
+      case Inst::USubSat: Op = "-_\\text{u}^\\text{sat}"; break;
+      case Inst::SSubSat: Op = "-_\\text{s}^\\text{sat}"; break;
+      case Inst::AShrExact: Op = "\\gg_\\text{s}^\\text{exact}"; break;
       // case Inst::KnownOnesP : Op = "<<=1"; break;
       // case Inst::KnownZerosP : Op = "<<=0"; break;
       default: Op = std::string("\\text{") + Inst::getKindName(I->K) + "}"; break;
@@ -627,8 +632,9 @@ struct LatexPrinter : public InfixPrinter {
         Result = Root ? Meat : "(" + Meat + ")";
       } else if (Ops.size() == 1) {
         Result = Op + "(" + printInst(Ops[0], S) + ")";
-      }
-      else {
+      } else if (I->K == Inst::Select) {
+        Result = printInst(Ops[0], S) + " \\: ? \\: " + printInst(Ops[1], S) + "\\: : \\:" + printInst(Ops[2], S);
+      } else {
         std::string Ret = Root ? "" : "(";
         Ret += Op;
         Ret += " ";
