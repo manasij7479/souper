@@ -54,6 +54,8 @@ static llvm::cl::opt<bool> PBA("pba",
 
 namespace {
 
+std::map<size_t, size_t> Hits;
+
 // Custom Creators
 
 class IRBuilder : public llvm::IRBuilder<NoFolder> {
@@ -956,7 +958,6 @@ namespace util {
 //    void dcmiss(size_t opt) {
 //      DCMiss[opt]++;
 //    }
-    std::map<size_t, size_t> Hits;
     std::map<size_t, int64_t> Cost;
 //    std::map<size_t, size_t> DCMiss;
     void print() {
@@ -1092,11 +1093,8 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
 
   bool processInst(Instruction *I, IRBuilder &Builder) {
     Builder.SetInsertPoint(I);
-//    llvm::errs() << "HERE0\n";
     if (auto V = getReplacement(I, &Builder)) {
-//      llvm::errs() << "HERE1\n";
       replace(I, V, Builder);
-//      llvm::errs() << "BAR\n";
       if (PBA) {
         std::error_code EC;
         llvm::raw_fd_ostream Out(std::to_string(St.last_hit) + "-" + std::to_string(St.Hits[St.last_hit]) + ".tgt.ll", EC);
@@ -1109,9 +1107,6 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
   }
   void replace(Instruction *I, Value *V, IRBuilder &Builder) {
     W->pushUsersToWorkList(*I);
-    if (I->hasOneUse()) {
-      llvm::errs() << "HEEYYYY\n";
-    }
     I->replaceAllUsesWith(V);
   }
   bool runThroughWorklist(IRBuilder &Builder) {
