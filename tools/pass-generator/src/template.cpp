@@ -55,6 +55,7 @@ static llvm::cl::opt<bool> PBA("pba",
 namespace {
 
 std::map<size_t, size_t> Hits;
+long counter = 0;
 
 // Custom Creators
 
@@ -950,7 +951,8 @@ namespace util {
       total_hits++;
       if (PBA) {
         std::error_code EC;
-        llvm::raw_fd_ostream Out(std::to_string(opt) + "-" + std::to_string(Hits[opt]) + ".src.ll", EC);
+        llvm::raw_fd_ostream Out(std::to_string(opt) + "-" + std::to_string(Hits[opt] + "-" +
+        std::to_string(counter)) + ".src.ll", EC);
         if (!EC) I->getModule()->print(Out, nullptr);
       }
 
@@ -1097,7 +1099,8 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
       replace(I, V, Builder);
       if (PBA) {
         std::error_code EC;
-        llvm::raw_fd_ostream Out(std::to_string(St.last_hit) + "-" + std::to_string(Hits[St.last_hit]) + ".tgt.ll", EC);
+        llvm::raw_fd_ostream Out(std::to_string(St.last_hit) + "-" + std::to_string(Hits[St.last_hit]+ "-" +
+        std::to_string(counter++) + ".tgt.ll", EC);
         if (!EC) I->getModule()->print(Out, nullptr);
       }
       return true;
