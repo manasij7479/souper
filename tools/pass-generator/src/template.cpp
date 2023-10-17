@@ -1100,7 +1100,7 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
       if (PBA) {
         std::error_code EC;
         llvm::raw_fd_ostream Out(std::to_string(St.last_hit) + "-" + std::to_string(Hits[St.last_hit]+ "-" +
-        std::to_string(counter++) + ".tgt.ll", EC);
+        std::to_string(counter++) + ".tgt.ll", EC));
         if (!EC) I->getModule()->print(Out, nullptr);
       }
       return true;
