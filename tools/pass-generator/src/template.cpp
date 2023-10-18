@@ -527,6 +527,14 @@ llvm::APInt xor_(llvm::APInt A, llvm::APInt B) {
   return A ^ B;
 }
 
+llvm::APInt xor_(llvm::APInt A, int B) {
+  return A ^ llvm::APInt(A.getBitWidth(), B, true);
+}
+
+llvm::APInt xor_(int B, llvm::APInt A) {
+  return A ^ llvm::APInt(A.getBitWidth(), B, true);
+}
+
 llvm::APInt and_(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A & B;
@@ -600,6 +608,14 @@ bool ule(llvm::APInt A, llvm::APInt B) {
 bool eq(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.eq(B);
+}
+
+bool eq(llvm::APInt A, int B) {
+  return A.eq(llvm::APInt(A.getBitWidth(), B, true));
+}
+
+bool eq(int B, llvm::APInt A) {
+  return A.eq(llvm::APInt(A.getBitWidth(), B, true));
 }
 
 bool ne(llvm::APInt A, llvm::APInt B) {
