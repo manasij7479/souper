@@ -517,7 +517,7 @@ struct LatexPrinter : public InfixPrinter {
       if (I->Val.ule(64)) {
         return llvm::toString(I->Val, 10, false);
       } else {
-        return "0x" + llvm::toString(I->Val, 16, false);
+        return "\\text{0x" + llvm::toString(I->Val, 16, false)+ "}";
       }
     } else if (I->K == Inst::Var) {
       auto Name = I->Name;
