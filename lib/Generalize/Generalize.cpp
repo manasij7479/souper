@@ -806,6 +806,11 @@ std::vector<Inst *> InferPotentialRelations(
         Results.push_back(Builder(XI, IC).Flip().Eq(YI)());
       }
 
+      // no common bits set
+      if ((XC & YC) == 0) {
+        Results.push_back(Builder(XI, IC).And(YI).Eq(llvm::APInt(XI->Width, 0))());
+      }
+
       if ((XC & YC) == XC) {
         Results.push_back(Builder(XI, IC).And(YI).Eq(XI)());
       }
@@ -824,8 +829,6 @@ std::vector<Inst *> InferPotentialRelations(
       if ((XC & YC) == YC) {
         Results.push_back(Builder(XI, IC).And(YI).Eq(YI)());
       }
-
-
 
       if ((XC | YC) == XC) {
         Results.push_back(Builder(XI, IC).Or(YI).Eq(XI)());
@@ -1155,17 +1158,17 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
     }
   }
 
-#define DF(Fact, Check)                                    \
-if (All(CVals[C], [](auto Val) { return Check;})) {        \
-C->Fact = true; auto s = SOLVE(); C->Fact = false;         \
-if(s) return Clone;};
+  #define DF(Fact, Check)                                    \
+  if (All(CVals[C], [](auto Val) { return Check;})) {        \
+  C->Fact = true; auto s = SOLVE(); C->Fact = false;         \
+  if(s) return Clone;};
 
-#define DF2(Fact1, Check1, Fact2, Check2)                     \
-if (All(CVals[C], [](auto Val) { return Check1 && Check2;})) {\
-C->Fact1 = true; C->Fact2 = true; auto s = SOLVE();           \
-C->Fact1 = false; C->Fact2 = false;                           \
-if(s) return Clone;};
-
+  #define DF2(C1, C2, Fact1, Check1, Fact2, Check2)             \
+  if (All(CVals[C1], [](auto Val) { return Check1;})) {         \
+  if (All(CVals[C2], [](auto Val) { return Check2;})) {         \
+  C1->Fact1 = true; C2->Fact2 = true; auto s = SOLVE();         \
+  C1->Fact1 = false; C2->Fact2 = false;                         \
+  if(s) return Clone;}};
 
   for (auto &&P : SymCS) {
     auto C = P.first;
@@ -1173,9 +1176,26 @@ if(s) return Clone;};
     DF(NonNegative, Val.uge(0));
     DF(NonZero, Val != 0);
     DF(Negative, Val.slt(0));
-    DF2(NonNegative, Val.uge(0), NonZero, Val != 0);
+    DF2(C, C, NonNegative, Val.uge(0), NonZero, Val != 0);
   }
-#undef DF
+
+  #undef DF
+
+  for (auto &&P1 : SymCS) {
+    for (auto &&P2 : SymCS) {
+      if (P1.first == P2.first) {
+        continue;
+      }
+      auto C1 = P1.first;
+      auto C2 = P2.first;
+      DF2(C1, C2, NonZero, Val != 0, NonZero, Val != 0);
+      DF2(C1, C2, NonNegative, Val.uge(0), NonNegative, Val.uge(0));
+      DF2(C1, C2, Negative, Val.slt(0), Negative, Val.slt(0));
+      DF2(C1, C2, PowOfTwo, Val.isPowerOf2(), PowOfTwo, Val.isPowerOf2());
+    }
+  }
+  #undef DF2
+
 
   return Clone;
 }
@@ -1232,7 +1252,8 @@ void SortPredsByModelCount(std::vector<Inst *> &Preds) {
 
 std::optional<ParsedReplacement> VerifyWithRels(InstContext &IC, Solver *S,
                                  ParsedReplacement Input,
-                                 std::vector<Inst *> &Rels) {
+                                 std::vector<Inst *> &Rels,
+                                 std::map<Inst *, llvm::APInt> SymCS = {}) {
   std::vector<Inst *> ValidRels;
 
   ParsedReplacement FirstValidResult = Input;
@@ -1244,6 +1265,10 @@ std::optional<ParsedReplacement> VerifyWithRels(InstContext &IC, Solver *S,
     // IP(llvm::errs());
 
     auto Clone = Verify(Input, IC, S);
+
+    if (!Clone && !SymCS.empty()) {
+      Clone = SimplePreconditionsAndVerifyGreedy(Input, IC, S, SymCS);
+    }
 
     // InfixPrinter IP(Input);
     // IP(llvm::errs());
@@ -2237,7 +2262,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
   }
 
-
   Refresh("Prelude");
   // Step 1 : Just direct symbolize for common consts, no constraints
 
@@ -2346,7 +2370,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         //   llvm::errs() << "\n";
         // }
 
-        Clone = VerifyWithRels(IC, S, Rep, Relations);
+        Clone = VerifyWithRels(IC, S, Rep, Relations, SymCS);
 
         if (Clone) {
           return Clone;
@@ -2392,7 +2416,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   Refresh("Direct + simple rel constraints");
 
-  // Step 2 : Symbolize LHS Consts with KB, CR, SimpleDF constrains
+  // Step 2 : Symbolize LHS Consts with SimpleDF constrains
   if (RHSFresh.empty()) {
     auto Copy = Replace(Input, IC, JustLHSSymConstMap);
 
@@ -2401,8 +2425,13 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       return Clone;
     }
 
-    if (Relations.size() < 10) {
+    if (Relations.size() < 100) {
       for (auto &&R : Relations) {
+
+        ReplacementContext RC;
+        RC.printInst(R, llvm::errs(), true);
+        llvm::errs() << "\n";
+
         Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
         auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
         if (Clone) {
@@ -2411,13 +2440,8 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         Copy.PCs.pop_back();
       }
     }
-    Refresh("LHS Constraints");
+    Refresh("LHS with Rels");
 
-    // Clone = DFPreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
-    // if (Clone) {
-    //   return Clone;
-    // }
-    // Refresh("LHS DF Constraints");
   }
 
   Refresh("All LHS Constraints");
@@ -3034,7 +3058,9 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
       return std::nullopt;
     }
 
+  // llvm::errs() << "HERE\n";
   ParsedReplacement Result = ReduceBasic(IC, S, Input);
+  // llvm::errs() << "HERE\n";
 
   bool Changed = false;
   size_t MaxTries = 1; // Increase this if we ever run with 10/100x timeout.
