@@ -1158,9 +1158,9 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
     }
   }
 
-  #define DF(Fact, Check)                                    \
-  if (All(CVals[C], [](auto Val) { return Check;})) {        \
-  C->Fact = true; auto s = SOLVE(); C->Fact = false;         \
+  #define DF(Fact, Check)                                       \
+  if (All(CVals[C], [](auto Val) { return Check;})) {           \
+  C->Fact = true; auto s = SOLVE(); C->Fact = false;            \
   if(s) return Clone;};
 
   #define DF2(C1, C2, Fact1, Check1, Fact2, Check2)             \
@@ -1170,6 +1170,16 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
   C1->Fact1 = false; C2->Fact2 = false;                         \
   if(s) return Clone;}};
 
+  #define DF3(C1, C2, C3, Fact1, Check1, Fact2, Check2, Fact3, Check3)\
+  if (All(CVals[C1], [](auto Val) { return Check1;})) {         \
+  if (All(CVals[C2], [](auto Val) { return Check2;})) {         \
+  if (All(CVals[C3], [](auto Val) { return Check3;})) {         \
+  C1->Fact1 = true; C2->Fact2 = true; C3->Fact3 = true;         \
+  auto s = SOLVE();                                             \
+  C1->Fact1 = false; C2->Fact2 = false; C3->Fact3 = false;      \
+  if(s) return Clone;}}};
+
+
   for (auto &&P : SymCS) {
     auto C = P.first;
     DF(PowOfTwo, Val.isPowerOf2()); // Invoke solver only if Val is a power of 2
@@ -1177,24 +1187,33 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
     DF(NonZero, Val != 0);
     DF(Negative, Val.slt(0));
     DF2(C, C, NonNegative, Val.uge(0), NonZero, Val != 0);
+    for (auto &&P2 : SymCS) {
+      if (P.first == P2.first) {
+        continue;
+      }
+      auto C2 = P2.first;
+      DF2(C, C2, NonZero, Val != 0, NonZero, Val != 0);
+      DF2(C, C2, NonNegative, Val.uge(0), NonNegative, Val.uge(0));
+      DF2(C, C2, Negative, Val.slt(0), Negative, Val.slt(0));
+      DF2(C, C2, PowOfTwo, Val.isPowerOf2(), PowOfTwo, Val.isPowerOf2());
+
+      for (auto &&P3 : SymCS) {
+        if (P.first == P3.first) {
+          continue;
+        }
+        if (P2.first == P3.first) {
+          continue;
+        }
+        auto C3 = P3.first;
+        DF3(C, C2, C3, PowOfTwo, Val.isPowerOf2(), PowOfTwo, Val.isPowerOf2(), PowOfTwo, Val.isPowerOf2());
+
+      }
+    }
   }
 
   #undef DF
-
-  for (auto &&P1 : SymCS) {
-    for (auto &&P2 : SymCS) {
-      if (P1.first == P2.first) {
-        continue;
-      }
-      auto C1 = P1.first;
-      auto C2 = P2.first;
-      DF2(C1, C2, NonZero, Val != 0, NonZero, Val != 0);
-      DF2(C1, C2, NonNegative, Val.uge(0), NonNegative, Val.uge(0));
-      DF2(C1, C2, Negative, Val.slt(0), Negative, Val.slt(0));
-      DF2(C1, C2, PowOfTwo, Val.isPowerOf2(), PowOfTwo, Val.isPowerOf2());
-    }
-  }
   #undef DF2
+  #undef DF3
 
 
   return Clone;
@@ -1408,7 +1427,7 @@ FirstValidCombination(ParsedReplacement Input,
       }
 
       if (!Rels.empty()) {
-        auto Result = VerifyWithRels(IC, S, P, Rels);
+        auto Result = VerifyWithRels(IC, S, P, Rels, SymCS);
         if (Result) {
           Clone = *Result;
           return true;
@@ -2321,25 +2340,27 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Special expressions, no constants, no constraints");
 
-  for (auto C : LHSConsts) {
+  if (RHSFresh.empty()) {
+    for (auto C : LHSConsts) {
 
-    std::map<Inst *, Inst *> TargetConstMap;
-    TargetConstMap[C] = SymConstMap[C];
-    auto Rep = Replace(Input, IC, TargetConstMap);
+      std::map<Inst *, Inst *> TargetConstMap;
+      TargetConstMap[C] = SymConstMap[C];
+      auto Rep = Replace(Input, IC, TargetConstMap);
 
-    auto Clone = Verify(Rep, IC, S);
-    if (!Clone) {
-      Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
+      auto Clone = Verify(Rep, IC, S);
+      if (!Clone) {
+        Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
+      }
+      if (Clone) {
+        bool changed = false;
+        auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
+        return changed ? Gen : Clone;
+      }
     }
-    if (Clone) {
-      bool changed = false;
-      auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
-      return changed ? Gen : Clone;
-    }
+    Refresh("Symbolize common consts, one by one");
   }
-  Refresh("Symbolize common consts, one by one");
 
-  if (LHSConsts.size() > 2 && LHSConsts.size() < 5) {
+  if (LHSConsts.size() > 2 && LHSConsts.size() < 5 && RHSFresh.empty()) {
     for (auto C1 : LHSConsts) {
       for (auto C2 : LHSConsts) {
         if (C1 == C2 || C1->Width != C2->Width) {
@@ -3058,9 +3079,7 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
       return std::nullopt;
     }
 
-  // llvm::errs() << "HERE\n";
   ParsedReplacement Result = ReduceBasic(IC, S, Input);
-  // llvm::errs() << "HERE\n";
 
   bool Changed = false;
   size_t MaxTries = 1; // Increase this if we ever run with 10/100x timeout.

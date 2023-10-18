@@ -30,6 +30,7 @@
 
 #include <map>
 #include <fstream>
+#include <filesystem>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -1123,18 +1124,24 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
   }
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
+    if (PBA) {
+      size_t id = 0;
+      while (std::filesystem::exists("global-" + std::to_string(id) + ".src.ll")) {
+        id++;
+      }
 
-//     if (Verify && verifyFunction(F))
-//       llvm::report_fatal_error(("function " + F.getName() + " broken before Souper").str().c_str());
-//
-    // TODO ENABLE Verification
-    //bool res;
-    //do {
-      //int n = 2;
-      runOnFunction(F, FAM);
-//       if (res && verifyFunction(F))
-//         llvm::report_fatal_error("function broken after Souper changed it");
-    //} while (res && --n);
+      std::error_code EC;
+      llvm::raw_fd_ostream Out("global-" + std::to_string(id) + ".src.ll", EC);
+      if (!EC) F->getModule()->print(Out, nullptr);
+    }
+
+    runOnFunction(F, FAM);
+
+    if (PBA) {
+      std::error_code EC;
+      llvm::raw_fd_ostream Out("global-" + std::to_string(id) + ".tgt.ll", EC);
+      if (!EC) F->getModule()->print(Out, nullptr);
+    }
 
     return PreservedAnalyses::none();
   }
