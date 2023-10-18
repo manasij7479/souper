@@ -1140,15 +1140,15 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
   }
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
+    size_t id = 0;
     if (PBA) {
-      size_t id = 0;
       while (std::filesystem::exists("global-" + std::to_string(id) + ".src.ll")) {
         id++;
       }
 
       std::error_code EC;
       llvm::raw_fd_ostream Out("global-" + std::to_string(id) + ".src.ll", EC);
-      if (!EC) F->getModule()->print(Out, nullptr);
+      if (!EC) F.getParent()->print(Out, nullptr);
     }
 
     runOnFunction(F, FAM);
@@ -1156,7 +1156,7 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
     if (PBA) {
       std::error_code EC;
       llvm::raw_fd_ostream Out("global-" + std::to_string(id) + ".tgt.ll", EC);
-      if (!EC) F->getModule()->print(Out, nullptr);
+      if (!EC) F.getParent()->print(Out, nullptr);
     }
 
     return PreservedAnalyses::none();
