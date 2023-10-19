@@ -1427,7 +1427,7 @@ FirstValidCombination(ParsedReplacement Input,
       }
 
       if (!Rels.empty()) {
-        auto Result = VerifyWithRels(IC, S, P, Rels, SymCS);
+        auto Result = VerifyWithRels(IC, S, P, Rels);
         if (Result) {
           Clone = *Result;
           return true;
@@ -2340,27 +2340,25 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Special expressions, no constants, no constraints");
 
-  if (RHSFresh.empty()) {
-    for (auto C : LHSConsts) {
+  for (auto C : LHSConsts) {
 
-      std::map<Inst *, Inst *> TargetConstMap;
-      TargetConstMap[C] = SymConstMap[C];
-      auto Rep = Replace(Input, IC, TargetConstMap);
+    std::map<Inst *, Inst *> TargetConstMap;
+    TargetConstMap[C] = SymConstMap[C];
+    auto Rep = Replace(Input, IC, TargetConstMap);
 
-      auto Clone = Verify(Rep, IC, S);
-      if (!Clone) {
-        Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
-      }
-      if (Clone) {
-        bool changed = false;
-        auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
-        return changed ? Gen : Clone;
-      }
+    auto Clone = Verify(Rep, IC, S);
+    if (!Clone) {
+      Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
     }
-    Refresh("Symbolize common consts, one by one");
+    if (Clone) {
+      bool changed = false;
+      auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
+      return changed ? Gen : Clone;
+    }
   }
+  Refresh("Symbolize common consts, one by one");
 
-  if (LHSConsts.size() > 2 && LHSConsts.size() < 5 && RHSFresh.empty()) {
+  if (LHSConsts.size() > 2 && LHSConsts.size() < 5) {
     for (auto C1 : LHSConsts) {
       for (auto C2 : LHSConsts) {
         if (C1 == C2 || C1->Width != C2->Width) {
@@ -2448,11 +2446,6 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
     if (Relations.size() < 100) {
       for (auto &&R : Relations) {
-
-        ReplacementContext RC;
-        RC.printInst(R, llvm::errs(), true);
-        llvm::errs() << "\n";
-
         Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
         auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
         if (Clone) {
