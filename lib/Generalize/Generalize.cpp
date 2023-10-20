@@ -1036,7 +1036,6 @@ std::set<Inst *, Cmp> findConcreteConsts(Inst *I) {
   for (auto R : Results) {
     Ret.insert(R);
   }
-  Ret.erase(I);
   return Ret;
 }
 
