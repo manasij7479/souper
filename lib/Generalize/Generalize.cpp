@@ -944,13 +944,13 @@ std::vector<Inst *> InferPotentialRelations(
         if (XI->Width > YI->Width) {
           Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).ZExt(XI->Width))());
           Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).ZExt(XI->Width))());
-          // Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).SExt(XI->Width))());
-          // Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).SExt(XI->Width))());
+          Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).SExt(XI->Width))());
+          Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).SExt(XI->Width))());
         } else if (XI->Width < YI->Width) {
           Results.push_back(Builder(XI, IC).ZExt(YI->Width).Ult(YI)());
           Results.push_back(Builder(XI, IC).ZExt(YI->Width).Slt(YI)());
-          // Results.push_back(Builder(XI, IC).SExt(YI->Width).Ult(YI)());
-          // Results.push_back(Builder(XI, IC).SExt(YI->Width).Slt(YI)());
+          Results.push_back(Builder(XI, IC).SExt(YI->Width).Ult(YI)());
+          Results.push_back(Builder(XI, IC).SExt(YI->Width).Slt(YI)());
         }
       }
 
@@ -2158,7 +2158,7 @@ ParsedReplacement ReduceBasic(InstContext &IC,
   }
   Input = R.ReducePCs(Input);
   Input = R.ReducePCsToDF(Input);
-  Input = R.ReducePoison(Input);
+  // Input = R.ReducePoison(Input);
   return Input;
 }
 
@@ -2358,7 +2358,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Symbolize common consts, one by one");
 
-  if (LHSConsts.size() > 2 && LHSConsts.size() < 5) {
+  if (LHSConsts.size() >= 2 && LHSConsts.size() < 5) {
     for (auto C1 : LHSConsts) {
       for (auto C2 : LHSConsts) {
         if (C1 == C2 || C1->Width != C2->Width) {
@@ -2408,7 +2408,14 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     // FIXME : Figure out how to get CEX for symbolic dataflow
   }
 
+  // Input.print(llvm::errs(), true);
+  // llvm::errs() << "LC " << LHSConsts.size() << "\n";
+  // llvm::errs() << "RC " << RHSConsts.size() << "\n";
+  // llvm::errs() << "RF " << RHSFresh.size() << "\n";
+
+  // llvm::errs() << "CM " << ConstMap.size() << "\n";
   auto Relations = InferPotentialRelations(ConstMap, IC, Input, CounterExamples, Nested);
+  // llvm::errs() << "Relations " << Relations.size() << "\n";
 
   std::map<Inst *, Inst *> JustLHSSymConstMap;
 
@@ -2436,8 +2443,8 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   Refresh("Direct + simple rel constraints");
 
   // Step 2 : Symbolize LHS Consts with SimpleDF constrains
-  if (RHSFresh.empty()) {
-    auto Copy = Replace(Input, IC, JustLHSSymConstMap);
+  // if (RHSFresh.empty()) {
+    Copy = Replace(Input, IC, JustLHSSymConstMap);
 
     auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
     if (Clone) {
@@ -2447,6 +2454,12 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     if (Relations.size() < 100) {
       for (auto &&R : Relations) {
         Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
+
+        InfixPrinter IP(Copy, true);
+        IP(llvm::errs());
+
+        Copy.print(llvm::errs(), true);
+
         auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
         if (Clone) {
           return Clone;
@@ -2456,7 +2469,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
     Refresh("LHS with Rels");
 
-  }
+  // }
 
   Refresh("All LHS Constraints");
   // Step 3 : Special RHS constant exprs, no constants
@@ -2464,7 +2477,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   if (!RHSFresh.empty()) {
 
   std::vector<std::vector<Inst *>> UnitaryCandidates =
-    InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth*/0);
+    InferSpecialConstExprsAllSym(RHSFresh, ConstMap, IC, /*depth*/1);
 
   // llvm::errs() << "Unitary candidates: " << UnitaryCandidates[0].size() << "\n";
 
@@ -2475,6 +2488,12 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     //   llvm::errs() << "FOO: " << UnitaryCandidates[0][0]->Name << "\n";
     // }
 
+    // llvm::errs() << "Rels: " << Relations.size() << "\n";
+    // for (auto I : Relations) {
+    //   ReplacementContext RC;
+    //   RC.printInst(I, llvm::errs(), true);
+    //   llvm::errs() << "\n";
+    // }
     auto Clone = FirstValidCombination(Input, RHSFresh, UnitaryCandidates,
                                   InstCache, IC, S, SymCS, true, false, false, Relations);
     if (Clone) {

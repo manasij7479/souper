@@ -15,10 +15,17 @@
 #include "souper/Generalize/Reducer.h"
 #include "souper/Tool/GetSolver.h"
 #include "souper/Util/DfaUtils.h"
+
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
+
 #include <cstdlib>
 #include <sstream>
 #include <iostream>
 #include <optional>
+
+
 
 using namespace llvm;
 using namespace souper;
@@ -37,11 +44,85 @@ InputFilename(cl::Positional, cl::desc("<input souper optimization>"),
               cl::init("-"));
 
 
+
 struct SymbolTable {
-  SymbolTable() {
+
+  // Every object is a list of strings
+// Serialize through constructor
+// deserialize through templated getter
+
+struct StoredObject {
+  std::vector<std::string> Data;
+  enum class Attr {
+    Type,
+    WidthIndependent
+  };
+  std::unordered_map<Attr, std::string> Attributes;
+
+  StoredObject() {
+    Attributes[Attr::Type] = "none";
+  }
+
+  StoredObject(const ParsedReplacement &PR) {
+    Data.push_back("");
+    llvm::raw_string_ostream OS(Data.back());
+    PR.print(OS);
+    OS.flush();
+    Attributes[Attr::Type] = "replacement";
+  }
+
+  StoredObject(std::unique_ptr<llvm::Module> M) {
+    Data.push_back("");
+    llvm::raw_string_ostream OS(Data.back());
+    M->print(OS, nullptr);
+    OS.flush();
+    Attributes[Attr::Type] = "module";
+  }
+
+  template <typename T>
+  std::optional<T> get(SymbolTable *S) {
+    return std::nullopt;
+  }
+
+  template <>
+  std::optional<ParsedReplacement> get(SymbolTable *S) {
+    if (Data.size() != 1) return std::nullopt;
+    std::string ErrStr;
+    llvm::MemoryBufferRef MB(Data[0], "temp");
+    auto Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
+                                MB.getBuffer(), ErrStr);
+    if (!ErrStr.empty()) {
+      llvm::errs() << ErrStr << '\n';
+      return std::nullopt;
+    }
+    return Rep;
+  }
+
+  template <>
+  std::optional<std::unique_ptr<llvm::Module>> get(SymbolTable *S) {
+    if (Data.size() != 1) return std::nullopt;
+    std::string ErrStr;
+    llvm::MemoryBufferRef MB(Data[0], "temp");
+    // auto M = getLazyIRModule(MB, ErrStr, S->LC,
+    //                          /*ShouldLazyLoadMetadata=*/true);
+    std::unique_ptr<llvm::Module> M;
+    if (!M) {
+      llvm::errs() << ErrStr << '\n';
+      return std::nullopt;
+    }
+    return std::move(M);
+  }
+
+};
+
+  SymbolTable(InstContext &IC_) : IC(IC_) {
     push();
   }
-  std::vector<std::unordered_map<std::string, ParsedReplacement>> Tables;
+
+  InstContext &IC;
+  LLVMContext LC;
+  std::vector<std::unordered_map<std::string, StoredObject>> Tables;
+
   void push() {
     Tables.push_back({});
   }
@@ -57,7 +138,7 @@ struct SymbolTable {
     for (auto I = Tables.rbegin(), E = Tables.rend(); I != E; ++I) {
       auto It = I->find(Name);
       if (It != I->end())
-        return It->second;
+        return It->second.get<ParsedReplacement>(this);
     }
     return std::nullopt;
   }
@@ -71,12 +152,17 @@ struct SymbolTable {
     }
   }
   void put(const std::string &Name, const ParsedReplacement &PR) {
-    Tables.back()[Name] = PR;
+    // PR.print(llvm::errs(), true);
+    Tables.back()[Name] = StoredObject(PR);
   }
-  void current(const ParsedReplacement &PR) {
+
+  void current(const ParsedReplacement &PR, bool WIFlag = false) {
     if (Tables.empty()) push();
-    Tables.back()["_"] = PR;
+    Tables.back()["_"] = StoredObject(PR);
+    Tables.back()["_"].Attributes[StoredObject::Attr::WidthIndependent] =
+      WIFlag ? "true" : "false";
   }
+
   void current(const std::string &name) {
     if (name == "_") return;
     if (Tables.empty()) push();
@@ -84,6 +170,7 @@ struct SymbolTable {
       Tables.back()["_"] = I.value();
     }
   }
+
 };
 
 void PrettyPrint(std::string Name, SymbolTable &Tab) {
@@ -102,13 +189,15 @@ void PrettyPrint(std::string Name, SymbolTable &Tab) {
 
 struct REPL {
   REPL(InstContext &IC, Solver *S, std::vector<ParsedReplacement> &Inputs)
-      : IC(IC), S(S), Inputs(Inputs) {
+      : IC(IC), S(S), Inputs(Inputs), Tab(IC) {
     for (size_t i = 0 ; i < Inputs.size(); ++i) {
       auto Name = "_" + std::to_string(i);
       Tab.put(Name, Inputs[i]);
     }
     // The current input is _ by default
-    Tab.put("_", Inputs[0]);
+    if (!Inputs.empty()) {
+      Tab.put("_", Inputs[0]);
+    }
   }
   InstContext &IC;
   Solver *S;
@@ -154,13 +243,48 @@ struct REPL {
         if (auto Gen = GeneralizeRep(In.value(), IC, S)) {
           InfixPrinter IP(Gen.value());
           IP(llvm::outs());
-          Tab.current(Gen.value());
+          Tab.current(Gen.value(), true);
         } else {
           llvm::outs() << "No generalization found\n";
         }
       }
       return true;
     }
+
+    // matcher-gen
+    if (match(Cmds[0], {"mg", "matcher-gen"})) {
+      if (auto In = Tab.warn_get(Cmds[1])) {
+        // execute the matcher-gen binary
+        std::string MatcherGenOutput;
+        if (auto In = Tab.warn_get(Cmds[1])) {
+          std::string MatcherGenCommand = "./matcher-gen";
+          FILE *MatcherGenPipe = popen(MatcherGenCommand.c_str(), "w");
+          if (MatcherGenPipe) {
+            // Write the contents of In to the pipe
+
+            std::string data;
+            llvm::raw_string_ostream OS(data);
+            In.value().print(OS, true);
+
+            fwrite(data.c_str(), sizeof(char), data.size(), MatcherGenPipe);
+            pclose(MatcherGenPipe);
+          } else {
+            llvm::errs() << "Failed to execute matcher-gen\n";
+          }
+          char buffer[1024];
+          while (fgets(buffer, sizeof(buffer), MatcherGenPipe) != NULL) {
+            MatcherGenOutput += buffer;
+          }
+          pclose(MatcherGenPipe);
+
+          // store the output as text
+          llvm::outs() << MatcherGenOutput;
+        }
+
+      }
+      return true;
+    }
+
 
     // infer
     if (match(Cmds[0], {"i", "infer"})) {
@@ -229,8 +353,9 @@ struct REPL {
       if (Cmds[0] == "exit" || Cmds[0] == "quit" || Cmds[0] == "q") break;
       if (dispatch(Cmds)) continue;
       if (auto Obj = Tab.get(Cmds[0])) {
-        InfixPrinter IP(Obj.value());
-        IP(llvm::outs());
+        Cmds.push_back(Cmds[0]);
+        Cmds[0] = "p";
+        dispatch(Cmds);
         continue;
       } else {
         llvm::errs() << "Unknown command or name: " << Cmds[0] << '\n';
