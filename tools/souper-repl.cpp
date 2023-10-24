@@ -399,7 +399,7 @@ struct REPL {
           llvm::raw_string_ostream OS(data);
           In->get<ParsedReplacement>(&Tab).value().print(OS, true);
           auto MatcherGenOutput = executeCommandWithInput(MatcherGenCommand, OS.str());
-          llvm::outs() << "Generated matcher. Stored in _.\n";
+          llvm::outs() << "Generated matcher successfully.\n";
           Tab.put("_", MatcherGenOutput);
         }
 
@@ -478,14 +478,15 @@ struct REPL {
       auto Split = SplitCommands(Cmds);
 
       for (auto SubCmds : Split) {
-        if (dispatch(SubCmds.first)) continue;
-        if (auto Obj = Tab.get(SubCmds.first[0])) {
-          Cmds.push_back(SubCmds.first[0]);
-          Cmds[0] = "p";
-          dispatch(Cmds);
-          continue;
-        } else {
-          llvm::errs() << "Unknown command or name: " << Cmds[0] << '\n';
+        if (!dispatch(SubCmds.first)) {
+          if (auto Obj = Tab.get(SubCmds.first[0])) {
+            Cmds.push_back(SubCmds.first[0]);
+            Cmds[0] = "p";
+            dispatch(Cmds);
+          } else {
+            llvm::errs() << "Unknown command or name: " << Cmds[0] << '\n';
+            break;
+          }
         }
 
         if (SubCmds.second != "") {
