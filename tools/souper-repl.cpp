@@ -477,6 +477,8 @@ struct REPL {
 
       auto Split = SplitCommands(Cmds);
 
+      size_t cmd_index = 0;
+
       for (auto SubCmds : Split) {
         if (!dispatch(SubCmds.first)) {
           if (auto Obj = Tab.get(SubCmds.first[0])) {
@@ -493,6 +495,10 @@ struct REPL {
           Tab.put(SubCmds.second, Tab.get("_").value());
         }
 
+        if (cmd_index != Split.size() - 1) {
+          llvm::outs() << "----------------------------\n";
+        }
+        ++cmd_index;
       }
 
 
