@@ -71,9 +71,17 @@ struct StoredObject {
   StoredObject(const ParsedReplacement &PR) {
     Data.push_back("");
     llvm::raw_string_ostream OS(Data.back());
-    PR.print(OS, true);
-    OS.flush();
-    Attributes[Attr::Type] = "replacement";
+
+    if (PR.Mapping.RHS) {
+      PR.print(OS, true);
+      OS.flush();
+      Attributes[Attr::Type] = "replacement";
+    } else {
+      ReplacementContext RC;
+      PR.printLHS(OS, RC, true);
+      OS.flush();
+      Attributes[Attr::Type] = "lhs";
+    }
   }
 
   StoredObject(std::unique_ptr<llvm::Module> M) {
@@ -91,20 +99,34 @@ struct StoredObject {
 
   template <>
   std::optional<ParsedReplacement> get(SymbolTable *S) {
-    if (Attributes[Attr::Type] != "replacement") {
+    if (Attributes[Attr::Type] != "replacement" && Attributes[Attr::Type] != "lhs") {
       llvm::errs() << "Expected replacement, got " << Attributes[Attr::Type] << '\n';
       return std::nullopt;
     }
     if (Data.size() != 1) return std::nullopt;
     std::string ErrStr;
     llvm::MemoryBufferRef MB(Data[0], "temp");
-    auto Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
-                                MB.getBuffer(), ErrStr);
-    if (!ErrStr.empty()) {
-      llvm::errs() << ErrStr << '\n';
-      return std::nullopt;
+
+    if (Attributes[Attr::Type] == "replacement") {
+      auto Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
+                                  MB.getBuffer(), ErrStr);
+      if (!ErrStr.empty()) {
+        llvm::errs() << ErrStr << '\n';
+        return std::nullopt;
+      }
+      return Rep;
     }
-    return Rep;
+    if (Attributes[Attr::Type] == "lhs") {
+      ReplacementContext RC;
+      auto Rep = ParseReplacementLHS(S->IC, MB.getBufferIdentifier(),
+                                  MB.getBuffer(), RC, ErrStr);
+      if (!ErrStr.empty()) {
+        llvm::errs() << ErrStr << '\n';
+        return std::nullopt;
+      }
+      return Rep;
+    }
+    return std::nullopt;
   }
 
   // template <>
@@ -210,10 +232,12 @@ void PrettyPrint(std::string Name, SymbolTable &Tab) {
   auto In = Tab.warn_get(Name);
   if (!In) return;
 
-  if (In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "replacement") {
-
+  if (In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "replacement" ||
+      In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "lhs") {
     auto Rep = In.value().get<ParsedReplacement>(&Tab);
-    InfixPrinter IP(Rep.value());
+
+    bool WIFlag = In.value().Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
+    InfixPrinter IP(Rep.value(), !WIFlag);
     IP(llvm::outs());
   } else if (In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "string") {
     llvm::outs() << In.value().Data[0] << '\n';
@@ -379,7 +403,7 @@ struct REPL {
       if (auto In = Tab.warn_get(Cmds[1])) {
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
         if (auto Gen = GeneralizeRep(Rep, IC, S)) {
-          InfixPrinter IP(Gen.value());
+          InfixPrinter IP(Gen.value(), false);
           IP(llvm::outs());
           Tab.current(Gen.value(), true);
         } else {
@@ -416,7 +440,7 @@ struct REPL {
     }
 
     // matcher-gen
-    if (match(Cmds[0], {"mg", "matcher-gen"})) {
+    if (match(Cmds[0], {"mg", "matcher-gen", "matcher"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
         // execute the matcher-gen binary
         std::string MatcherGenOutput;
@@ -448,6 +472,13 @@ struct REPL {
     if (match(Cmds[0], {"s", "shrink"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        // enforce that type of In is replacement
+        if (In->Attributes[SymbolTable::StoredObject::Attr::Type] != "replacement") {
+          llvm::errs() << "Expected replacement, got " << In->Attributes[SymbolTable::StoredObject::Attr::Type] << '\n';
+          return true;
+        }
+
+
         if (auto Shr = ShrinkRep(Rep, IC, S)) {
           InfixPrinter IP(Shr.value());
           IP(llvm::outs());
@@ -458,9 +489,6 @@ struct REPL {
       }
       return true;
     }
-
-    // use matcher to optimize llvm ir
-    // TODO
 
     // infer
     if (match(Cmds[0], {"i", "infer"})) {
@@ -490,7 +518,9 @@ struct REPL {
       return true;
     }
 
-    // Compile
+    // constant synthesis
+
+    // Compile matcher
 
     // push
     if (match(Cmds[0], {"push"})) {
@@ -588,6 +618,8 @@ int main(int argc, char **argv) {
     std::vector<ReplacementContext> Contexts;
     Inputs = ParseReplacementLHSs(IC, Data.getBufferIdentifier(), Data.getBuffer(),
                                 Contexts, ErrStr);
+  } else {
+
   }
 
   llvm::outs() << "Got " << Inputs.size() << " inputs\n";
