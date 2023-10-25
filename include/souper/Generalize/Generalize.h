@@ -23,6 +23,10 @@ ParsedReplacement ReducePoison(
   Solver *S,
   ParsedReplacement Input);
 
+std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement &Input,
+                                            InstContext &IC,
+                                            Solver *S);
+
 }
 
 #endif
