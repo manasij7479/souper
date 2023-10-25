@@ -63,7 +63,7 @@ struct StoredObject {
     Attributes[Attr::Type] = "none";
   }
 
-  StoredObject(const std::string &Str) {
+  StoredObject(const std::string &Str, std::string Type = "string") {
     Data.push_back(Str);
     Attributes[Attr::Type] = "string";
   }
@@ -91,6 +91,10 @@ struct StoredObject {
 
   template <>
   std::optional<ParsedReplacement> get(SymbolTable *S) {
+    if (Attributes[Attr::Type] != "replacement") {
+      llvm::errs() << "Expected replacement, got " << Attributes[Attr::Type] << '\n';
+      return std::nullopt;
+    }
     if (Data.size() != 1) return std::nullopt;
     std::string ErrStr;
     llvm::MemoryBufferRef MB(Data[0], "temp");
@@ -252,7 +256,7 @@ std::vector<std::pair<std::vector<std::string>, std::string>> SplitCommands(std:
   return Result;
 }
 
-std::string executeCommandWithInput(const std::string& command, const std::string& input) {
+std::optional<std::string> executeCommandWithInput(const std::string& command, const std::string& input) {
     int pipeToChild[2];
     int pipeToParent[2];
 
@@ -315,7 +319,7 @@ std::string executeCommandWithInput(const std::string& command, const std::strin
             return result;
         }
 
-        return "";
+        return std::nullopt;
     }
 }
 
@@ -385,6 +389,32 @@ struct REPL {
       return true;
     }
 
+    // reduce
+    if (match(Cmds[0], {"r", "reduce"})) {
+      if (auto In = Tab.warn_get(Cmds[1])) {
+        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        auto Red = ReduceBasic(IC, S, Rep);
+        InfixPrinter IP(Red);
+        IP(llvm::outs());
+        bool WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
+        Tab.current(Red, WIFlag);
+      }
+      return true;
+    }
+
+    // reduce-poison
+    if (match(Cmds[0], {"rp", "reduce-poison"})) {
+      if (auto In = Tab.warn_get(Cmds[1])) {
+        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        auto Red = ReducePoison(IC, S, Rep);
+        InfixPrinter IP(Red);
+        IP(llvm::outs());
+        bool WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
+        Tab.current(Red, WIFlag);
+      }
+      return true;
+    }
+
     // matcher-gen
     if (match(Cmds[0], {"mg", "matcher-gen"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
@@ -392,17 +422,24 @@ struct REPL {
         std::string MatcherGenOutput;
         if (auto In = Tab.warn_get(Cmds[1])) {
           // get width indepdendent flag from In
+          auto WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
+          std::string MatcherGenCommand = "./matcher-gen";
+          if (WIFlag) {
+            MatcherGenCommand += " --explicit-width-checks ";
+          }
 
-
-          std::string MatcherGenCommand = "./matcher-gen --explicit-width-checks";
           std::string data;
           llvm::raw_string_ostream OS(data);
           In->get<ParsedReplacement>(&Tab).value().print(OS, true);
           auto MatcherGenOutput = executeCommandWithInput(MatcherGenCommand, OS.str());
-          llvm::outs() << "Generated matcher successfully.\n";
-          Tab.put("_", MatcherGenOutput);
-        }
 
+          if (MatcherGenOutput.has_value()) {
+            llvm::outs() << "Generated matcher successfully.\n";
+            Tab.put("_", SymbolTable::StoredObject(MatcherGenOutput.value(), "matcher"));
+          } else {
+            llvm::errs() << "Matcher generation failed.\n";
+          }
+        }
       }
       return true;
     }

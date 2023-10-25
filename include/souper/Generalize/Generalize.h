@@ -12,6 +12,17 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &input,
                                             InstContext &IC,
                                             Solver *S);
 void PrintInputAndResult(ParsedReplacement Input, ParsedReplacement Result);
+
+ParsedReplacement ReduceBasic(
+  InstContext &IC,
+  Solver *S,
+  ParsedReplacement Input);
+
+ParsedReplacement ReducePoison(
+  InstContext &IC,
+  Solver *S,
+  ParsedReplacement Input);
+
 }
 
 #endif
