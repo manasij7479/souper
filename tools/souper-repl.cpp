@@ -444,6 +444,23 @@ struct REPL {
       return true;
     }
 
+    // shrink
+    if (match(Cmds[0], {"s", "shrink"})) {
+      if (auto In = Tab.warn_get(Cmds[1])) {
+        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        if (auto Shr = ShrinkRep(Rep, IC, S)) {
+          InfixPrinter IP(Shr.value());
+          IP(llvm::outs());
+          Tab.current(Shr.value());
+        } else {
+          llvm::outs() << "Could not shrink.\n";
+        }
+      }
+      return true;
+    }
+
+    // use matcher to optimize llvm ir
+    // TODO
 
     // infer
     if (match(Cmds[0], {"i", "infer"})) {
@@ -472,6 +489,8 @@ struct REPL {
       }
       return true;
     }
+
+    // Compile
 
     // push
     if (match(Cmds[0], {"push"})) {

@@ -2461,10 +2461,10 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       for (auto &&R : Relations) {
         Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
 
-        InfixPrinter IP(Copy, true);
-        IP(llvm::errs());
+        // InfixPrinter IP(Copy, true);
+        // IP(llvm::errs());
 
-        Copy.print(llvm::errs(), true);
+        // Copy.print(llvm::errs(), true);
 
         auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
         if (Clone) {
@@ -3003,6 +3003,16 @@ InstantiateWidthChecks(InstContext &IC,
     }
   }
   return {Input, false};
+}
+
+std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement &Input,
+                                            InstContext &IC,
+                                            Solver *S) {
+  if (hasMultiArgumentPhi(Input.Mapping.LHS)) {
+    return std::nullopt;
+  }
+  ShrinkWrap Shrink(IC, S, Input, 8);
+  return Shrink();
 }
 
 std::optional<ParsedReplacement> GeneralizeShrinked(
