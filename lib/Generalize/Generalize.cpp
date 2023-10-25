@@ -2364,7 +2364,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
   Refresh("Symbolize common consts, one by one");
 
-  if (LHSConsts.size() >= 2 && LHSConsts.size() < 5) {
+  if (LHSConsts.size() >= 2 && LHSConsts.size() < 5 && RHSFresh.empty()) {
     for (auto C1 : LHSConsts) {
       for (auto C2 : LHSConsts) {
         if (C1 == C2 || C1->Width != C2->Width) {
@@ -2449,7 +2449,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   Refresh("Direct + simple rel constraints");
 
   // Step 2 : Symbolize LHS Consts with SimpleDF constrains
-  // if (RHSFresh.empty()) {
+  if (RHSFresh.empty()) {
     Copy = Replace(Input, IC, JustLHSSymConstMap);
 
     auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
@@ -2475,7 +2475,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     }
     Refresh("LHS with Rels");
 
-  // }
+  }
 
   Refresh("All LHS Constraints");
   // Step 3 : Special RHS constant exprs, no constants
@@ -2726,6 +2726,78 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       return Clone;
     }
     Refresh("Sketchy cands with relations");
+  }
+
+  {
+    Copy = Replace(Input, IC, JustLHSSymConstMap);
+
+    auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+    if (Clone) {
+      return Clone;
+    }
+
+    if (Relations.size() < 100) {
+      for (auto &&R : Relations) {
+        Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
+
+        // InfixPrinter IP(Copy, true);
+        // IP(llvm::errs());
+
+        // Copy.print(llvm::errs(), true);
+
+        auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+        if (Clone) {
+          return Clone;
+        }
+        Copy.PCs.pop_back();
+      }
+    }
+    Refresh("LHS but RHSFresh with Rels");
+  }
+
+  {
+    if (LHSConsts.size() >= 2 && LHSConsts.size() < 10) {
+    for (auto C1 : LHSConsts) {
+      for (auto C2 : LHSConsts) {
+        if (C1 == C2 || C1->Width != C2->Width) {
+          continue;
+        }
+
+        std::map<Inst *, Inst *> TargetConstMap;
+        TargetConstMap[C1] = SymConstMap[C1];
+        TargetConstMap[C2] = SymConstMap[C2];
+
+        auto Rep = Replace(Input, IC, TargetConstMap);
+
+        auto Clone = Verify(Rep, IC, S);
+
+        if (Clone) {
+          return Clone;
+        }
+
+        std::vector<std::pair<Inst *, llvm::APInt>> ValsMap;
+        ValsMap.push_back({TargetConstMap[C1], SymCS[TargetConstMap[C1]]});
+        ValsMap.push_back({TargetConstMap[C2], SymCS[TargetConstMap[C2]]});
+
+        auto Relations = InferPotentialRelations(ValsMap, IC, Rep, {}, Nested);
+
+        // for (auto R : Relations) {
+        //   ReplacementContext RC;
+        //   RC.printInst(R, llvm::errs(), true);
+        //   llvm::errs() << "\n";
+        // }
+
+        Clone = VerifyWithRels(IC, S, Rep, Relations, SymCS);
+
+        if (Clone) {
+          return Clone;
+        }
+
+      }
+    }
+  }
+  Refresh("Symbolize common consts, two at a time");
+
   }
 
   // if (!EnumeratedCandidates.empty()) {
