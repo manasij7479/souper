@@ -2140,6 +2140,12 @@ bool hasMultiArgumentPhi(Inst *I) {
   return false;
 }
 
+ParsedReplacement ReducePoison(InstContext &IC,
+  Solver *S, ParsedReplacement Input) {
+  Reducer R(IC, S);
+  return R.ReducePoison(Input);
+}
+
 ParsedReplacement ReduceBasic(InstContext &IC,
                               Solver *S, ParsedReplacement Input) {
   static Reducer R(IC, S);
