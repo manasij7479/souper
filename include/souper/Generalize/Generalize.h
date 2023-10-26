@@ -25,7 +25,7 @@ ParsedReplacement ReducePoison(
 
 std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement &Input,
                                             InstContext &IC,
-                                            Solver *S);
+                                            Solver *S, size_t Target = 8);
 
 }
 

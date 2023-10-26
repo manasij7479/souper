@@ -43,11 +43,8 @@ static cl::opt<std::string>
 InputFilename(cl::Positional, cl::desc("<input souper optimization>"),
               cl::init("-"));
 
-
-
 struct SymbolTable {
-
-  // Every object is a list of strings
+// Every object is a list of strings
 // Serialize through constructor
 // deserialize through templated getter
 
@@ -95,6 +92,12 @@ struct StoredObject {
   template <typename T>
   std::optional<T> get(SymbolTable *S) {
     return std::nullopt;
+  }
+
+  template <>
+  std::optional<std::string> get(SymbolTable *S) {
+    if (Data.size() != 1) return std::nullopt;
+    return Data[0];
   }
 
   template <>
@@ -183,8 +186,13 @@ struct StoredObject {
   //   return std::nullopt;
   // }
 
-  std::optional<StoredObject> warn_get(const std::string &Name) {
+  std::optional<StoredObject> warn_get(const std::string &Name, std::string Type = "") {
     if (auto Obj = get(Name)) {
+      if (Type != "" && Obj->Attributes[StoredObject::Attr::Type] != Type) {
+        llvm::errs() << "Expected " << Type << ", got " << Obj->Attributes[StoredObject::Attr::Type] << '\n';
+        return std::nullopt;
+      }
+
       return Obj;
     } else {
       llvm::errs() << "Unknown name: " << Name << '\n';
@@ -370,6 +378,7 @@ struct REPL {
   }
 
   bool dispatch(std::vector<std::string> Cmds) {
+
     if (Cmds.size() == 1) {
       Cmds.push_back("_");
     }
@@ -378,65 +387,91 @@ struct REPL {
     if (match(Cmds[0], {"p", "print"})) {
       if (Cmds.size() != 2) {
         llvm::errs() << "Usage: print <name>\n";
-        return true;
+        return false;
       }
+
       PrettyPrint(Cmds[1], Tab);
+      Tab.current(Cmds[1]);
 
       return true;
+    }
+
+    // dump string
+    if (match(Cmds[0], {"dump", "dump-string"})) {
+      if (Cmds.size() != 2) {
+        llvm::errs() << "Usage: dump-string <name>\n";
+        return false;
+      }
+
+      if (auto In = Tab.warn_get(Cmds[1])) {
+        for (auto &Str : In->Data) {
+          llvm::outs() << Str << '\n';
+        }
+        return true;
+      }
+      return false;
     }
 
     // verify
     if (match(Cmds[0], {"v", "verify"})) {
-      if (auto In = Tab.warn_get(Cmds[1])) {
+      if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
+
         if (Verify(In->get<ParsedReplacement>(&Tab).value(), IC, S)) {
           llvm::outs() << "Valid\n";
+          Tab.current(Cmds[1]);
+          return true;
         } else {
           llvm::outs() << "Invalid\n";
+          return false;
         }
       }
-      Tab.current(Cmds[1]);
-      return true;
+      return false;
     }
 
     // generalize
     if (match(Cmds[0], {"g", "gen", "generalize"})) {
-      if (auto In = Tab.warn_get(Cmds[1])) {
+      if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
+
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
         if (auto Gen = GeneralizeRep(Rep, IC, S)) {
           InfixPrinter IP(Gen.value(), false);
           IP(llvm::outs());
           Tab.current(Gen.value(), true);
+          return true;
         } else {
           llvm::outs() << "No generalization found\n";
+          return false;
         }
       }
-      return true;
+      return false;
     }
 
     // reduce
     if (match(Cmds[0], {"r", "reduce"})) {
-      if (auto In = Tab.warn_get(Cmds[1])) {
+      if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
         auto Red = ReduceBasic(IC, S, Rep);
         InfixPrinter IP(Red);
         IP(llvm::outs());
         bool WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
         Tab.current(Red, WIFlag);
+        return true;
       }
-      return true;
+      return false;
     }
 
     // reduce-poison
     if (match(Cmds[0], {"rp", "reduce-poison"})) {
-      if (auto In = Tab.warn_get(Cmds[1])) {
+      if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
         auto Red = ReducePoison(IC, S, Rep);
         InfixPrinter IP(Red);
         IP(llvm::outs());
         bool WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
         Tab.current(Red, WIFlag);
+        return true;
       }
-      return true;
+      return false;
     }
 
     // matcher-gen
@@ -444,7 +479,8 @@ struct REPL {
       if (auto In = Tab.warn_get(Cmds[1])) {
         // execute the matcher-gen binary
         std::string MatcherGenOutput;
-        if (auto In = Tab.warn_get(Cmds[1])) {
+        if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
+
           // get width indepdendent flag from In
           auto WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
           std::string MatcherGenCommand = "./matcher-gen";
@@ -460,12 +496,14 @@ struct REPL {
           if (MatcherGenOutput.has_value()) {
             llvm::outs() << "Generated matcher successfully.\n";
             Tab.put("_", SymbolTable::StoredObject(MatcherGenOutput.value(), "matcher"));
+            return true;
           } else {
             llvm::errs() << "Matcher generation failed.\n";
+            return false;
           }
         }
       }
-      return true;
+      return false;
     }
 
     // shrink
@@ -473,21 +511,28 @@ struct REPL {
       if (auto In = Tab.warn_get(Cmds[1])) {
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
         // enforce that type of In is replacement
+
         if (In->Attributes[SymbolTable::StoredObject::Attr::Type] != "replacement") {
           llvm::errs() << "Expected replacement, got " << In->Attributes[SymbolTable::StoredObject::Attr::Type] << '\n';
-          return true;
+          return false;
         }
 
+        size_t Target = 8;
+        if (Cmds.size() == 2) {
+          Target = std::stoi(Cmds[1]);
+        }
 
-        if (auto Shr = ShrinkRep(Rep, IC, S)) {
+        if (auto Shr = ShrinkRep(Rep, IC, S, Target)) {
           InfixPrinter IP(Shr.value());
           IP(llvm::outs());
           Tab.current(Shr.value());
+          return true;
         } else {
           llvm::outs() << "Could not shrink.\n";
+          return false;
         }
       }
-      return true;
+      return false;
     }
 
     // infer
@@ -495,25 +540,31 @@ struct REPL {
       if (auto In = Tab.warn_get(Cmds[1])) {
         std::vector<Inst *> RHSs;
         auto Rep = In->get<ParsedReplacement>(&Tab).value();
+
         if (std::error_code EC = S->infer(Rep.BPCs, Rep.PCs, Rep.Mapping.LHS,
                                         RHSs, false, IC)) {
-        llvm::errs() << EC.message() << '\n';
-      }
-      if (!RHSs.empty()) {
-        size_t i = 0;
-        for (auto RHS : RHSs) {
-          llvm::outs() << "Found RHS:\n";
-          auto Out = Rep;
-          Rep.Mapping.RHS = RHS;
-          InfixPrinter IP(Rep);
-          IP(llvm::outs());
-          Tab.put("_" + std::to_string(i++), Rep);
+          llvm::errs() << EC.message() << '\n';
         }
-        Tab.current("_0");
-      } else {
-        llvm::errs() << "No RHS found\n";
-      }
-
+        if (!RHSs.empty()) {
+          size_t i = 0;
+          for (auto RHS : RHSs) {
+            // llvm::outs() << "Found RHS:\n";
+            auto Out = Rep;
+            Rep.Mapping.RHS = RHS;
+            InfixPrinter IP(Rep);
+            IP(llvm::outs());
+            if (RHSs.size() > 1) {
+              Tab.put("_" + std::to_string(i++), Rep);
+            } else {
+              Tab.current(Rep);
+            }
+          }
+          if (RHSs.size() > 1) {
+            Tab.current("_0");
+          }
+        } else {
+          llvm::errs() << "No RHS found\n";
+        }
       }
       return true;
     }
@@ -521,6 +572,42 @@ struct REPL {
     // constant synthesis
 
     // Compile matcher
+
+    // generic exec
+    if (match(Cmds[0], {"exec"})) {
+      std::string Command = "./";
+      std::string stdin;
+      if (auto In = Tab.get(Cmds[1])) {
+        for (size_t i = 2; i < Cmds.size(); ++i) {
+          Command += Cmds[i] + " ";
+        }
+
+        std::string data;
+        llvm::raw_string_ostream OS(data);
+        In->get<ParsedReplacement>(&Tab).value().print(OS, true);
+
+        stdin = OS.str();
+      } else {
+        for (size_t i = 1; i < Cmds.size(); ++i) {
+          Command += Cmds[i] + " ";
+        }
+      }
+
+      auto ExecOutput = executeCommandWithInput(Command, stdin);
+
+      if (ExecOutput.has_value()) {
+        if (ExecOutput.value() != "") {
+          llvm::outs() << ExecOutput.value();
+          Tab.put("_", SymbolTable::StoredObject(ExecOutput.value(), "string"));
+        }
+        return true;
+      } else {
+        llvm::errs() << "Execution failed.\n";
+        return false;
+      }
+
+      return false;
+    }
 
     // push
     if (match(Cmds[0], {"push"})) {
@@ -534,15 +621,40 @@ struct REPL {
       return true;
     }
 
-    // cp
-    if (match(Cmds[0], {"cp"})) {
-      // save to a variable
-      // todo
+    // save
+    if (match(Cmds[0], {"save"})) {
+      // save to a file
+
+      if (auto In = Tab.warn_get(Cmds[1])) {
+        std::error_code EC;
+        llvm::raw_fd_ostream OutFile(Cmds[2], EC);
+        // std::ofstream OutFile(Cmds[2]);
+        OutFile << In->get<std::string>(&Tab).value();
+        OutFile.close();
+
+        if (EC) {
+          llvm::errs() << "Could not save to file " << Cmds[2] << '\n';
+          return false;
+        } else {
+          llvm::outs() << "Saved to file " << Cmds[2] << '\n';
+          return true;
+        }
+      }
+      return false;
     }
 
-    // TODO: read, save.
-
     return false;
+  }
+
+  std::optional<std::string> expand(std::vector<std::string> Cmds) {
+    if (Cmds[0] == "compile") {
+      // TODO
+      return std::nullopt;
+    }
+    if (Cmds[0] == "optimize") {
+
+    }
+    return std::nullopt;
   }
 
   bool operator()() {
@@ -566,13 +678,18 @@ struct REPL {
       size_t cmd_index = 0;
 
       for (auto SubCmds : Split) {
+        if (auto Exp = expand(SubCmds.first)) {
+          SubCmds.first.clear();
+          SubCmds.first.push_back(Exp.value());
+        }
+
         if (!dispatch(SubCmds.first)) {
           if (auto Obj = Tab.get(SubCmds.first[0])) {
             Cmds.push_back(SubCmds.first[0]);
             Cmds[0] = "p";
             dispatch(Cmds);
           } else {
-            llvm::errs() << "Unknown command or name: " << Cmds[0] << '\n';
+            llvm::errs() << "Error while trying to execute " << SubCmds.first[0] << '\n';
             break;
           }
         }
@@ -581,10 +698,9 @@ struct REPL {
           Tab.put(SubCmds.second, Tab.get("_").value());
         }
 
-        if (cmd_index != Split.size() - 1) {
+        if (cmd_index++ != Split.size() - 1) {
           llvm::outs() << "----------------------------\n";
         }
-        ++cmd_index;
       }
 
 
