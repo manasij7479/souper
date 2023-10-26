@@ -3079,11 +3079,11 @@ InstantiateWidthChecks(InstContext &IC,
 
 std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement &Input,
                                             InstContext &IC,
-                                            Solver *S) {
+                                            Solver *S, size_t Target) {
   if (hasMultiArgumentPhi(Input.Mapping.LHS)) {
     return std::nullopt;
   }
-  ShrinkWrap Shrink(IC, S, Input, 8);
+  ShrinkWrap Shrink(IC, S, Input, Target);
   return Shrink();
 }
 
