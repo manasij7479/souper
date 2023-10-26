@@ -518,8 +518,8 @@ struct REPL {
         }
 
         size_t Target = 8;
-        if (Cmds.size() == 2) {
-          Target = std::stoi(Cmds[1]);
+        if (Cmds.size() == 3) {
+          Target = std::stoi(Cmds[2]);
         }
 
         if (auto Shr = ShrinkRep(Rep, IC, S, Target)) {
@@ -575,18 +575,13 @@ struct REPL {
 
     // generic exec
     if (match(Cmds[0], {"exec"})) {
-      std::string Command = "./";
+      std::string Command;
       std::string stdin;
       if (auto In = Tab.get(Cmds[1])) {
         for (size_t i = 2; i < Cmds.size(); ++i) {
           Command += Cmds[i] + " ";
         }
-
-        std::string data;
-        llvm::raw_string_ostream OS(data);
-        In->get<ParsedReplacement>(&Tab).value().print(OS, true);
-
-        stdin = OS.str();
+        stdin = In->get<std::string>(&Tab).value();
       } else {
         for (size_t i = 1; i < Cmds.size(); ++i) {
           Command += Cmds[i] + " ";
@@ -625,17 +620,15 @@ struct REPL {
     if (match(Cmds[0], {"save"})) {
       // save to a file
 
-      if (auto In = Tab.warn_get(Cmds[1])) {
+      if (auto In = Tab.warn_get("_")) {
         std::error_code EC;
-        llvm::raw_fd_ostream OutFile(Cmds[2], EC);
-        // std::ofstream OutFile(Cmds[2]);
-        OutFile << In->get<std::string>(&Tab).value();
-        OutFile.close();
-
+        llvm::raw_fd_ostream OutFile(Cmds[1], EC);
         if (EC) {
           llvm::errs() << "Could not save to file " << Cmds[2] << '\n';
           return false;
         } else {
+          OutFile << In->get<std::string>(&Tab).value();
+          OutFile.close();
           llvm::outs() << "Saved to file " << Cmds[2] << '\n';
           return true;
         }
@@ -643,18 +636,58 @@ struct REPL {
       return false;
     }
 
+    // read to _
+    if (match(Cmds[0], {"read"})) {
+      std::string ErrStr;
+      auto MB = MemoryBuffer::getFileOrSTDIN(Cmds[1]);
+      if (!MB) {
+        llvm::errs() << MB.getError().message() << '\n';
+        return false;
+      }
+      auto Data = std::string((*MB)->getMemBufferRef().getBuffer());
+      llvm::outs() << Data << "\n";
+      Tab.put("_", SymbolTable::StoredObject(Data, "string"));
+      return true;
+    }
+
     return false;
   }
 
-  std::optional<std::string> expand(std::vector<std::string> Cmds) {
-    if (Cmds[0] == "compile") {
-      // TODO
-      return std::nullopt;
+  std::vector<std::string> split(const std::string &S) {
+    std::istringstream SS(S);
+    std::vector<std::string> Cmds;
+    std::string Cmd;
+    while (SS >> Cmd) {
+      Cmds.push_back(Cmd);
     }
-    if (Cmds[0] == "optimize") {
+    return Cmds;
+  }
 
+  // TODO: Might have to implement context sensitive lookahead
+  std::vector<std::string> expandMacro(std::string Atom) {
+    if (Atom == "compile") {
+      return split("save ../tools/pass-generator/src/gen.cpp.inc | exec ninja -C ../tools/pass-generator/build");
     }
-    return std::nullopt;
+    if (Atom == "optimize") {
+      return split("exec _ opt -load-pass-plugin=../tools/pass-generator/build/src/SouperCombine.dylib -passes='souper-combine,adce,instsimplify' -S");
+    }
+    return {};
+  }
+
+  std::vector<std::string> expand(std::vector<std::string> Cmds) {
+    std::vector<std::string> Result;
+    for (auto Cmd : Cmds) {
+      auto Expanded = expandMacro(Cmd);
+      if (Expanded.empty()) {
+        Result.push_back(Cmd);
+      } else {
+        for (auto Atom : Expanded) {
+          Result.push_back(Atom);
+        }
+      }
+    }
+
+    return Result;
   }
 
   bool operator()() {
@@ -663,25 +696,17 @@ struct REPL {
       llvm::outs() << "souper-repl> ";
       if (!std::getline(std::cin, Line)) break;
 
-      std::istringstream SS(Line);
-      std::vector<std::string> Cmds;
-      std::string Cmd;
-      while (SS >> Cmd) {
-        Cmds.push_back(Cmd);
-      }
+      auto Cmds = split(Line);
+
       if (Cmds.empty()) continue;
       if (Cmds[0] == "exit" || Cmds[0] == "quit" || Cmds[0] == "q") break;
 
 
-      auto Split = SplitCommands(Cmds);
+      auto Split = SplitCommands(expand(Cmds));
 
       size_t cmd_index = 0;
 
       for (auto SubCmds : Split) {
-        if (auto Exp = expand(SubCmds.first)) {
-          SubCmds.first.clear();
-          SubCmds.first.push_back(Exp.value());
-        }
 
         if (!dispatch(SubCmds.first)) {
           if (auto Obj = Tab.get(SubCmds.first[0])) {
