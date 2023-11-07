@@ -344,7 +344,6 @@ Inst *ExprBuilder::getDataflowConditions(Inst *I) {
     Inst *OneBits = LIC->getInst(Inst::Eq, 1, {VarAndOnes, Ones});
     Result = LIC->getInst(Inst::And, 1, {Result, OneBits});
   }
-
   if (I->NonZero) {
     Inst *NonZeroBits = LIC->getInst(Inst::Ne, 1, {I, Zero});
     Result = LIC->getInst(Inst::And, 1, {Result, NonZeroBits});

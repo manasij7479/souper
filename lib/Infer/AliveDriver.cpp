@@ -845,7 +845,6 @@ IR::Type &souper::AliveDriver::getType(int Width, const Inst *I) {
         });
       return *SymTypes[I];
     }
-    // llvm::errs() << "THERE\n";
     SymTypes[I] = new IR::SymbolicType("symty_" +
       std::to_string(symtypenum++) + "_", (1 << IR::SymbolicType::Int));
     return *SymTypes[I];
