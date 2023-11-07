@@ -64,11 +64,6 @@ static cl::opt<bool> InferConst("infer-const",
     cl::desc("Try to infer constants for a Souper replacement (default=false)"),
     cl::init(false));
 
-static cl::opt<bool> InferAP("infer-abstract-precondition",
-    cl::desc("Try to infer an abstract precondition which makes the given"
-             "transformation valid. (default=false)"),
-    cl::init(false));
-
 static cl::opt<bool> ReInferRHS("reinfer-rhs",
     cl::desc("Try to infer a new RHS and compare its cost with the existing RHS (default=false)"),
     cl::init(false));
@@ -468,39 +463,6 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       } else {
         llvm::outs() << "Pruning failed.\n";
       }
-    } else if (InferAP) {
-        bool FoundWeakest = false;
-        std::vector<std::map<Inst *, llvm::KnownBits>> KBResults;
-        std::vector<std::map<Inst *, llvm::ConstantRange>> CRResults;
-        S->abstractPrecondition(Rep.BPCs, Rep.PCs, Rep.Mapping, IC, FoundWeakest, KBResults, CRResults);
-        if (!FoundWeakest) {
-          llvm::outs() << "Failed to find WP.\n";
-        }
-        ReplacementContext RC;
-        auto LHSStr = RC.printInst(Rep.Mapping.LHS, llvm::outs(), true);
-        llvm::outs() << "infer " << LHSStr << "\n";
-        auto RHSStr = RC.printInst(Rep.Mapping.RHS, llvm::outs(), true);
-        llvm::outs() << "result " << RHSStr << "\n";
-        for (size_t i = 0; i < KBResults.size(); ++i) {
-          for (auto It = KBResults[i].begin(); It != KBResults[i].end(); ++It) {
-            auto &&P = *It;
-            std::string dummy;
-            llvm::raw_string_ostream str(dummy);
-            auto VarStr = RC.printInst(P.first, str, false);
-            llvm::outs() << VarStr << " -> " << Inst::getKnownBitsString(P.second.Zero, P.second.One);
-
-            auto Next = It;
-            Next++;
-            if (Next != KBResults[i].end()) {
-              llvm::outs()  << " (and) ";
-            }
-          }
-          if (i == KBResults.size() - 1) {
-            llvm::outs() << "\n";
-          } else  {
-            llvm::outs() << "\n(or)\n";
-          }
-        }
     } else if (PrettyPrint != "") {
       if (PrettyPrint == "infix") {
         InfixPrinter P(Rep);

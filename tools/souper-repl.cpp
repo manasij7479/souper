@@ -5,7 +5,6 @@
 #include "llvm/Support/KnownBits.h"
 #include "souper/Generalize/Generalize.h"
 #include "souper/Infer/AliveDriver.h"
-#include "souper/Infer/Preconditions.h"
 #include "souper/Infer/EnumerativeSynthesis.h"
 #include "souper/Infer/ConstantSynthesis.h"
 #include "souper/Infer/Pruning.h"

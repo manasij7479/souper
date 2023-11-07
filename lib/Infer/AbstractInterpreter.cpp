@@ -1011,9 +1011,9 @@ namespace souper {
       // Only unrestricted if both inputs are unrestricted
       // TODO Verify if N(S/U)?W variants fit in this category
       case Inst::Mul:
-      case Inst::MulNSW:
-      case Inst::MulNUW:
-      case Inst::MulNW:
+      // case Inst::MulNSW:
+      // case Inst::MulNUW:
+      // case Inst::MulNW:
       case Inst::SDiv:
       case Inst::UDiv:
       case Inst::Shl:
@@ -1043,6 +1043,7 @@ namespace souper {
         break;
 
       default:
+        Result.setAllBits();
         break; // TODO more precise transfer functions
 
     }
