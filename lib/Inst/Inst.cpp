@@ -118,7 +118,6 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
                                               bool printNames, Inst *OrigI) {
   std::string Str;
   llvm::raw_string_ostream SS(Str);
-
   auto PNI = InstNames.find(I);
   if (PNI != InstNames.end()) {
     SS << "%" << PNI->second;
@@ -167,7 +166,6 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
         break;
     }
   }
-
   std::string InstName;
   if (printNames && !I->Name.empty()) {
     InstName = I->Name;
@@ -590,27 +588,25 @@ void Inst::Print() {
 }
 #endif
 
-Inst *InstContext::getConst(const llvm::APInt &Val, bool Deduplicate) {
+Inst *InstContext::getConst(const llvm::APInt &Val) {
+  llvm::FoldingSetNodeID ID;
+  ID.AddInteger(Inst::Const);
+  ID.AddInteger(Val.getBitWidth());
+  Val.Profile(ID);
+
   void *IP = 0;
-  if (Deduplicate) {
-    llvm::FoldingSetNodeID ID;
-    ID.AddInteger(Inst::Const);
-    ID.AddInteger(Val.getBitWidth());
-    Val.Profile(ID);
-    if (Inst *I = InstSet.FindNodeOrInsertPos(ID, IP))
-      return I;
-  }
+  if (Inst *I = InstSet.FindNodeOrInsertPos(ID, IP))
+    return I;
 
   auto N = new Inst;
+  Insts.emplace_back(N);
   N->K = Inst::Const;
   N->Width = Val.getBitWidth();
   N->Val = Val;
-  if (Deduplicate) {
-    Insts.emplace_back(N);
-    InstSet.InsertNode(N, IP);
-  }
+  InstSet.InsertNode(N, IP);
   return N;
 }
+
 
 Inst *InstContext::getUntypedConst(const llvm::APInt &Val) {
   llvm::FoldingSetNodeID ID;

@@ -275,7 +275,6 @@ public:
         ReplacementContext Context;
         PrintReplacementLHS(errs(), Cand.BPCs, Cand.PCs, Cand.Mapping.LHS, Context);
       }
-
       if (StaticProfile) {
         std::string Str;
         llvm::raw_string_ostream Loc(Str);

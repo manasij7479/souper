@@ -251,7 +251,7 @@ class InstContext {
   unsigned ReservedConstCounter = 0;
 
 public:
-  Inst *getConst(const llvm::APInt &I, bool Deduplicate = true);
+  Inst *getConst(const llvm::APInt &I);
   Inst *getUntypedConst(const llvm::APInt &I);
   Inst *getReservedConst();
   Inst *getReservedInst();

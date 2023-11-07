@@ -152,7 +152,6 @@ void souper::AddModuleToCandidateMap(InstContext &IC, ExprBuilderContext &EBC,
       }
     }
   }
-
 }
 
 namespace souper {
