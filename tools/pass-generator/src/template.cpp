@@ -15,6 +15,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/NoFolder.h"
+#include "llvm/IR/ConstantFolder.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -60,9 +61,9 @@ long counter = 0;
 
 // Custom Creators
 
-class IRBuilder : public llvm::IRBuilder<NoFolder> {
+class IRBuilder : public llvm::IRBuilder<llvm::ConstantFolder> {
 public:
-  IRBuilder(llvm::LLVMContext &C) : llvm::IRBuilder<NoFolder>(C) {}
+  IRBuilder(llvm::LLVMContext &C) : llvm::IRBuilder<llvm::ConstantFolder>(C) {}
 
   llvm::Value *CreateLogB(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
@@ -83,130 +84,130 @@ public:
   }
 
   // TODO Verify that these work, the mangling argument is weird
-  llvm::Value *CreateFShl(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
-    if (!eqWD(A, B) || ~eqWD(B, C)) return nullptr;
+  [[maybe_unused]] llvm::Value *CreateFShl(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
+    if (!eqWD(A, B) || !eqWD(B, C)) return nullptr;
     return CreateIntrinsic(Intrinsic::fshl, {A->getType()}, {A, B, C});
   }
-  llvm::Value *CreateFShr(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
-    if (!eqWD(A, B) || ~eqWD(B, C)) return nullptr;
+  [[maybe_unused]] llvm::Value *CreateFShr(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
+    if (!eqWD(A, B) || !eqWD(B, C)) return nullptr;
     return CreateIntrinsic(Intrinsic::fshr, {A->getType()}, {A, B, C});
   }
-  llvm::Value *CreateBSwap(llvm::Value *A) {
+  [[maybe_unused]] llvm::Value *CreateBSwap(llvm::Value *A) {
     return CreateIntrinsic(Intrinsic::bswap, {A->getType()}, {A});
   }
 
-  llvm::Value *CreateAShrExact(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateAShrExact(llvm::Value *A, llvm::Value *B) {
     return llvm::BinaryOperator::CreateExact(Instruction::AShr, A, B);
   }
-  llvm::Value *CreateLShrExact(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateLShrExact(llvm::Value *A, llvm::Value *B) {
     return llvm::BinaryOperator::CreateExact(Instruction::LShr, A, B);
   }
-  llvm::Value *CreateUDivExact(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateUDivExact(llvm::Value *A, llvm::Value *B) {
     return llvm::BinaryOperator::CreateExact(Instruction::UDiv, A, B);
   }
-  llvm::Value *CreateSDivExact(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateSDivExact(llvm::Value *A, llvm::Value *B) {
     return llvm::BinaryOperator::CreateExact(Instruction::SDiv, A, B);
   }
 
-  llvm::Value *CreateAddNW(llvm::Value *A, llvm::Value *B) {
-    return llvm::IRBuilder<NoFolder>::CreateAdd(A, B, "", true, true);
+  [[maybe_unused]] llvm::Value *CreateAddNW(llvm::Value *A, llvm::Value *B) {
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateAdd(A, B, "", true, true);
   }
 
-  llvm::Value *CreateSubNW(llvm::Value *A, llvm::Value *B) {
-    return llvm::IRBuilder<NoFolder>::CreateSub(A, B, "", true, true);
+  [[maybe_unused]] llvm::Value *CreateSubNW(llvm::Value *A, llvm::Value *B) {
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateSub(A, B, "", true, true);
   }
 
-  llvm::Value *CreateAnd(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateAnd(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateAnd(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateAnd(A, B);
   }
 
-  llvm::Value *CreateOr(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateOr(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateOr(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateOr(A, B);
   }
 
-  llvm::Value *CreateXor(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateXor(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateXor(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateXor(A, B);
   }
 
-  llvm::Value *CreateAdd(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateAdd(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateAdd(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateAdd(A, B);
   }
 
-  llvm::Value *CreateSub(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateSub(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateSub(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateSub(A, B);
   }
 
-  llvm::Value *CreateMul(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateMul(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateMul(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateMul(A, B);
   }
 
-  llvm::Value *CreateShl(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateShl(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateShl(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateShl(A, B);
   }
 
-  llvm::Value *CreateAShr(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateAShr(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateAShr(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateAShr(A, B);
   }
 
-  llvm::Value *CreateLShr(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateLShr(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateLShr(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateLShr(A, B);
   }
 
-  llvm::Value *CreateUDiv(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateUDiv(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateUDiv(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateUDiv(A, B);
   }
 
-  llvm::Value *CreateSDiv(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateSDiv(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateSDiv(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateSDiv(A, B);
   }
 
-  llvm::Value *CreateURem(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateURem(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateURem(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateURem(A, B);
   }
 
-  llvm::Value *CreateSRem(llvm::Value *A, llvm::Value *B) {
+  [[maybe_unused]] llvm::Value *CreateSRem(llvm::Value *A, llvm::Value *B) {
     if (!A || !B || !eqWD(A, B)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateSRem(A, B);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateSRem(A, B);
   }
 
-  llvm::Value *CreateCmp(llvm::CmpInst::Predicate Pred, llvm::Value *LHS, llvm::Value *RHS) {
+  [[maybe_unused]] llvm::Value *CreateCmp(llvm::CmpInst::Predicate Pred, llvm::Value *LHS, llvm::Value *RHS) {
     if (!LHS || !RHS || !eqWD(LHS, RHS)) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateCmp(Pred, LHS, RHS);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateCmp(Pred, LHS, RHS);
   }
 
-  llvm::Value *CreateSExt(llvm::Value *A, llvm::Type *T) {
+  [[maybe_unused]] llvm::Value *CreateSExt(llvm::Value *A, llvm::Type *T) {
     if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy() ||
          A->getType()->getScalarSizeInBits() >= T->getScalarSizeInBits()) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateSExt(A, T);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateSExt(A, T);
   }
 
-  llvm::Value *CreateZExt(llvm::Value *A, llvm::Type *T) {
+  [[maybe_unused]] llvm::Value *CreateZExt(llvm::Value *A, llvm::Type *T) {
     if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy() ||
          A->getType()->getScalarSizeInBits() >= T->getScalarSizeInBits()) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateZExt(A, T);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateZExt(A, T);
   }
 
-  llvm::Value *CreateTrunc(llvm::Value *A, llvm::Type *T) {
+  [[maybe_unused]] llvm::Value *CreateTrunc(llvm::Value *A, llvm::Type *T) {
     if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy() ||
          A->getType()->getScalarSizeInBits() <= T->getScalarSizeInBits()) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateTrunc(A, T);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateTrunc(A, T);
   }
 
-  llvm::Value *CreateSelect(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
+  [[maybe_unused]] llvm::Value *CreateSelect(llvm::Value *A, llvm::Value *B, llvm::Value *C) {
     if (!A || !B || !C || !eqWD(B, C) || !A->getType()->isSized() ||  A->getType()->getScalarSizeInBits() != 1) return nullptr;
-    return llvm::IRBuilder<NoFolder>::CreateSelect(A, B, C);
+    return llvm::IRBuilder<llvm::ConstantFolder>::CreateSelect(A, B, C);
   }
 
 
@@ -365,7 +366,7 @@ struct specific_ext_intval {
   }
 };
 
-inline specific_ext_intval m_ExtInt(std::string S, size_t W) {
+[[maybe_unused]] inline specific_ext_intval m_ExtInt(std::string S, size_t W) {
   return specific_ext_intval(S, W);
 }
 
@@ -385,12 +386,12 @@ struct constant_matcher {
   }
 };
 
-inline constant_matcher m_Constant(Value **V) {
+[[maybe_unused]] inline constant_matcher m_Constant(Value **V) {
   return constant_matcher(V);
 }
 
 // Tested, matches APInts
-inline bind_apint m_APInt(APInt &V) { return bind_apint(V); }
+[[maybe_unused]] inline bind_apint m_APInt(APInt &V) { return bind_apint(V); }
 
 template <typename LHS, typename RHS>
 struct specific_icmp_matcher {
@@ -494,7 +495,7 @@ Capture<Matcher> operator<<=(Value **V, Matcher &&M) {
 //   return CastClass_match_width<OpTy, Instruction::Trunc>(W, Op);
 // }
 
-void m(llvm::APInt &A, llvm::APInt &B) {
+[[maybe_unused]] void m(llvm::APInt &A, llvm::APInt &B) {
   auto WA = A.getBitWidth(), WB = B.getBitWidth();
   if (WA == WB) {
     return;
@@ -517,108 +518,108 @@ void m(llvm::APInt &A, llvm::APInt &B) {
 
 }
 
-llvm::APInt flip(llvm::APInt A) {
+[[maybe_unused]] llvm::APInt flip(llvm::APInt A) {
   A.flipAllBits();
   return A;
 }
 
-llvm::APInt xor_(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt xor_(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A ^ B;
 }
 
-llvm::APInt xor_(llvm::APInt A, int B) {
+[[maybe_unused]] llvm::APInt xor_(llvm::APInt A, int B) {
   return A ^ llvm::APInt(A.getBitWidth(), B, true);
 }
 
-llvm::APInt xor_(int B, llvm::APInt A) {
+[[maybe_unused]] llvm::APInt xor_(int B, llvm::APInt A) {
   return A ^ llvm::APInt(A.getBitWidth(), B, true);
 }
 
-llvm::APInt and_(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt and_(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A & B;
 }
 
-llvm::APInt or_(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt or_(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A | B;
 }
 
-llvm::APInt add(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt add(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A + B;
 }
 
-llvm::APInt sub(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt sub(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A - B;
 }
 
-llvm::APInt mul(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt mul(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A * B;
 }
 
-llvm::APInt shl(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt shl(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.shl(B);
 }
 
-llvm::APInt urem(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt urem(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.urem(B);
 }
 
-llvm::APInt srem(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt srem(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.srem(B);
 }
 
-llvm::APInt udiv(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt udiv(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.udiv(B);
 }
 
-llvm::APInt sdiv(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt sdiv(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.sdiv(B);
 }
 
-bool slt(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] bool slt(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.slt(B);
 }
 
-bool sle(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] bool sle(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.sle(B);
 }
 
-bool ult(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] bool ult(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.ult(B);
 }
 
-bool ule(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] bool ule(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.ule(B);
 }
 
-bool eq(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] bool eq(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.eq(B);
 }
 
-bool eq(llvm::APInt A, int B) {
+[[maybe_unused]] bool eq(llvm::APInt A, int B) {
   return A.eq(llvm::APInt(A.getBitWidth(), B, true));
 }
 
-bool eq(int B, llvm::APInt A) {
+[[maybe_unused]] bool eq(int B, llvm::APInt A) {
   return A.eq(llvm::APInt(A.getBitWidth(), B, true));
 }
 
-bool ne(llvm::APInt A, llvm::APInt B) {
+[[maybe_unused]] bool ne(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A.ne(B);
 }
@@ -626,7 +627,7 @@ bool ne(llvm::APInt A, llvm::APInt B) {
 
 
 namespace util {
-  bool dc(llvm::DominatorTree *DT, llvm::Instruction *I, llvm::Value *V) {
+  [[maybe_unused]] bool dc(llvm::DominatorTree *DT, llvm::Instruction *I, llvm::Value *V) {
     //llvm::errs() << "FOO\n";
     if (!I || !V) {
       return false;
@@ -644,7 +645,7 @@ namespace util {
     return true;
   }
 
-  bool check_width(llvm::Value *V, size_t W) {
+  [[maybe_unused]] bool check_width(llvm::Value *V, size_t W) {
     if (V && V->getType() && V->getType()->isSized() && V->getType()->isSized() && V->getType()->isIntegerTy()) {
       return V->getType()->getScalarSizeInBits() == W;
     } else {
@@ -652,7 +653,7 @@ namespace util {
     }
   }
 
-  bool check_width(llvm::Value *V, Instruction *I) {
+  [[maybe_unused]] bool check_width(llvm::Value *V, Instruction *I) {
     if (V && V->getType() && V->getType()->isSized() && V->getType()->isIntegerTy() &&
         I && I->getType() && I->getType()->isSized() && I->getType()->isIntegerTy()) {
       return V->getType()->getScalarSizeInBits() == I->getType()->getScalarSizeInBits();
@@ -662,11 +663,11 @@ namespace util {
   }
 
   template<typename Out, typename FT, typename ...Args>
-  bool check_related(Out Result, FT F, Args... args) {
+  [[maybe_unused]] bool check_related(Out Result, FT F, Args... args) {
     return Result == F(args...);
   }
 
-  bool pow2(llvm::Value *V) {
+  [[maybe_unused]] bool pow2(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       if (Con->getValue().isPowerOf2()) {
         return true;
@@ -679,7 +680,7 @@ namespace util {
     return false;
   }
 
-  bool KnownBitImplies(llvm::APInt Big, llvm::APInt Small) {
+  [[maybe_unused]] bool KnownBitImplies(llvm::APInt Big, llvm::APInt Small) {
 
     if (Big.getBitWidth() != Small.getBitWidth()) {
       return false;
@@ -703,7 +704,7 @@ namespace util {
     return (~Big | Small).isAllOnes();
   }
 
-  bool k0(llvm::Value *V, std::string Val, size_t ExpectedWidth) {
+  [[maybe_unused]] bool k0(llvm::Value *V, std::string Val, size_t ExpectedWidth) {
     if (!V || !V->getType() || !V->getType()->isIntegerTy() ) {
       return false;
     }
@@ -734,7 +735,7 @@ namespace util {
     return false;
   }
 
-  bool k1(llvm::Value *V, std::string Val, size_t ExpectedWidth) {
+  [[maybe_unused]] bool k1(llvm::Value *V, std::string Val, size_t ExpectedWidth) {
     if (!V || !V->getType() || !V->getType()->isIntegerTy()) {
       return false;
     }
@@ -758,7 +759,7 @@ namespace util {
     return false;
   }
 
-  bool cr(llvm::Value *V, std::string L, std::string H) {
+  [[maybe_unused]] bool cr(llvm::Value *V, std::string L, std::string H) {
 
     if (!V || !V->getType() || !V->getType()->isIntegerTy()) {
       return false;
@@ -785,7 +786,7 @@ namespace util {
     return R.contains(CR);
   }
 
-  bool vdb(llvm::DemandedBits *DB, llvm::Instruction *I, std::string DBUnderApprox, size_t ExpectedWidth) {
+  [[maybe_unused]] bool vdb(llvm::DemandedBits *DB, llvm::Instruction *I, std::string DBUnderApprox, size_t ExpectedWidth) {
 
     if (I->getType()->getIntegerBitWidth() != ExpectedWidth) {
       return false;
@@ -801,7 +802,7 @@ namespace util {
     return (V | ~ComputedDB).isAllOnes();
   }
 
-  bool symk0bind(llvm::Value *V, llvm::Value *&Bind, IRBuilder *B) {
+  [[maybe_unused]] bool symk0bind(llvm::Value *V, llvm::Value *&Bind, IRBuilder *B) {
     if (!V || !V->getType() || !V->getType()->isIntegerTy() ) {
       return false;
     }
@@ -826,7 +827,7 @@ namespace util {
     return false;
   }
 
-  bool symk1bind(llvm::Value *V, llvm::Value *&Bind, IRBuilder *B) {
+  [[maybe_unused]] bool symk1bind(llvm::Value *V, llvm::Value *&Bind, IRBuilder *B) {
     if (!V || !V->getType() || !V->getType()->isIntegerTy() ) {
       return false;
     }
@@ -850,7 +851,7 @@ namespace util {
     return false;
   }
 
-  bool symk0test(llvm::Value *Bound, llvm::Value *OtherSymConst) {
+  [[maybe_unused]] bool symk0test(llvm::Value *Bound, llvm::Value *OtherSymConst) {
     llvm::Constant *BoundC = llvm::dyn_cast<llvm::Constant>(Bound);
     llvm::Constant *OtherC = llvm::dyn_cast<llvm::Constant>(OtherSymConst);
 
@@ -866,7 +867,7 @@ namespace util {
     return KnownBitImplies(OtherC->getUniqueInteger(), ~BoundC->getUniqueInteger());
   }
 
-  bool symk1test(llvm::Value *Bound, llvm::Value *OtherSymConst) {
+  [[maybe_unused]] bool symk1test(llvm::Value *Bound, llvm::Value *OtherSymConst) {
     llvm::Constant *BoundC = llvm::dyn_cast<llvm::Constant>(Bound);
     llvm::Constant *OtherC = llvm::dyn_cast<llvm::Constant>(OtherSymConst);
     if (!BoundC || !OtherC) {
@@ -885,7 +886,7 @@ namespace util {
     return KnownBitImplies(OtherC->getUniqueInteger(), BoundC->getUniqueInteger());
   }
 
-  bool symdb(llvm::DemandedBits *DB, llvm::Instruction *I, llvm::Value *&V, IRBuilder *B) {
+  [[maybe_unused]] bool symdb(llvm::DemandedBits *DB, llvm::Instruction *I, llvm::Value *&V, IRBuilder *B) {
     auto ComputedDB = DB->getDemandedBits(I);
     // Are there other non trivial failure modes?
     if (ComputedDB == 0) {
@@ -898,7 +899,7 @@ namespace util {
 
 #define SCALAR(A) if (!A || !A->getType() || !A->getType()->isSized() || !A->getType()->isIntegerTy()) return false
 
-  bool nz(llvm::Value *V) {
+  [[maybe_unused]] bool nz(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return !Con->getValue().isZero();
     }
@@ -910,7 +911,7 @@ namespace util {
     return false;
   }
 
-  bool nsb(llvm::Value *V, size_t n) {
+  [[maybe_unused]] bool nsb(llvm::Value *V, size_t n) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().getNumSignBits() > n;
     }
@@ -922,7 +923,7 @@ namespace util {
     return false;
   }
 
-  bool nn(llvm::Value *V) {
+  [[maybe_unused]] bool nn(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNonNegative();
     }
@@ -934,7 +935,7 @@ namespace util {
     return false;
   }
 
-  bool neg(llvm::Value *V) {
+  [[maybe_unused]] bool neg(llvm::Value *V) {
     if (ConstantInt *Con = llvm::dyn_cast<ConstantInt>(V)) {
       return Con->getValue().isNegative();
     }
@@ -946,7 +947,7 @@ namespace util {
     return false;
   }
 
-  bool filter(const std::set<size_t> &F, size_t id) {
+  [[maybe_unused]] bool filter(const std::set<size_t> &F, int id) {
     if (Low != -1 && High != -1) {
 //       llvm::errs() << Low << " " << id << " " << High << " " << (Low <= id && id < High) << "\n";
       return Low <= id && id < High;
@@ -985,7 +986,6 @@ namespace util {
       std::sort(Copy.begin(), Copy.end(),
                 [](auto &A, auto &B) {return A.second > B.second;});
       llvm::errs() << "Hits begin:\n";
-      size_t sum = 0;
       for (auto &&P : Copy) {
         int64_t cost;
         if (Cost.find(P.first) == Cost.end()) {
@@ -998,36 +998,36 @@ namespace util {
       llvm::errs() << "Hits end. Total = " << total_hits << ".\n";
     }
   };
-  bool nc(llvm::Value *a, llvm::Value *b) {
+  [[maybe_unused]] bool nc(llvm::Value *a, llvm::Value *b) {
     if (llvm::isa<llvm::Constant>(a) || llvm::isa<llvm::Constant>(b)) return false;
     return true;
   }
 
-  llvm::APInt V(llvm::Value *V) {
+  [[maybe_unused]] llvm::APInt V(llvm::Value *V) {
     if (!V || !isa<ConstantInt>(V)) {
       // FIXME This should ideally never happen, please fix
       return llvm::APInt(1, 0);
     }
     return llvm::dyn_cast<ConstantInt>(V)->getValue();
   }
-  llvm::APInt V(size_t Width, size_t Val) {
+  [[maybe_unused]] llvm::APInt V(size_t Width, size_t Val) {
     return llvm::APInt(Width, Val);
   }
-  llvm::APInt V(size_t Width, std::string Val) {
+  [[maybe_unused]] llvm::APInt V(size_t Width, std::string Val) {
     return llvm::APInt(Width, Val, 2);
   }
-  llvm::APInt V(llvm::Value *Ctx, std::string Val) {
+  [[maybe_unused]] llvm::APInt V(llvm::Value *Ctx, std::string Val) {
     return llvm::APInt(Ctx->getType()->getIntegerBitWidth(), Val, 2);
   }
 
-  llvm::APInt W(llvm::Value *Ctx) {
+  [[maybe_unused]] llvm::APInt W(llvm::Value *Ctx) {
     if (!Ctx) {
       // FIXME Should never happen.
       return llvm::APInt(32, 128);
     }
     return llvm::APInt(Ctx->getType()->getIntegerBitWidth(), Ctx->getType()->getIntegerBitWidth());
   }
-  llvm::APInt W(llvm::Value *Ctx, size_t WidthOfWidth) {
+  [[maybe_unused]] llvm::APInt W(llvm::Value *Ctx, size_t WidthOfWidth) {
     if (!Ctx) {
       // FIXME Should never happen.
       return llvm::APInt(WidthOfWidth, 128);
@@ -1036,11 +1036,11 @@ namespace util {
   }
 }
 
-bool operator < (int x, const llvm::APInt &B) {
+[[maybe_unused]] bool operator < (int x, const llvm::APInt &B) {
   return llvm::APInt(B.getBitWidth(), x).ult(B);
 }
 
-llvm::APInt shl(int A, llvm::APInt B) {
+[[maybe_unused]] llvm::APInt shl(int A, llvm::APInt B) {
   return llvm::APInt(B.getBitWidth(), A).shl(B);
 }
 
@@ -1229,7 +1229,7 @@ namespace llvm {
 void initializeSouperCombinePass(llvm::PassRegistry &);
 }
 
-char SouperCombinePass::ID = 0;
+[[maybe_unused]] char SouperCombinePass::ID = 0;
 
 bool pipelineParsingCallback(StringRef Name, FunctionPassManager &FPM,
                              ArrayRef<PassBuilder::PipelineElement>) {
