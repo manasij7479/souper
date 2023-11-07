@@ -1,6 +1,5 @@
 #include "llvm/Support/MemoryBuffer.h"
 
-#include "souper/Infer/Preconditions.h"
 #include "souper/Infer/EnumerativeSynthesis.h"
 #include "souper/Infer/SynthUtils.h"
 #include "souper/Parser/Parser.h"

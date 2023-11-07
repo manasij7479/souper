@@ -600,8 +600,6 @@ struct LatexPrinter : public InfixPrinter {
       case Inst::USubSat: Op = "-_\\text{u}^\\text{sat}"; break;
       case Inst::SSubSat: Op = "-_\\text{s}^\\text{sat}"; break;
       case Inst::AShrExact: Op = "\\gg_\\text{s}^\\text{exact}"; break;
-      // case Inst::KnownOnesP : Op = "<<=1"; break;
-      // case Inst::KnownZerosP : Op = "<<=0"; break;
       default: Op = std::string("\\text{") + Inst::getKindName(I->K) + "}"; break;
       }
 
