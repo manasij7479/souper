@@ -205,8 +205,6 @@ set(SOUPER_INFER_FILES
   lib/Infer/Interpreter.cpp
   lib/Infer/AbstractInterpreter.cpp
   include/souper/Infer/Interpreter.h
-  lib/Infer/Preconditions.cpp
-  include/souper/Infer/Preconditions.h
   lib/Infer/SynthUtils.cpp
   include/souper/Infer/SynthUtils.h
 )
