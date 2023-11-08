@@ -875,7 +875,7 @@ ParsedReplacement Reducer::WeakenCR(ParsedReplacement Input) {
 ParsedReplacement Reducer::WeakenDB(ParsedReplacement Input) {
   auto Ori = Input.Mapping.LHS->DemandedBits;
   auto Width = Input.Mapping.LHS->Width;
-  if (Ori.getBitWidth() != Width || Ori.isAllOnesValue()) {
+  if (Ori.getBitWidth() != Width || Ori.isAllOnes()) {
     return Input;
   }
   // Try replacing with all ones.

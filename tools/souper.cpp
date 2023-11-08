@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  AddModuleToCandidateMap(IC, EBC, CandMap, M.get());
+  AddModuleToCandidateMap(IC, EBC, CandMap, *M.get());
 
   if (Check) {
     return CheckCandidateMap(*M.get(), CandMap, S.get(), IC) ? 0 : 1;

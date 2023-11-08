@@ -65,7 +65,7 @@ void souper::HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm:
   P.doInitialization();
   for (auto &F : *M) {
     std::vector<Inst *> LHSs, RHSs;
-    FunctionCandidateSet CS1 = ExtractCandidates(&F, IC, EBC);
+    FunctionCandidateSet CS1 = ExtractCandidates(F, IC, EBC);
     for (auto &B : CS1.Blocks) {
       for (auto &R : B->Replacements) {
         LHSs.push_back(R.Mapping.LHS);
@@ -76,7 +76,7 @@ void souper::HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm:
     P.run(F);
 //    F.dump();
 
-    FunctionCandidateSet CS2 = ExtractCandidates(&F, IC, EBC);
+    FunctionCandidateSet CS2 = ExtractCandidates(F, IC, EBC);
     for (auto &B : CS2.Blocks) {
       for (auto &R : B->Replacements) {
         RHSs.push_back(R.Mapping.LHS);
