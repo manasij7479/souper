@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <iostream>
 #include <memory>
@@ -508,7 +509,7 @@ bool souper::AliveDriver::translateRoot(const souper::Inst *I, const Inst *PC,
   translateDemandedBits(I, F, ExprCache);
 
   FunctionBuilder Builder(F);
-  if (PC && !(PC->K == Inst::Const && PC->Val.isAllOnesValue())) {
+  if (PC && !(PC->K == Inst::Const && PC->Val.isAllOnes())) {
     Builder.assume(ExprCache[PC]);
   }
   Builder.ret(getType(I->Width, I), ExprCache[I]);
@@ -566,7 +567,7 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
   }
   if (I->K == Inst::KnownZerosP) {
     auto *FlipZeros = IC.getInst(Inst::Xor, I->Width, {I->Ops[1],
-      IC.getConst(llvm::APInt::getAllOnesValue(I->Width))});
+      IC.getConst(llvm::APInt::getAllOnes(I->Width))});
     auto *VarNotZeros = IC.getInst(Inst::Or, I->Width, {I->Ops[0], FlipZeros});
     auto *Eq = IC.getInst(Inst::Eq, 1, {VarNotZeros, FlipZeros});
     auto Ret = translateAndCache(Eq, F, ExprCache);
@@ -801,7 +802,7 @@ souper::AliveDriver::translateDataflowFacts(const souper::Inst* I,
       return false;
     }
     FunctionBuilder Builder(F);
-    if (!(DataFlowConstraints->K == Inst::Const && DataFlowConstraints->Val.isAllOnesValue())) {
+    if (!(DataFlowConstraints->K == Inst::Const && DataFlowConstraints->Val.isAllOnes())) {
       Builder.assume(ExprCache[DataFlowConstraints]);
     }
     return true;
@@ -820,7 +821,7 @@ souper::AliveDriver::translateDemandedBits(const souper::Inst* I,
 
   assert(DemandedBits.getBitWidth() == I-> Width && "Uninitialized DemandedBits");
 
-  if (!DemandedBits.isAllOnesValue()) {
+  if (!DemandedBits.isAllOnes()) {
     auto DBMask = Builder.val(getType(I->Width, I), DemandedBits);
 
     ExprCache[I] = Builder.binOp(getType(I->Width, I),

@@ -391,13 +391,13 @@ struct SymbolTable {
       // Workaround for ^ -1 width independence bug
 
       if (I->Ops[0]->K == Inst::Const) {
-        if (I->Ops[0]->Val.isAllOnesValue()) {
+        if (I->Ops[0]->Val.isAllOnes()) {
           return {"flip(" + Children[1].first + ")", true};
         }
       }
 
       if (I->Ops[1]->K == Inst::Const) {
-        if (I->Ops[1]->Val.isAllOnesValue()) {
+        if (I->Ops[1]->Val.isAllOnes()) {
           return {"flip(" + Children[0].first + ")", true};
         }
       }
@@ -553,7 +553,7 @@ struct SymbolTable {
 
   void GenDFConstraints(Inst *LHS) {
     if (LHS->DemandedBits.getBitWidth()
-        == LHS->Width && !LHS->DemandedBits.isAllOnesValue()) {
+        == LHS->Width && !LHS->DemandedBits.isAllOnes()) {
       Constraints.push_back(new DB(llvm::toString(LHS->DemandedBits, 2, false), LHS->Width));
     }
 
@@ -729,7 +729,7 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
       }
       if (Child->Val.isAllOnes()) {
         Out << "m_AllOnes()";
-      } else if (Child->Val.isNullValue()) {
+      } else if (Child->Val.isZero()) {
         Out << "m_Zero()";
       } else if (OnlyExplicitWidths) {
         Out << "m_ExtInt(\"" << Str << "\", " << Child->Width << ")";
@@ -1239,7 +1239,7 @@ int main(int argc, char **argv) {
     }
     if (IgnoreDF) {
       if (Input.Mapping.LHS->DemandedBits.getBitWidth()
-          == Input.Mapping.LHS->Width && !Input.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+          == Input.Mapping.LHS->Width && !Input.Mapping.LHS->DemandedBits.isAllOnes()) {
 
         continue;
       }
