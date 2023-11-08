@@ -7,6 +7,7 @@
 #include "souper/Parser/Parser.h"
 #include "souper/Infer/Pruning.h"
 #include <sstream>
+#include "llvm/ADT/StringExtras.h"
 namespace souper {
 
 // TODO: Lazy construction instead of eager.
@@ -72,7 +73,7 @@ public:
 
   Builder Flip() {
     auto L = I;
-    // auto AllOnes = IC.getConst(llvm::APInt::getAllOnesValue(L->Width));
+    // auto AllOnes = IC.getConst(llvm::APInt::getAllOnes(L->Width));
     auto AllOnes = Builder(IC, llvm::APInt(1, 1)).SExt(L->Width)();
     return Builder(IC.getInst(Inst::Xor, L->Width, {L, AllOnes}), IC);
   }
@@ -249,7 +250,7 @@ struct InfixPrinter {
       S << "\n  |= \n";
     }
     S << printInst(P.Mapping.LHS, S, true);
-    if (!P.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+    if (!P.Mapping.LHS->DemandedBits.isAllOnes()) {
       S << " (" << "demandedBits="
        << Inst::getDemandedBitsString(P.Mapping.LHS->DemandedBits)
        << ")";
@@ -278,11 +279,11 @@ struct InfixPrinter {
 
     // x ^ -1 => ~x
     if (I->K == Inst::Xor && I->Ops[1]->K == Inst::Const &&
-        I->Ops[1]->Val.isAllOnesValue()) {
+        I->Ops[1]->Val.isAllOnes()) {
       return "~" + printInst(I->Ops[0], S);
     }
     if (I->K == Inst::Xor && I->Ops[0]->K == Inst::Const &&
-        I->Ops[0]->Val.isAllOnesValue()) {
+        I->Ops[0]->Val.isAllOnes()) {
       return "~" + printInst(I->Ops[1], S);
     }
 
@@ -461,7 +462,7 @@ struct LatexPrinter : public InfixPrinter {
       S << " \\models ";
     }
     S << printInst(P.Mapping.LHS, S, true);
-    if (!P.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+    if (!P.Mapping.LHS->DemandedBits.isAllOnes()) {
       S << " (" << "\\text{demandedBits} ="
        << Inst::getDemandedBitsString(P.Mapping.LHS->DemandedBits)
        << ")";
@@ -505,11 +506,11 @@ struct LatexPrinter : public InfixPrinter {
 
     // // x ^ -1 => ~x
     // if (I->K == Inst::Xor && I->Ops[1]->K == Inst::Const &&
-    //     I->Ops[1]->Val.isAllOnesValue()) {
+    //     I->Ops[1]->Val.isAllOnes()) {
     //   return "~" + printInst(I->Ops[0], S);
     // }
     // if (I->K == Inst::Xor && I->Ops[0]->K == Inst::Const &&
-    //     I->Ops[0]->Val.isAllOnesValue()) {
+    //     I->Ops[0]->Val.isAllOnes()) {
     //   return "~" + printInst(I->Ops[1], S);
     // }
 

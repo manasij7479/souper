@@ -132,7 +132,7 @@ AugmentForSymKBDB(ParsedReplacement Original, InstContext &IC) {
   auto Input = Clone(Original, IC);
   std::vector<std::pair<Inst *, llvm::APInt>> ConstMap;
   if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
-    !Input.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+    !Input.Mapping.LHS->DemandedBits.isAllOnes()) {
     auto DB = Input.Mapping.LHS->DemandedBits;
     auto SymDFVar = IC.createVar(DB.getBitWidth(), "symDF_DB");
     // SymDFVar->Name = "symDF_DB";
@@ -182,7 +182,7 @@ AugmentForSymKBDB(ParsedReplacement Original, InstContext &IC) {
       if (I->KnownZeros != 0) {
         Inst *Zeros = IC.createVar(Width, "symDF_K0");
 
-        // Inst *AllOnes = IC.getConst(llvm::APInt::getAllOnesValue(Width));
+        // Inst *AllOnes = IC.getConst(llvm::APInt::getAllOnes(Width));
         // Inst *NotZeros = IC.getInst(Inst::Xor, Width,
         //                         {Zeros, AllOnes});
         // Inst *VarNotZero = IC.getInst(Inst::Or, Width, {I, NotZeros});
@@ -313,8 +313,8 @@ struct ShrinkWrap {
         auto C = IC.getConst(APInt(ResultWidth, 1));
         InstCache[I] = C;
         return C;
-      } else if (I->Val.isAllOnesValue()) {
-        auto C = IC.getConst(APInt::getAllOnesValue(ResultWidth));
+      } else if (I->Val.isAllOnes()) {
+        auto C = IC.getConst(APInt::getAllOnes(ResultWidth));
         InstCache[I] = C;
         return C;
       } else {
@@ -565,7 +565,7 @@ std::vector<Inst *> FilterRelationsByValue(const std::vector<Inst *> &Relations,
   for (auto &&R : Relations) {
     auto Result = CPos.evaluateInst(R);
     // Positive example
-    if (Result.hasValue() && !Result.getValue().isAllOnesValue()) {
+    if (Result.hasValue() && !Result.getValue().isAllOnes()) {
       continue;
     }
 
@@ -573,7 +573,7 @@ std::vector<Inst *> FilterRelationsByValue(const std::vector<Inst *> &Relations,
     bool foundUnsound = false;
     for (auto &&CNeg : CNegs) {
       auto ResultNeg = CNeg.evaluateInst(R);
-      if (ResultNeg.hasValue() && !ResultNeg.getValue().isNullValue()) {
+      if (ResultNeg.hasValue() && !ResultNeg.getValue().isZero()) {
         foundUnsound = true;
         break;
       }
@@ -740,9 +740,9 @@ std::vector<Inst *> InferPotentialRelations(
             continue;
           }
 
-          if (C3 && (XC | YC | ZC).isAllOnesValue()) {
+          if (C3 && (XC | YC | ZC).isAllOnes()) {
             Results.push_back(Builder(XI, IC).Or(YI).Or(ZI)
-              .Eq(llvm::APInt::getAllOnesValue(XI->Width))());
+              .Eq(llvm::APInt::getAllOnes(XI->Width))());
           }
 
           if (C3 && (XC & YC & ZC) == 0) {
@@ -751,9 +751,9 @@ std::vector<Inst *> InferPotentialRelations(
           }
 
           // TODO Make width independent by using bitwidth insts
-          if (C2 && (XC | YC | ~ZC).isAllOnesValue()) {
+          if (C2 && (XC | YC | ~ZC).isAllOnes()) {
             Results.push_back(Builder(XI, IC).Or(YI).Or(Builder(ZI, IC).Flip())
-              .Eq(llvm::APInt::getAllOnesValue(XI->Width))());
+              .Eq(llvm::APInt::getAllOnes(XI->Width))());
           }
 
           if (XC << YC == ZC) {
@@ -976,7 +976,7 @@ std::vector<Inst *> InferPotentialRelations(
   //       }
 
   //       // (-1 << zext(width(X)))
-  //       auto MinusOne = llvm::APInt::getAllOnesValue(Y->Width);
+  //       auto MinusOne = llvm::APInt::getAllOnes(Y->Width);
   //       auto ZExt = Builder(X, IC).BitWidth().ZExt(Y->Width)();
   //       auto OnesThenZeros = Builder(IC.getConst(MinusOne), IC).Shl(ZExt);
   //       WExprs.push_back(OnesThenZeros());
@@ -1537,7 +1537,7 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
       if (One.shl(Val) == Target) {
         Results.push_back(Builder(IC, One).Shl(I)());
       }
-      auto MinusOneVal = llvm::APInt::getAllOnesValue(I->Width);
+      auto MinusOneVal = llvm::APInt::getAllOnes(I->Width);
 
       auto OneBitOne = llvm::APInt(1, 1);
       auto MinusOne = Builder(IC, OneBitOne).SExt(I->Width)();
@@ -1656,25 +1656,25 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
     llvm::APInt D = Val;
     D.flipAllBits();
     if (Target == D) {
-      Results.push_back(Builder(I, IC).Xor(llvm::APInt::getAllOnesValue(I->Width))());
+      Results.push_back(Builder(I, IC).Xor(llvm::APInt::getAllOnes(I->Width))());
     }
 
     if (Target == D + 1) {
-      Results.push_back(Builder(I, IC).Xor(llvm::APInt::getAllOnesValue(I->Width)).Add(1)());
+      Results.push_back(Builder(I, IC).Xor(llvm::APInt::getAllOnes(I->Width)).Add(1)());
     }
 
     // neg
     D = Val;
     D.negate();
     if (Target == D && D != Val) {
-      Results.push_back(Builder(IC, llvm::APInt::getAllOnesValue(I->Width)).Sub(I)());
+      Results.push_back(Builder(IC, llvm::APInt::getAllOnes(I->Width)).Sub(I)());
     }
 
     for (const auto &[I2, Val2] : ConstMap) {
       if (I == I2 || I->Width != I2->Width || I2 == ParentConst) {
         continue;
       }
-      if ((Val & Val2) == Target && !Val.isAllOnesValue() && !Val2.isAllOnesValue()) {
+      if ((Val & Val2) == Target && !Val.isAllOnes() && !Val2.isAllOnes()) {
         Results.push_back(Builder(I, IC).And(I2)());
       }
       if ((Val | Val2) == Target && Val != 0 && Val2 != 0) {
@@ -2003,7 +2003,7 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
 
       // auto MinusOne = Builder(IC, llvm::APInt(C->Width, 1)).AShr(Builder(IC, C).BitWidth())();
-      // auto MinusOne = Builder(IC, llvm::APInt::getAllOnesValue(C->Width))();
+      // auto MinusOne = Builder(IC, llvm::APInt::getAllOnes(C->Width))();
       Components.push_back(C);
       Components.push_back(Builder(C, IC).BSwap()());
       Components.push_back(Builder(C, IC).LogB()());
@@ -2934,7 +2934,7 @@ bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
   }
 
   if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
-      !Input.Mapping.LHS->DemandedBits.isAllOnesValue()) {
+      !Input.Mapping.LHS->DemandedBits.isAllOnes()) {
     return true;
   }
   return false;
@@ -2943,9 +2943,9 @@ bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
 ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement Input) {
   std::map<Inst *, Inst *> Map;
   for (size_t i = 2; i <= 64; ++i) {
-    Map[IC.getConst(llvm::APInt::getAllOnesValue(i))] =
+    Map[IC.getConst(llvm::APInt::getAllOnes(i))] =
       Builder(IC, llvm::APInt(1, 1)).SExt(i)();
-    Map[IC.getConst(llvm::APInt::getAllOnesValue(i) - 1)] =
+    Map[IC.getConst(llvm::APInt::getAllOnes(i) - 1)] =
       Builder(IC, llvm::APInt(1, 1)).SExt(i).Sub(1)();
     Map[IC.getConst(llvm::APInt::getSignedMaxValue(i))] =
       Builder(IC, llvm::APInt(1, 1)).SExt(i).LShr(1)();
