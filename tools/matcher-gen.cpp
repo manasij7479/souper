@@ -730,7 +730,7 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
       if (Child->Val.isAllOnes()) {
         Out << "m_AllOnes()";
       } else if (Child->Val.isZero()) {
-        Out << "m_Zero()";
+        Out << "m_ZeroInt()";
       } else if (OnlyExplicitWidths) {
         Out << "m_ExtInt(\"" << Str << "\", " << Child->Width << ")";
       } else {
