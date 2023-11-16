@@ -23,8 +23,7 @@
 #include <sstream>
 #include <iostream>
 #include <optional>
-
-
+#include <sys/wait.h>
 
 using namespace llvm;
 using namespace souper;
