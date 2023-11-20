@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
   CandidateMap CandMap;
 
   if (HarvestOpts) {
-    HarvestAndPrintOpts(IC, EBC, M.get(), S.get());
+    HarvestAndPrintOpts(IC, M.get(), S.get());
     return 0;
   }
 

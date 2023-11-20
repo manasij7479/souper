@@ -35,7 +35,7 @@ typedef std::vector<CandidateReplacement> CandidateMap;
 
 void AddToCandidateMap(CandidateMap &M, const CandidateReplacement &CR);
 
-void HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm::Module *M, Solver *S);
+void HarvestAndPrintOpts(InstContext &IC, llvm::Module *M, Solver *S);
 
 void AddModuleToCandidateMap(InstContext &IC, ExprBuilderContext &EBC,
                              CandidateMap &CandMap, llvm::Module &M);

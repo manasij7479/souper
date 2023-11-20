@@ -27,6 +27,8 @@
 #include "souper/Infer/SynthUtils.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 void souper::AddToCandidateMap(CandidateMap &M,
                                const CandidateReplacement &CR) {
@@ -59,24 +61,34 @@ bool isProfitable(souper::ParsedReplacement &R) {
   }
 }
 
-void souper::HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm::Module *M, Solver *S) {
+void souper::HarvestAndPrintOpts(InstContext &IC, llvm::Module *M, Solver *S) {
   legacy::FunctionPassManager P(M);
   P.add(createInstructionCombiningPass());
+  P.add(createDeadCodeEliminationPass());
   P.doInitialization();
   for (auto &F : *M) {
     std::vector<Inst *> LHSs, RHSs;
-    FunctionCandidateSet CS1 = ExtractCandidates(F, IC, EBC);
+    ExprBuilderContext EBC1;
+    FunctionCandidateSet CS1 = ExtractCandidates(F, IC, EBC1);
     for (auto &B : CS1.Blocks) {
       for (auto &R : B->Replacements) {
         LHSs.push_back(R.Mapping.LHS);
       }
     }
 
-//    F.dump();
+    //  F.dump();
     P.run(F);
-//    F.dump();
 
-    FunctionCandidateSet CS2 = ExtractCandidates(F, IC, EBC);
+    ExprBuilderContext EBC2;
+
+    for (auto &Arg : F.args()) {
+      if (auto V = llvm::dyn_cast<llvm::Value>(&Arg)) {
+        EBC2.InstMap[V] = EBC1.InstMap[V];
+      }
+    }
+
+    FunctionCandidateSet CS2 = ExtractCandidates(F, IC, EBC2);
+
     for (auto &B : CS2.Blocks) {
       for (auto &R : B->Replacements) {
         RHSs.push_back(R.Mapping.LHS);
@@ -90,12 +102,15 @@ void souper::HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm:
       for (auto V : LHSVars) {
         LHSVarSet.insert(V);
       }
-
       if (!isWellTyped(LHS)) {
         continue;
       }
 
       for (auto RHS : RHSs) {
+        ParsedReplacement Rep;
+        Rep.Mapping.LHS = LHS;
+        Rep.Mapping.RHS = RHS;
+
         if (!isWellTyped(RHS)) {
           continue;
         }
@@ -115,14 +130,10 @@ void souper::HarvestAndPrintOpts(InstContext &IC, ExprBuilderContext &EBC, llvm:
             }
             RHSVarSet.insert(RV);
           }
+
           if (LHSVarSet.size() != RHSVarSet.size()) {
             continue;
           }
-          ParsedReplacement Rep;
-          Rep.Mapping.LHS = LHS;
-          Rep.Mapping.RHS = RHS;
-
-//          Rep.print(llvm::outs(), true);
 
           if (Verify(Rep, IC, S)) {
             if (isProfitable(Rep)) {
