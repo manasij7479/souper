@@ -53,7 +53,7 @@ OutputFilename("o", cl::desc("Override output filename"),
 static cl::opt<bool> StaticProfile("souper-static-profile", cl::init(false),
     cl::desc("Static profiling of Souper optimizations (default=false)"));
 
-static cl::opt<bool> HarvestOpts("harvest-opts", cl::init(false),
+static cl::opt<bool> HarvestOpts("harvest-instcombine-opts", cl::init(false),
     cl::desc("Harvest optimizations performed by InstCombine (default=false)"));
 
 

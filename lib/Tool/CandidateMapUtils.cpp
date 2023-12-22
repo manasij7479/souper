@@ -62,11 +62,28 @@ bool isProfitable(souper::ParsedReplacement &R) {
 }
 
 void souper::HarvestAndPrintOpts(InstContext &IC, llvm::Module *M, Solver *S) {
+  // run sroa as baseline
+  legacy::FunctionPassManager PBaseLine(M);
+  PBaseLine.add(createSROAPass());
+  PBaseLine.doInitialization();
+
+
+
   legacy::FunctionPassManager P(M);
+  P.add(createInstSimplifyLegacyPass());
   P.add(createInstructionCombiningPass());
   P.add(createDeadCodeEliminationPass());
   P.doInitialization();
+
   for (auto &F : *M) {
+    if (F.isDeclaration()) {
+      continue;
+    }
+    // llvm::errs() << "Name : " << F.getName() << "\n";
+
+    // run sroa as baseline
+    PBaseLine.run(F);
+
     std::vector<Inst *> LHSs, RHSs;
     ExprBuilderContext EBC1;
     FunctionCandidateSet CS1 = ExtractCandidates(F, IC, EBC1);
@@ -94,6 +111,9 @@ void souper::HarvestAndPrintOpts(InstContext &IC, llvm::Module *M, Solver *S) {
         RHSs.push_back(R.Mapping.LHS);
       }
     }
+
+    // llvm::errs() << "LHSs : " << LHSs.size() << "\n";
+    // llvm::errs() << "RHSs : " << RHSs.size() << "\n";
 
     for (auto LHS : LHSs) {
       std::vector<Inst *> LHSVars;
@@ -124,19 +144,29 @@ void souper::HarvestAndPrintOpts(InstContext &IC, llvm::Module *M, Solver *S) {
           std::vector<Inst *> RHSVars;
           findVars(RHS, RHSVars);
           std::set<Inst *> RHSVarSet;
+          bool foundNewVar = false;
           for (auto RV : RHSVars) {
             if (LHSVarSet.find(RV) == LHSVarSet.end()) {
-              continue;
+              foundNewVar = true;
+              break;
             }
             RHSVarSet.insert(RV);
           }
-
-          if (LHSVarSet.size() != RHSVarSet.size()) {
+          if (foundNewVar) {
             continue;
           }
 
+          // llvm::errs() << "LHSVarSet : " << LHSVarSet.size() << "\n";
+          // llvm::errs() << "RHSVarSet : " << RHSVarSet.size() << "\n";
+
+          if (LHSVarSet.size() < RHSVarSet.size()) {
+            continue;
+          }
+
+          // llvm::errs() << "HERE\n";
+
           if (Verify(Rep, IC, S)) {
-            if (isProfitable(Rep)) {
+            if (true || isProfitable(Rep)) {
               BlockPCs BPCs;
               std::vector<InstMapping> PCs;
               ReplacementContext RC;

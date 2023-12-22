@@ -1162,8 +1162,12 @@ struct SouperCombinePass : public PassInfoMixin<SouperCombinePass> {
     return PreservedAnalyses::none();
   }
 
-  #include "gen.cpp.inc"
+  template<typename T>
+  auto m_Value(T &&t) {
+    return llvm::PatternMatch::m_Value(std::forward<T>(t));
+  }
 
+  #include "gen.cpp.inc"
 
   Value *getReplacement(llvm::Instruction *I, IRBuilder *B) {
 //    if (!I->hasOneUse()) {
