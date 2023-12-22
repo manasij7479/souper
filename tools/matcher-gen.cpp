@@ -138,6 +138,108 @@ static const std::map<Inst::Kind, std::string> CreateOps = {
   {Inst::Const, "dummy"},
 };
 
+void mapParents(Inst *I, std::map<Inst *, Inst *> &M) {
+  if (M.find(I) != M.end()) {
+    return;
+  }
+  for (auto Op : I->Ops) {
+    M[Op] = I;
+    mapParents(Op, M);
+  }
+}
+
+// Traverses siblings and parents to find a ref expr which should have the same width as I
+Inst *TypeEqSearch(Inst *I, const std::map<Inst *, Inst*> &Parents, std::set<Inst *> &Refs) {
+// TODO: Bellman Ford is more appropriate instead of calling DFS multiple times here.
+// BFS is also an option, but it's not clear if it's better.
+// TODO: Try the above if this a bottleneck (unlikely)
+  std::vector<Inst *> Stack{I};
+  std::unordered_set<Inst *> Visited;
+
+  Inst *Result = nullptr;
+
+  while (!Stack.empty() && !Result) {
+    auto Curr = Stack.back();
+    Stack.pop_back();
+    if (Visited.find(Curr) != Visited.end()) {
+      continue;
+    }
+    Visited.insert(Curr);
+    if (Refs.find(Curr) != Refs.end()) {
+      Result = Curr;
+      break;
+    }
+
+    // Push parent of parent if not width one or width changing inst
+    if (Parents.find(Curr) != Parents.end()) {
+      auto Parent = Parents.at(Curr);
+      if (Parent->Width != 1 && Parent->K != Inst::Trunc && Parent->K != Inst::SExt && Parent->K != Inst::ZExt) {
+        if (Parents.find(Parent) != Parents.end()) {
+          auto ParentParent = Parents.at(Parent);
+          Stack.push_back(ParentParent);
+        }
+      }
+    }
+
+    // Find appropriate siblings
+    std::vector<Inst *> Siblings;
+    if (Parents.find(Curr) != Parents.end()) {
+      auto Parent = Parents.at(Curr);
+      for (size_t i = 0; i < Parent->Ops.size(); i++) {
+        auto Op = Parent->Ops[i];
+        if (Parent->K == Inst::Select && i == 0) {
+          continue;
+        }
+        if (Op->Width == Curr->Width) {
+          Siblings.push_back(Op);
+        }
+      }
+    }
+  }
+
+  return Result;
+}
+
+std::map<Inst *, Inst *> TypeEqSaturation(ParsedReplacement &PR) {
+  // This maybe needs a disjoint set data structure
+  // Current approach is unlikely to be a bottleneck though
+  std::map<Inst *, Inst *> Ret;
+
+  // Find Vars, and width change ops
+  std::vector<Inst *> Refs;
+  findInsts(PR.Mapping.LHS, Refs, [](Inst *I) { return I->K == Inst::Var ||
+                                                       I->K == Inst::SExt||
+                                                       I->K == Inst::ZExt||
+                                                       I->K == Inst::Trunc;});
+  std::set<Inst *> RefSet(Refs.begin(), Refs.end());
+
+  std::map<Inst *, Inst *> Parents;
+  mapParents(PR.Mapping.RHS, Parents);
+  for (auto PC : PR.PCs) {
+    mapParents(PC.LHS, Parents);
+    mapParents(PC.RHS, Parents);
+  }
+
+  // memoized search starting from each concrete constant in RHS/PC
+  // Skipping i1s for now. Is that the right decision?
+
+  std::vector<Inst *> Concretes;
+  findInsts(PR.Mapping.LHS, Concretes, [](Inst *I) { return I->K == Inst::Const && I->Width != 1;});
+  for (auto PC : PR.PCs) {
+    findInsts(PC.LHS, Concretes, [](Inst *I) { return I->K == Inst::Const && I->Width != 1;});
+    findInsts(PC.RHS, Concretes, [](Inst *I) { return I->K == Inst::Const && I->Width != 1;});
+  }
+
+  for (auto C : Concretes) {
+    auto Ref = TypeEqSearch(C, Parents, RefSet);
+    if (Ref) {
+      Ret[C] = Ref;
+    }
+  }
+
+  return Ret;
+}
+
 struct Constraint {
   virtual std::string print() = 0;
 };
@@ -280,6 +382,8 @@ struct SymbolTable {
 
   std::set<Inst *> Used;
 
+  std::map<Inst *, Inst *> TypeEq;
+
   bool exists(Inst *I) {
     if (T.find(I) == T.end()) {
       return false;
@@ -319,9 +423,9 @@ struct SymbolTable {
       return Children[0].first + "." + Str + "(64)";
     };
 
-    auto WC = [&](auto Str) {
-      return Children[0].first + "." + Str + "(" + std::to_string(I->Width) + ")";
-    };
+    // auto WC = [&](auto Str) {
+    //   return Children[0].first + "." + Str + "(" + std::to_string(I->Width) + ")";
+    // };
 
     auto OP = [&](auto Str) {
       return "(" + Children[0].first + " " + Str + " " + Children[1].first + ")";
@@ -767,18 +871,19 @@ bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false)
   return true;
 }
 
-Inst *getSibling(Inst *Child, Inst *Parent) {
-  if (!Child || !Parent) {
-    return nullptr;
-  }
+// Superceded by TypeEqSaturation
+// Inst *getSibling(Inst *Child, Inst *Parent) {
+//   if (!Child || !Parent) {
+//     return nullptr;
+//   }
 
-  for (auto Op : Parent->Ops) {
-    if (Op != Child && Op->Width == Child->Width) {
-      return Op;
-    }
-  }
-  return nullptr;
-}
+//   for (auto Op : Parent->Ops) {
+//     if (Op != Child && Op->Width == Child->Width) {
+//       return Op;
+//     }
+//   }
+//   return nullptr;
+// }
 
 template <typename Stream>
 bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullptr) {
@@ -812,7 +917,7 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
     if (Syms.T.find(Child) != Syms.T.end()) {
       Out << Syms.T[Child];
       if (Child->K == Inst::Const && Syms.T[Child].starts_with("C")) {
-        auto Sib = getSibling(Child, I);
+        auto Sib = Syms.TypeEq[Child];
         std::string S;
         if (Syms.T.find(Sib) != Syms.T.end()) {
           if (Syms.T[Sib].starts_with("x")) {
@@ -832,7 +937,7 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
     if (!Parent) {
       Out << ", T(I)"; // Parent is rhs root
     } else {
-      auto Cousin = getSibling(I, Parent);
+      auto Cousin = Syms.TypeEq[I];
       std::string S;
       if (Syms.T.find(Cousin) != Syms.T.end()) {
         if (Syms.T[Cousin].starts_with("x")) {
@@ -842,6 +947,7 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
       if (!S.empty()) {
         Out << ", T(" << S << ")"; // Ad-hoc type inference
       } else {
+        assert(false && "Type inference failed");
         Out << ", T(" << I->Width << ", B)";
       }
     }
@@ -970,7 +1076,9 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
     Out << ";\n";
   }
 
-//  varnum = 0;
+  Syms.TypeEq = TypeEqSaturation(Input);
+
+//  varnum = 0;a
 //  for (auto &&P : Paths) {
 //    if (P.first == Root || P.first->K == Inst::Var
 //        || LHSRefs.find(P.first) == LHSRefs.end()) {
@@ -991,7 +1099,8 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
 //    Out << ");\n";
 //    Syms.T[P.first].push_back(Name);
 //  }
-  // Syms.T[Root].push_back("I");
+// Syms.T[Root].push_back("I");
+
   return true;
 }
 
