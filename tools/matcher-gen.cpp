@@ -947,8 +947,9 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
       if (!S.empty()) {
         Out << ", T(" << S << ")"; // Ad-hoc type inference
       } else {
-        assert(false && "Type inference failed");
-        Out << ", T(" << I->Width << ", B)";
+        return false; // FIXME Later
+        // assert(false && "Type inference failed");
+        // Out << ", T(" << I->Width << ", B)";
       }
     }
   }
