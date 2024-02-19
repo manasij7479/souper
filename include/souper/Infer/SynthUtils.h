@@ -220,7 +220,11 @@ struct GoPrinter {
       Result += llvm::toString(I->Val, 10, false);
     } else {
       Result = "(";
-      Result += Inst::getKindName(I->K);
+      if (I->K == Inst::Custom) {
+        Result += I->Name;
+      } else {
+        Result += Inst::getKindName(I->K);
+      }
       Result += ' ';
       for (auto Child : I->Ops) {
         Result += printInst(Child);
@@ -371,6 +375,7 @@ struct InfixPrinter {
       case Inst::Sle: Op = "<=s"; break;
       case Inst::KnownOnesP : Op = "<<=1"; break;
       case Inst::KnownZerosP : Op = "<<=0"; break;
+      case Inst::Custom: Op = I->Name; break;
       default: Op = Inst::getKindName(I->K); break;
       }
 
@@ -601,7 +606,14 @@ struct LatexPrinter : public InfixPrinter {
       case Inst::USubSat: Op = "-_\\text{u}^\\text{sat}"; break;
       case Inst::SSubSat: Op = "-_\\text{s}^\\text{sat}"; break;
       case Inst::AShrExact: Op = "\\gg_\\text{s}^\\text{exact}"; break;
-      default: Op = std::string("\\text{") + Inst::getKindName(I->K) + "}"; break;
+      default: {
+        if (I->K == Inst::Custom) {
+          Op = "\\text{" + I->Name + "}";
+        } else {
+          Op = std::string("\\text{") + Inst::getKindName(I->K) + "}";
+        }
+        break;
+      }
       }
 
       std::string Result;

@@ -189,10 +189,10 @@ ParsedReplacement Reducer::ReduceGreedy(ParsedReplacement Input) {
   do {
     auto It = Insts.begin();
     auto I = *It;
-    Insts.erase(It);
-    if (Visited.find(I) != Visited.end()) {
+    if (Insts.find(I) == Insts.end() || Visited.find(I) != Visited.end()) {
       continue;
     }
+    Insts.erase(It);
     Visited.insert(I);
     if (!safeToRemove(I, Input)) {
       continue;
