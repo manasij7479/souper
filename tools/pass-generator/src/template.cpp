@@ -523,6 +523,10 @@ Capture<Matcher> operator<<=(Value **V, Matcher &&M) {
   return A;
 }
 
+[[maybe_unused]] llvm::APInt logb(llvm::APInt A) {
+  return llvm::APInt(A.getBitWidth(), A.logBase2());
+}
+
 [[maybe_unused]] llvm::APInt xor_(llvm::APInt A, llvm::APInt B) {
   m(A, B);
   return A ^ B;
@@ -973,11 +977,16 @@ namespace util {
         std::to_string(counter) + ".src.ll", EC);
         if (!EC) I->getModule()->print(Out, nullptr);
       }
+    }
 
+    template<typename ...T>
+    void elims(size_t opt, T ...V) {
+      Eliminated[opt] = {V...};
     }
 //    void dcmiss(size_t opt) {
 //      DCMiss[opt]++;
 //    }
+    std::map<size_t, std::set<llvm::Value *>> Eliminated;
     std::map<size_t, int64_t> Cost;
 //    std::map<size_t, size_t> DCMiss;
     void print() {

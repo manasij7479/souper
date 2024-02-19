@@ -202,7 +202,6 @@ Inst *TypeEqSearch(Inst *I, const std::map<Inst *, Inst*> &Parents, std::set<Ins
 
 std::map<Inst *, Inst *> TypeEqSaturation(ParsedReplacement &PR) {
   // This maybe needs a disjoint set data structure
-  // Current approach is unlikely to be a bottleneck though
   std::map<Inst *, Inst *> Ret;
 
   // Find Vars, and width change ops
@@ -378,6 +377,7 @@ struct SymbolTable {
   std::deque<Constraint *> Constraints;
 
   std::vector<Inst *> Vars;
+  std::set<Inst *> EliminatedValues;
   std::set<Inst *> ConstRefs;
 
   std::set<Inst *> Used;
@@ -559,6 +559,9 @@ struct SymbolTable {
         return {FUN("ne"), true};
       }
     }
+
+    case Inst::LogB : return {"logb(" + Children[0].first + ")", true};
+
     case Inst::ZExt :
       if (I->Width <= I->Ops[0]->Width)
         return {"", false};
@@ -771,7 +774,8 @@ struct SymbolTable {
 template <typename Stream>
 bool GenLHSMatcher(Inst *I, Stream &Out, SymbolTable &Syms, bool IsRoot = false) {
   if (!IsRoot) {
-    if (I->K != souper::Inst::Var && Syms.Used.find(I) != Syms.Used.end()) {
+    if (I->K != souper::Inst::Var && (Syms.Used.find(I) != Syms.Used.end()
+        || Syms.EliminatedValues.find(I) != Syms.EliminatedValues.end())) {
       Out << "&" << Syms.T[I] << " <<= ";
     }
   }
@@ -958,6 +962,22 @@ bool GenRHSCreator(Inst *I, Stream &Out, SymbolTable &Syms, Inst *Parent = nullp
   return true;
 }
 
+std::set<Inst *> findEliminatedVals(ParsedReplacement &Input) {
+  // Find LHS Insts not used in RHS
+  std::vector<Inst *> LHSInsts, RHSInsts;
+  findInsts(Input.Mapping.LHS, LHSInsts, [](Inst *I) { return I->K != Inst::Const;});
+  findInsts(Input.Mapping.RHS, RHSInsts, [](Inst *I) { return I->K != Inst::Const;});
+
+  std::set<Inst *> RHSInstsSet{RHSInsts.begin(), RHSInsts.end()}, Eliminated;
+
+  for (auto &&I : LHSInsts) {
+    if (RHSInstsSet.find(I) == RHSInstsSet.end()) {
+      Eliminated.insert(I);
+    }
+  }
+  return Eliminated;
+}
+
 template <typename Stream>
 bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
   auto Root = Input.Mapping.LHS;
@@ -970,6 +990,8 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
     Stack.push_back(M.LHS);
     Stack.push_back(M.RHS);
   }
+
+  Syms.EliminatedValues = findEliminatedVals(Input);
 
   int varnum = 0;
   while (!Stack.empty()) {
@@ -1063,6 +1085,13 @@ bool InitSymbolTable(ParsedReplacement Input, Stream &Out, SymbolTable &Syms) {
     }
   }
 
+  for (auto &&I : Syms.EliminatedValues) {
+    if (Syms.T.find(I) == Syms.T.end()) {
+      Syms.T[I] = ("x" + std::to_string(varnum++));
+      // llvm::errs() << "Var0: " << I->Name << " -> " << Syms.T[I] << "\n";
+    }
+  }
+
   if (!Syms.T.empty()) {
     Out << "llvm::Value ";
     bool first = true;
@@ -1120,6 +1149,8 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
   if (!InitSymbolTable(Input, Out, Syms)) {
     return false;
   }
+
+
 //  Out << "  llvm::errs() << \"NOW \" << " << OptID << "<< \"\\n\";\n";
 
   auto F = "util::filter(F, " + std::to_string(OptID) + ") && ";
@@ -1191,8 +1222,23 @@ bool GenMatcher(ParsedReplacement Input, Stream &Out, size_t OptID, bool WidthIn
     }
     Out << ";";
   }
+
   Out << "\nif (util::check_width(ret, I)) {\n";
   Out << "  St.hit(I, " << OptID << ", " << prof  << ");\n";
+  if (!Syms.EliminatedValues.empty()) {
+    Out << "  St.elims(" << OptID << ", ";
+    bool first = true;
+    for (auto &&E : Syms.EliminatedValues) {
+      if (first) {
+        first = false;
+      } else {
+        Out << ", ";
+      }
+      // llvm::errs() << E->Name << "\n";
+      Out << Syms.T[E];
+    }
+    Out << ");\n";
+  }
   Out << "  return ret;\n";
   Out << "\n}\n}\n}";
 
