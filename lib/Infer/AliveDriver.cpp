@@ -784,6 +784,16 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
 
     // TODO: Desugar log2. Alive2 only supports log2 for concrete constants.
 
+    case souper::Inst::Custom: {
+      auto Desugared = CustomInstructionMap[I->Name](&IC, I->Ops);
+      if (!translateAndCache(Desugared, F, ExprCache)) {
+        llvm::errs() << "Failed to translate Custom Instruction.\n";
+        return false;
+      }
+      ExprCache[I] = ExprCache[Desugared];
+      return true;
+    }
+
     default:{
       llvm::errs() << "Unsupported Instruction Kind : " << I->getKindName(I->K) << "\n";
       return false;

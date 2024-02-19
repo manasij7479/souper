@@ -551,6 +551,7 @@ Inst::Kind Inst::getKind(std::string Name) {
                    .Case("hole", Inst::Hole)
                    .Case("reservedconst", Inst::ReservedConst)
                    .Case("freeze", Inst::Freeze)
+                   .StartsWith("custom.", Inst::Kind::Custom)
                    .Default(Inst::None);
 }
 
@@ -1360,4 +1361,28 @@ std::vector<Block *> souper::getBlocksFromPhis(Inst *I) {
   }
 
   return Result;
+}
+
+Inst *souper::lowerCustomInst(InstContext &IC, Inst *I) {
+  if (I->K == Inst::Custom) {
+    return CustomInstructionMap[I->Name](&IC, I->Ops);
+  } else {
+    for (auto &Op : I->Ops) {
+      Op = lowerCustomInst(IC, Op);
+    }
+    return I;
+  }
+}
+
+// Add custom instructions here.
+// Names have to start with "custom." for the parser to recognize them.
+namespace souper {
+std::unordered_map<std::string, CustomInstructionCreator>
+CustomInstructionMap = {
+  {"custom.identity", [](InstContext *IC, const std::vector<Inst *> &Ops) {
+    assert(Ops.size() == 1);
+    return Ops[0];
+  }},
+};
+
 }

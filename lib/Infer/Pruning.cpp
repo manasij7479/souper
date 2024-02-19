@@ -423,7 +423,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
             }
           }
         } else {
-          auto RHSV = ConcreteInterpreters[I].evaluateInst(RHS);
+          auto RHSV = ConcreteInterpreters[I].evaluateInst(lowerCustomInst(SC.IC, RHS));
           if (RHSV.hasValue()) {
             auto RVal = RHSV.getValue();
             if (SC.LHS->DemandedBits != 0) {
