@@ -28,6 +28,7 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 namespace souper {
@@ -40,6 +41,14 @@ extern const std::string ReservedInstPrefix;
 extern const std::string BlockPred;
 
 struct Inst;
+struct InstContext;
+
+using CustomInstructionCreator =
+  std::function<Inst *(
+    InstContext *IC,
+    const std::vector<Inst *> &Ops)>;
+extern std::unordered_map<std::string, CustomInstructionCreator> CustomInstructionMap;
+
 
 struct Block {
   std::string Name;
@@ -132,6 +141,7 @@ struct Inst : llvm::FoldingSetNode {
     RangeP,
     DemandedMask,
 
+    Custom,
     None,
 } Kind;
 
@@ -355,6 +365,8 @@ void separatePCs(const std::vector<InstMapping> &PCs,
                  bool CloneVars);
 
 std::vector<Block *> getBlocksFromPhis(Inst *I);
+
+Inst *lowerCustomInst(InstContext &IC, Inst *I);
 
 }
 

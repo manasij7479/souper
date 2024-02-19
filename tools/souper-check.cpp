@@ -485,7 +485,9 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         if (!ResultConstMap.empty()) {
           if (InferConstOnlyPrintConsts) {
             for (auto &Const : ResultConstMap) {
-              llvm::outs() << Const.first->Name << "  " << Const.second.toStringUnsigned() << "\n";
+              llvm::outs() << Const.first->Name << "  ";
+              Const.second.print(llvm::outs(), false);
+              llvm::outs() << "\n";
             }
           } else {
             std::map<Inst *, Inst *> InstCache;

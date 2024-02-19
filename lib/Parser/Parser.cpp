@@ -604,6 +604,12 @@ bool Parser::typeCheckInst(Inst::Kind IK, unsigned &Width,
     MaxOps = MinOps = 3;
     break;
 
+  case Inst::Custom:
+    MinOps = 1;
+    MaxOps = 3; // Maybe make this unlimited
+    // Actual typechecking is deferred
+    break;
+
   default:
     llvm::report_fatal_error("unhandled");
   }
@@ -1046,6 +1052,7 @@ bool Parser::parseLine(std::string &ErrStr) {
       }
 
       Inst::Kind IK = Inst::getKind(CurTok.str().str());
+      std::string InstNameStr = CurTok.str().str();
 
       if (IK == Inst::None) {
         if (CurTok.str() == "block") {
@@ -1369,6 +1376,10 @@ bool Parser::parseLine(std::string &ErrStr) {
             I = IC.getInst(IK, InstWidth, Ops);
             break;
         }
+      }
+
+      if (IK == Inst::Custom) {
+        I->Name = InstNameStr;
       }
 
       if (hasExternalUses)
