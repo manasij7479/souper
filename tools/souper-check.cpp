@@ -64,6 +64,13 @@ static cl::opt<bool> InferConst("infer-const",
     cl::desc("Try to infer constants for a Souper replacement (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> InferConstOnlyPrintConsts("infer-const-only-print-consts",
+    cl::desc("Only print synthesized constants (default=false)"),
+    cl::init(false));
+
+static cl::list<std::string> InferConstBlockList("infer-const-blocklist",
+    cl::desc("Constant synthesis blocklist"), cl::CommaSeparated);
+
 static cl::opt<bool> ReInferRHS("reinfer-rhs",
     cl::desc("Try to infer a new RHS and compare its cost with the existing RHS (default=false)"),
     cl::init(false));
@@ -425,6 +432,45 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       std::set<Inst *> ConstSet;
       souper::getConstants(Rep.Mapping.RHS, ConstSet);
       souper::getConstants(Rep.Mapping.LHS, ConstSet);
+
+      if (InferConstBlockList.size() > 1) {
+        std::map<std::string, Inst *> Consts;
+        for (auto C : ConstSet) {
+          Consts[C->Name] = C;
+        }
+
+        std::map<std::string, std::vector<int64_t>> BlockList;
+        std::string last;
+        for (auto S : InferConstBlockList) {
+          // if S can not be parsed as a number
+          if (S.find_first_not_of("-0123456789") != std::string::npos) {
+            last = S;
+          } else {
+            BlockList[last].push_back(std::stoll(S));
+          }
+        }
+
+        for (auto S : BlockList) {
+          if (DebugLevel > 2) {
+            llvm::outs() << "; BlockList: " << S.first << " : ";
+          }
+          for (auto I : S.second) {
+            if (DebugLevel > 2) {
+              llvm::outs() << I << " ";
+            }
+            Rep.PCs.push_back(InstMapping{
+              IC.getInst(Inst::Ne, 1,
+                          {Consts[S.first],
+                            IC.getConst(APInt(Consts[S.first]->Width, I, true))}),
+              IC.getConst(APInt(1, 1))
+            });
+          }
+          if (DebugLevel > 2) {
+            llvm::outs() << "\n";
+          }
+        }
+      }
+
       if (ConstSet.empty()) {
         llvm::outs() << "; No reservedconst found in RHS\n";
       } else {
@@ -437,13 +483,19 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         }
 
         if (!ResultConstMap.empty()) {
-          std::map<Inst *, Inst *> InstCache;
-          std::map<Block *, Block *> BlockCache;
-          Rep.Mapping.LHS =
-              getInstCopy(Rep.Mapping.LHS, IC, InstCache, BlockCache, &ResultConstMap, false, false);
-          Rep.Mapping.RHS =
-              getInstCopy(Rep.Mapping.RHS, IC, InstCache, BlockCache, &ResultConstMap, false, false);
-          Rep.print(llvm::outs(), true);
+          if (InferConstOnlyPrintConsts) {
+            for (auto &Const : ResultConstMap) {
+              llvm::outs() << Const.first->Name << "  " << Const.second.toStringUnsigned() << "\n";
+            }
+          } else {
+            std::map<Inst *, Inst *> InstCache;
+            std::map<Block *, Block *> BlockCache;
+            Rep.Mapping.LHS =
+                getInstCopy(Rep.Mapping.LHS, IC, InstCache, BlockCache, &ResultConstMap, false, false);
+            Rep.Mapping.RHS =
+                getInstCopy(Rep.Mapping.RHS, IC, InstCache, BlockCache, &ResultConstMap, false, false);
+            Rep.print(llvm::outs(), true);
+          }
           ++Success;
         } else {
           ++Fail;

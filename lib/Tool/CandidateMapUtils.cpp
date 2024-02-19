@@ -61,7 +61,137 @@ bool isProfitable(souper::ParsedReplacement &R) {
   }
 }
 
-void souper::HarvestAndPrintOpts(InstContext &IC, llvm::Module *M, Solver *S) {
+void souper::HarvestAndPrintPairOpts(InstContext &IC, llvm::Module *M, Solver *S) {
+  auto F1 = M->getFunction("src");
+  if (!F1) {
+    llvm::errs() << "Function src not found\n";
+    return;
+  }
+
+  auto F2 = M->getFunction("tgt");
+  if (!F2) {
+    llvm::errs() << "Function tgt not found\n";
+    return;
+  }
+
+  // for (auto &F : *M) {
+    // if (F.isDeclaration()) {
+      // continue;
+    // }
+    // llvm::errs() << "Name : " << F.getName() << "\n";
+
+    // run sroa as baseline
+    // PBaseLine.run(F);
+
+    std::vector<Inst *> LHSs, RHSs;
+    ExprBuilderContext EBC1;
+    FunctionCandidateSet CS1 = ExtractCandidates(*F1, IC, EBC1);
+    for (auto &B : CS1.Blocks) {
+      for (auto &R : B->Replacements) {
+        LHSs.push_back(R.Mapping.LHS);
+      }
+    }
+
+    //  F.dump();
+    // P.run(F);
+
+    ExprBuilderContext EBC2;
+
+    for (auto &Arg : F1->args()) {
+      if (auto V = llvm::dyn_cast<llvm::Value>(&Arg)) {
+        EBC2.InstMap[V] = EBC1.InstMap[V];
+      }
+    }
+
+    FunctionCandidateSet CS2 = ExtractCandidates(*F2, IC, EBC2);
+
+    for (auto &B : CS2.Blocks) {
+      for (auto &R : B->Replacements) {
+        RHSs.push_back(R.Mapping.LHS);
+      }
+    }
+
+    llvm::errs() << "LHSs : " << LHSs.size() << "\n";
+    llvm::errs() << "RHSs : " << RHSs.size() << "\n";
+
+    for (auto LHS : LHSs) {
+      std::vector<Inst *> LHSVars;
+      findVars(LHS, LHSVars);
+      std::set<Inst *> LHSVarSet;
+      for (auto V : LHSVars) {
+        LHSVarSet.insert(V);
+      }
+      if (!isWellTyped(LHS)) {
+        continue;
+      }
+
+      llvm::errs() << "HERE2\n";
+
+      for (auto RHS : RHSs) {
+        ParsedReplacement Rep;
+        Rep.Mapping.LHS = LHS;
+        Rep.Mapping.RHS = RHS;
+
+        if (!isWellTyped(RHS)) {
+          continue;
+        }
+        llvm::errs() << "HERE2\n";
+
+        if (LHS != RHS && LHS->Width == RHS->Width) {
+          if ((RHS->K == Inst::ZExt || RHS->K == Inst::Freeze)
+              && RHS->Ops[0] == LHS) {
+            continue;
+          }
+
+          std::vector<Inst *> RHSVars;
+          findVars(RHS, RHSVars);
+          std::set<Inst *> RHSVarSet;
+          bool foundNewVar = false;
+          for (auto RV : RHSVars) {
+            if (LHSVarSet.find(RV) == LHSVarSet.end()) {
+              foundNewVar = true;
+              break;
+            }
+            RHSVarSet.insert(RV);
+          }
+
+          llvm::errs() << "HERE\n";
+          // if (foundNewVar) {
+          //   continue;
+          // }
+
+          // llvm::errs() << "LHSVarSet : " << LHSVarSet.size() << "\n";
+          // llvm::errs() << "RHSVarSet : " << RHSVarSet.size() << "\n";
+
+          llvm::errs() << "HERE3\n";
+
+          if (LHSVarSet.size() < RHSVarSet.size()) {
+            continue;
+          }
+
+
+          // llvm::errs() << "HERE\n";
+
+          Rep.print(llvm::errs(), true);
+          if (Verify(Rep, IC, S)) {
+            if (true || isProfitable(Rep)) {
+              BlockPCs BPCs;
+              std::vector<InstMapping> PCs;
+              ReplacementContext RC;
+              souper::PrintReplacementLHS(llvm::outs(), BPCs, PCs, Rep.Mapping.LHS, RC, true);
+              souper::PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, RC, true);
+              llvm::outs() << "\n";
+              llvm::outs().flush();
+            }
+          }
+        }
+      }
+    }
+  // }
+  // P.doFinalization();
+}
+
+void souper::HarvestAndPrintInstCombineOpts(InstContext &IC, llvm::Module *M, Solver *S) {
   // run sroa as baseline
   legacy::FunctionPassManager PBaseLine(M);
   PBaseLine.add(createSROAPass());

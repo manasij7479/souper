@@ -860,6 +860,11 @@ std::vector<Inst *> InferPotentialRelations(
         }
       }
 
+      // log C
+      if (XC == YC.logBase2()) {
+        Results.push_back(Builder(XI, IC).Eq(Builder(YI, IC).LogB())());
+      }
+
       // Add C
       // auto Diff = XC - YC;
       // if (Diff != 0) {
