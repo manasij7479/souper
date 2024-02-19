@@ -470,6 +470,11 @@ private:
     case Inst::USubWithOverflow:
     case Inst::SMulWithOverflow:
     case Inst::UMulWithOverflow:
+
+    case Inst::Custom: {
+      return get(CustomInstructionMap[I->Name](LIC, I->Ops));
+    }
+
     default:
       break;
     }
