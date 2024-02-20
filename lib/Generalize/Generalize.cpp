@@ -418,7 +418,9 @@ struct ShrinkWrap {
         Ops.push_back(OpMap[Op]);
       }
 
-      return IC.getInst(I->K, InferWidth(I->K, Ops), Ops);
+      auto Result = IC.getInst(I->K, InferWidth(I->K, Ops), Ops);
+      Result->Name = I->Name;
+      return Result;
     }
   }
 
