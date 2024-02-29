@@ -167,7 +167,8 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
     }
   }
   std::string InstName;
-  if (printNames && !I->Name.empty()) {
+  std::string CustomNameSave = I->Name;
+  if (printNames && !I->Name.empty() && I->K != Inst::Custom) {
     InstName = I->Name;
   } else {
     InstName = std::to_string(InstNames.size() + BlockNames.size());
@@ -187,7 +188,7 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
       break;
     default: {
       Out << "%" << InstName << ":i" << I->Width << " = "
-          << Inst::getKindName(I->K);
+          << ((I->K == Inst::Custom) ? CustomNameSave : Inst::getKindName(I->K));
       if (I->K == Inst::Var) {
         if (I->KnownZeros.getBoolValue() || I->KnownOnes.getBoolValue())
           Out << " (knownBits=" << Inst::getKnownBitsString(I->KnownZeros, I->KnownOnes)

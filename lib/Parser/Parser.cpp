@@ -1380,6 +1380,7 @@ bool Parser::parseLine(std::string &ErrStr) {
 
       if (IK == Inst::Custom) {
         I->Name = InstNameStr;
+
       }
 
       if (hasExternalUses)

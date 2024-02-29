@@ -588,100 +588,102 @@ std::vector<Inst *> FilterRelationsByValue(const std::vector<Inst *> &Relations,
   return FilteredRelations;
 }
 
-std::vector<Inst *> InferConstantLimits(
-  const std::vector<std::pair<Inst *, llvm::APInt>> &CMap,
-        InstContext &IC, const ParsedReplacement &Input,
-        std::vector<ValueCache> CEXs) {
-  std::vector<Inst *> Results;
-  if (!FindConstantRelations) {
-    return Results;
-  }
-  auto ConcreteConsts = findConcreteConsts(Input);
-  std::sort(ConcreteConsts.begin(), ConcreteConsts.end(),
-          [](auto A, auto B) {
-            if (A->Width == B->Width) {
-              return A->Val.ugt(B->Val);
-            } else {
-              return A->Width < B->Width;
-            }
-          });
+// std::vector<Inst *> InferConstantLimits(
+//   const std::vector<std::pair<Inst *, llvm::APInt>> &CMap,
+//         InstContext &IC, const ParsedReplacement &Input,
+//         std::vector<ValueCache> CEXs) {
+//   std::vector<Inst *> Results;
+//   if (!FindConstantRelations) {
+//     return Results;
+//   }
+//   auto ConcreteConsts = findConcreteConsts(Input);
+//   std::sort(ConcreteConsts.begin(), ConcreteConsts.end(),
+//           [](auto A, auto B) {
+//             if (A->Width == B->Width) {
+//               return A->Val.ugt(B->Val);
+//             } else {
+//               return A->Width < B->Width;
+//             }
+//           });
 
-  std::vector<Inst *> Vars;
-  findVars(Input.Mapping.LHS, Vars);
+//   std::vector<Inst *> Vars;
+//   findVars(Input.Mapping.LHS, Vars);
 
-  for (auto V : Vars) {
-    for (auto &&[XI, XC] : CMap) {
-      if (V->Width ==1 || XI->Width == 1) {
-        continue;
-      }
-      // X < Width, X <= Width
-      auto Width = Builder(V, IC).BitWidth()();
+//   for (auto V : Vars) {
+//     for (auto &&[XI, XC] : CMap) {
+//       if (V->Width ==1 || XI->Width == 1) {
+//         continue;
+//       }
+//       // X < Width, X <= Width
+//       auto Width = Builder(V, IC).BitWidth()();
 
-      if (XI->Width < V->Width) {
-        Width = Builder(Width, IC).Trunc(XI->Width)();
-      } else if (XI->Width > V->Width) {
-        Width = Builder(Width, IC).ZExt(XI->Width)();
-      }
+//       if (XI->Width < V->Width) {
+//         Width = Builder(Width, IC).Trunc(XI->Width)();
+//       } else if (XI->Width > V->Width) {
+//         Width = Builder(Width, IC).ZExt(XI->Width)();
+//       }
 
-      Results.push_back(Builder(XI, IC).Ult(Width)());
-      Results.push_back(Builder(XI, IC).Ule(Width)());
+//       Results.push_back(Builder(XI, IC).Ult(Width)());
+//       Results.push_back(Builder(XI, IC).Ule(Width)());
 
-      // x ule UMAX
-      if (V->Width < XI->Width) {
-        auto UMax = Builder(IC, llvm::APInt(XI->Width, 1)).Shl(Width).Sub(1);
-        Results.push_back(Builder(XI, IC).Ule(UMax)());
-      }
+//       // x ule UMAX
+//       if (V->Width < XI->Width) {
+//         auto UMax = Builder(IC, llvm::APInt(XI->Width, 1)).Shl(Width).Sub(1);
+//         Results.push_back(Builder(XI, IC).Ule(UMax)());
+//       }
 
-      // X ule SMAX
-      auto WM1 = Builder(Width, IC).Sub(1);
-      auto SMax = Builder(IC, llvm::APInt(XI->Width, 1)).Shl(WM1).Sub(1)();
-      Results.push_back(Builder(XI, IC).Ule(SMax)());
+//       // X ule SMAX
+//       auto WM1 = Builder(Width, IC).Sub(1);
+//       auto SMax = Builder(IC, llvm::APInt(XI->Width, 1)).Shl(WM1).Sub(1)();
+//       Results.push_back(Builder(XI, IC).Ule(SMax)());
 
-      auto gZ = Builder(XI, IC).Ugt(0)();
-      Results.push_back(Builder(XI, IC).Ult(Width).And(gZ)());
-      Results.push_back(Builder(XI, IC).Ule(Width).And(gZ)());
+//       auto gZ = Builder(XI, IC).Ugt(0)();
+//       Results.push_back(Builder(XI, IC).Ult(Width).And(gZ)());
+//       Results.push_back(Builder(XI, IC).Ule(Width).And(gZ)());
 
-      // 2 * X < C, 2 * X >= C
-      for (auto C : ConcreteConsts) {
-        if (C->Width != XI->Width) {
-          continue;
-        }
-        auto Sum = Builder(XI, IC).Add(XI)();
-        Results.push_back(Builder(Sum, IC).Ult(C->Val)());
-        Results.push_back(Builder(Sum, IC).Ugt(C->Val)());
-      }
-    }
-  }
+//       // 2 * X < C, 2 * X >= C
+//       for (auto C : ConcreteConsts) {
+//         if (C->Width != XI->Width) {
+//           continue;
+//         }
+//         auto Sum = Builder(XI, IC).Add(XI)();
+//         Results.push_back(Builder(Sum, IC).Ult(C->Val)());
+//         Results.push_back(Builder(Sum, IC).Ugt(C->Val)());
+//       }
+//     }
+//   }
 
 
-  for (auto &&[XI, XC] : CMap) {
-    for (auto &&[YI, YC] : CMap) {
-      if (XI == YI) {
-        continue;
-      }
-      if (XI->Width != YI->Width) {
-        continue;
-      }
-      auto Sum = Builder(XI, IC).Add(YI)();
-      // // Sum related to width
-      // auto Width = Builder(Sum, IC).BitWidth();
-      // Results.push_back(Builder(Sum, IC).Ult(Width)());
-      // Results.push_back(Builder(Sum, IC).Ule(Width)());
-      // Results.push_back(Builder(Sum, IC).Eq(Width)());
+//   for (auto &&[XI, XC] : CMap) {
+//     for (auto &&[YI, YC] : CMap) {
+//       if (XI == YI) {
+//         continue;
+//       }
+//       if (XI->Width != YI->Width) {
+//         continue;
+//       }
+//       auto Sum = Builder(XI, IC).Add(YI)();
+//       // // Sum related to width
+//       // auto Width = Builder(Sum, IC).BitWidth();
+//       // Results.push_back(Builder(Sum, IC).Ult(Width)());
+//       // Results.push_back(Builder(Sum, IC).Ule(Width)());
+//       // Results.push_back(Builder(Sum, IC).Eq(Width)());
 
-      // Sum less than const, Sum greater= than const
-      for (auto C : ConcreteConsts) {
-        if (Sum->Width != C->Width) {
-          continue;
-        }
-        Results.push_back(Builder(Sum, IC).Ult(C->Val)());
-        Results.push_back(Builder(Sum, IC).Ugt(C->Val)());
-      }
-    }
-  }
+//       // Sum less than const, Sum greater= than const
+//       for (auto C : ConcreteConsts) {
+//         if (Sum->Width != C->Width) {
+//           continue;
+//         }
+//         Results.push_back(Builder(Sum, IC).Ult(C->Val)());
+//         Results.push_back(Builder(Sum, IC).Ugt(C->Val)());
+//       }
+//     }
+//   }
 
-  return FilterRelationsByValue(Results, CMap, CEXs);
-}
+//   return FilterRelationsByValue(Results, CMap, CEXs);
+// }
+
+
 
 // Enforce commutativity to prune search space
 bool comm(Inst *A, Inst *B, Inst *C) {
@@ -704,6 +706,70 @@ std::vector<Inst *> BitFuncs(Inst *I, InstContext &IC) {
     }
     if (C->Width != 1 && C->K == Inst::Var) {
       Results.push_back(Builder(C, IC).BitWidth().Sub(C)());
+    }
+  }
+
+  return Results;
+}
+
+std::vector<Inst *> InferConstantLimits(
+  const std::vector<std::pair<Inst *, llvm::APInt>> &CMap,
+        InstContext &IC, const ParsedReplacement &Input) {
+  std::vector<Inst *> Results;
+
+  std::vector<Inst *> Vars;
+  findVars(Input.Mapping.LHS, Vars);
+
+  std::vector<Inst *> Widths;
+  for (auto V : Vars) {
+    Widths.push_back(Builder(V, IC).BitWidth()());
+  }
+
+  // inequalities TODO
+
+  // comparisons
+  for (auto &&[XI, XC] : CMap) {
+    if (XI->Width == 1) {
+      continue;
+    }
+    for (auto Wx : Widths) {
+      // C <= W_x
+      if (XC.getLimitedValue() <= Wx->Ops[0]->Width)
+        Results.push_back(Builder(XI, IC).Ule(Wx)());
+
+      // C < W_x
+      if (XC.getLimitedValue() < Wx->Ops[0]->Width)
+        Results.push_back(Builder(XI, IC).Ult(Wx)());
+
+      // C <= log2(W_x)
+      if (XC.getLimitedValue() < Log2_64(Wx->Ops[0]->Width))
+        Results.push_back(Builder(XI, IC).Ule(Builder(Wx, IC).LogB())());
+
+      // C < log2(W_x)
+      if (XC.getLimitedValue() < Log2_64(Wx->Ops[0]->Width))
+        Results.push_back(Builder(XI, IC).Ult(Builder(Wx, IC).LogB())());
+    }
+  }
+
+  // equalities
+
+  for (auto &&[XI, XC] : CMap) {
+    if (XI->Width == 1) {
+      continue;
+    }
+    for (auto Wx : Widths) {
+      // C == W_x
+      if (XC.getLimitedValue() <= Wx->Ops[0]->Width)
+        Results.push_back(Builder(XI, IC).Ule(Wx)());
+
+      // C < W_x
+      if (XC.getLimitedValue() < Wx->Ops[0]->Width)
+        Results.push_back(Builder(XI, IC).Ult(Wx)());
+
+      // C <= log2(W_x)
+      if (XC.getLimitedValue() < Log2_64(Wx->Ops[0]->Width))
+        Results.push_back(Builder(XI, IC).Ule(Builder(Wx, IC).LogB())());
+
     }
   }
 
@@ -963,9 +1029,10 @@ std::vector<Inst *> InferPotentialRelations(
     }
   }
 
-  // for (auto R : InferConstantLimits(CMap, IC, Input)) {
-  //   Results.push_back(R);
-  // }
+  for (auto R : InferConstantLimits(CMap, IC, Input)) {
+    // llvm::errs() << "HERE: " << '\n';
+    Results.push_back(R);
+  }
   // llvm::errs() << "HERE: " << Results.size() << '\n';
   Results = FilterRelationsByValue(Results, CMap, CEXs);
 
