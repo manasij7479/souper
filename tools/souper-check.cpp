@@ -107,6 +107,10 @@ static cl::opt<std::string> PrettyPrint("pretty-print",
     cl::desc("Pretty print (default=null)"),
     cl::init(""));
 
+static cl::opt<bool> PrintProfit("print-profit",
+    cl::desc("Print profit (default=false)"),
+    cl::init(false));
+
 
 size_t HashInt(size_t x) {
   x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
@@ -533,6 +537,13 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         P(llvm::outs());
       } else {
         llvm_unreachable("unknown pretty-printer");
+      }
+    } else if (PrintProfit) {
+      if (Rep.Mapping.RHS == Rep.Mapping.LHS) {
+        llvm::outs() << "-1\n";
+        // extra penalty for LHS == RHS
+      } else {
+        llvm::outs() << souper::profit(Rep) << '\n';
       }
     } else {
       bool Valid;
