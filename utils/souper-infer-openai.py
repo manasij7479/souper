@@ -9,8 +9,6 @@ client = OpenAI(
   api_key=os.environ.get("OPENAI_API_KEY"),
 )
 
-max_tries = 5
-
 log=[{
 "role": "system",
 "content":
@@ -24,14 +22,29 @@ for all possible inputs.
 Name of variables and expressions are prefixed with %.
 A pc is a boolean precondition that implies a valid optimization.
 The syntax is: pc %0 1, means that the optimization is valid when %%0 is 1.
-The operations available are: add, sub, mul, udiv, sdiv, urem, srem, and, or, xor, shl, lshr, ashr, eq, ne, ugt, uge, ult, ule, sgt, sge, slt, sle.
+The pc does not count towards the cost of the input or the profitability of the optimization.
+
+The operations available are:
+add, sub, mul, udiv, sdiv, udivexact, sdivexact,
+urem, srem, and, or, xor, shl, , lshr, lshrexact, ashr, ashrexact, select, zext, sext, trunc, eq,
+ne, ult, slt, ule, sle, ctpop, bswap, bitreverse, cttz, ctlz, fshl, fshr", extractvalue, sadd.with.overflow,
+uadd.with.overflow, ssub.with.overflow, usub.with.overflow, smul.with.overflow, umul.with.overflow, sadd.sat, uadd.sat,
+ssub.sat, usub.sat.
+The operations are named after the LLVM IR operations they represent, with the usual semantics.
+
 Do not explain the optimizations, just generate the replacement.
 Do not regenerate the existing infer command.
 Do not start a line with a variable that has already been defined.
 Do not declare new variables.
 Do not generate more operations than necessary.
 Try to generate the simplest replacement possible.
-Try to come up with new constants by cleverly combining existing ones.
+If the input is equivalent to a constant, the replacement should be that constant.
+Try to come up with new constants in the result by combining existing ones with arithmetic operations.
+Avoid using the same constant in the replacement as the original.
+Avoid using the poison versions of the operations unless necessary for the optimization to be valid.
+Make sure the generated replacement is well-formed and well-typed.
+If nothing else works, try elementary algebraic operations on the variables.
+
 Here are some complete examples to illustrate the syntax:
 
 %0:i32 = var ; 0
@@ -122,43 +135,78 @@ result %5
 """
 }]
 
+# Most operations cost 1.
+# bitreverse, bswap, ctpop, cttz, ctlz, udiv, sdiv, urem, srem cost 5.
+# fshl, fshr, select cost 3.
+# The profitability of an optimization is the cost of the original expression minus the cost of the replacement.
+# The goal is to maximize the profitability.
+# This can be done by eliminating costly operations in favor of cheaper ones.
+
+def splitOpt(opt):
+  lines = opt.split("\n")
+  lhs = ""
+  rhs = ""
+  appendingToLHS = True
+  for line in lines:
+    if appendingToLHS:
+      lhs += line + "\n"
+    else:
+      rhs += line + "\n"
+    if line.startswith("infer"):
+      appendingToLHS = False
+  return lhs.strip(), rhs.strip()
+
+def fixit(lhs, rhs):
+  opt = lhs + "\n" + rhs
+  filename = "/tmp/" + str(hash(opt)) + ".opt"
+  with open(filename, "w") as f:
+    f.write(opt)
+  result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-fixit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+  fixed = result.stdout.strip()
+  os.remove(filename)
+  return fixed
+
 def verify(lhs, rhs):
   # concatenate lhs and rhs
   opt = lhs + "\n" + rhs
+  filename = "/tmp/" + str(hash(opt)) + ".opt"
   # write the concatenated string to a file
-  with open("/tmp/out.opt", "w") as f:
+  with open(filename, "w") as f:
     f.write(opt)
   # Execute the souper-check binary with the concatenated string
   # and return the stdout of the command
 
-  result = subprocess.run(['./souper-check', '/tmp/out.opt'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+  result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+  os.remove(filename)
   return result
 
 def profit(lhs, rhs):
   # concatenate lhs and rhs
   opt = lhs + "\n" + rhs
+  filename = "/tmp/" + str(hash(opt)) + ".opt"
   # write the concatenated string to a file
-  with open("/tmp/out.opt", "w") as f:
+  with open(filename, "w") as f:
     f.write(opt)
   # Execute the souper-check binary with the concatenated string
   # and return the stdout of the command
 
-  result = subprocess.run(['./souper-check', '/tmp/out.opt', '-print-profit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+  result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-print-profit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+  os.remove(filename)
   return int(result.stdout.strip())
 
-# Needs to be more sophisticated?
-def flip_model(m):
-  if m == "gpt-4":
-    return "gpt-3.5-turbo"
-  elif m == "gpt-3.5-turbo":
-    return "gpt-4"
-  else:
-    return "gpt-3.5-turbo"
+# # Needs to be more sophisticated?
+# def flip_model(m):
+#   if m == "gpt-4":
+#     return "gpt-3.5-turbo"
+#   elif m == "gpt-3.5-turbo":
+#     return "gpt-4"
+#   else:
+#     return "gpt-3.5-turbo"
 
 def sort_results(results):
   return sorted(results, key=lambda x: x['profit'], reverse=True)
 
-def process_response(lhs, response):
+def process_response(lhs, response, min_profit):
   result = dict()
   result['valid'] = list()
   result['invalid'] = list()
@@ -169,7 +217,7 @@ def process_response(lhs, response):
     if oracle.returncode == 0 and "LGTM" in oracle.stdout:
       # result['valid'].append(rhs)
       p = profit(lhs, rhs)
-      if p >= 0:
+      if p >= min_profit:
         result['valid'].append({
           "rhs": rhs,
           "profit": p,
@@ -181,49 +229,75 @@ def process_response(lhs, response):
         })
         result['invalid'].append({
           "role": "user",
-          "content": "Not profitable enough: " + str(p),
+          "content": "Not profitable enough: profit " + str(p) + " is less than the "
+          "minimum acceptable profit :" + str(min_profit),
+        })
+    elif (fixed:= fixit(lhs, rhs)) != "":
+      newlhs, newrhs = splitOpt(fixed)
+      p = profit(newlhs, newrhs)
+
+      if p >= min_profit:
+        result['valid'].append({
+          "rhs": newrhs,
+          "profit": p,
+        })
+      else:
+        result['invalid'].append({
+          "role": "assistant",
+          "content": newrhs,
+        })
+        result['invalid'].append({
+          "role": "user",
+          "content": "Not profitable enough: profit " + str(p) + " is less than the "
+          "minimum acceptable profit :" + str(min_profit),
         })
     else:
       result['invalid'].append({
         "role": "assistant",
         "content": rhs,
       })
-      result['invalid'].append({
+
+      if oracle.stderr.strip() != "":
+        result['invalid'].append({
         "role": "user",
-        "content": "Error : " + oracle.stderr + oracle.stdout,
+        "content": "Error : " + oracle.stderr,
       })
+      elif oracle.stdout.strip() != "":
+        result['invalid'].append({
+        "role": "user",
+        "content": "The result is invalid for this input : " + oracle.stdout,
+      })
+      else :
+        result['invalid'].append({
+          "role": "user",
+          "content": "Error, please try again.",
+        })
+
   return result
 
-def infer(lhs, debug=False):
+def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_profit = 1):
   global log
   log.append({
     "role": "user",
     "content": lhs,
     })
 
-  # model = "gpt-4-1106-preview"
-  # model = "gpt-4-0125-preview"
-  model = "gpt-4-turbo-preview"
-  # model = "gpt-3.5-turbo"
-  # model = "gpt-4"
-  # model = "null"
-
   oracle = "init"
   tries = 0
   while True:
     chat_completion = client.chat.completions.create(
-      messages = log, model=model, n = 4, temperature=0.7, presence_penalty=0.5, frequency_penalty=0.5)
-    # TODO : Try tweaking these parameters
+      messages = log, model=model, n = 1, temperature=0.7, presence_penalty=0.5, frequency_penalty=0.5)
+
     tries += 1
     if debug:
       print("Num tries: ", tries)
 
-    results = process_response(lhs, chat_completion)
+    results = process_response(lhs, chat_completion, min_profit)
 
     if results['valid']:
       if debug:
         print ("Valid results: ", results['valid'])
-      return sort_results(results['valid'])[0]['rhs']
+      return sort_results(results['valid'])[0]['rhs'] + "\n" + "; tries " + str(tries) + "\n"
     else :
       if debug:
         print("Invalid results: ", results['invalid'])
@@ -267,11 +341,16 @@ if __name__ == "__main__":
     if rhs := r.hget(lhs, "rhs"):
       print(lhs, rhs)
     else :
-      rhs = infer(lhs, int(args.d) > 0)
+      rhs = infer(lhs, int(args.d) > 0, min_profit=1)
       if rhs == "Failed to infer RHS.":
         r.hset(lhs, "noinfer", "noinfer")
       else :
-        r.hset(lhs, "rhs", rhs)
+        rhs2 = infer(lhs, int(args.d) > 0, min_profit=2)
+        if rhs2 == "Failed to infer RHS.":
+          r.hset(lhs, "rhs", rhs)
+        else:
+          r.hset(lhs, "rhs", rhs2)
+          print(rhs2)
       print(rhs)
 
 

@@ -962,19 +962,32 @@ std::vector<Inst *> InferPotentialRelations(
       };
 
       GENComps(XI, XC, YI, YC);
+
+      // C1 << C2 == -1 << C2
+      if (XC.shl(YC) == llvm::APInt::getAllOnes(XC.getBitWidth()).shl(YC)) {
+        auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(XC.getBitWidth());
+        Results.push_back(Builder(XI, IC).Shl(YI).Eq(MinusOne.Shl(YI))());
+      }
+
+      // C1 >> C2 == -1 >> C2
+      if (XC.lshr(YC) == llvm::APInt::getAllOnes(XC.getBitWidth()).lshr(YC)) {
+        auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(XC.getBitWidth());
+        Results.push_back(Builder(XI, IC).LShr(YI).Eq(MinusOne.LShr(YI))());
+      }
+
       // GENComps(Builder(IC, One).Shl(XI)() , One.shl(XC), YI, YC);
       // GENComps(XI, XC, Builder(IC, One).Shl(YI)() , One.shl(YC));
 
 
-      // auto XBits = BitFuncs(XI, IC);
-      // auto YBits = BitFuncs(YI, IC);
+      auto XBits = BitFuncs(XI, IC);
+      auto YBits = BitFuncs(YI, IC);
 
-      // for (auto &&XBit : XBits) {
-      //   for (auto &&YBit : YBits) {
-      //     Results.push_back(Builder(XBit, IC).Ule(YBit)());
-      //     Results.push_back(Builder(XBit, IC).Ult(YBit)());
-      //   }
-      // }
+      for (auto &&XBit : XBits) {
+        for (auto &&YBit : YBits) {
+          Results.push_back(Builder(XBit, IC).Ule(YBit)());
+          Results.push_back(Builder(XBit, IC).Ult(YBit)());
+        }
+      }
 
       // No example yet where this is useful
       // for (auto &&XBit : XBits) {

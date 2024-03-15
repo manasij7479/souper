@@ -99,6 +99,10 @@ static cl::opt<bool> Hash("hash",
     cl::desc("Hash a trasnformation. (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> FixIt("fixit",
+    cl::desc("Replace constants with ones that work. (default=false)"),
+    cl::init(false));
+
 static cl::opt<bool> FilterRedundant("filter-redundant",
     cl::desc("Filter redundant transformations based on static hashing (default=false)"),
     cl::init(false));
@@ -520,6 +524,42 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         llvm::outs() << "Pruning succeeded.\n";
       } else {
         llvm::outs() << "Pruning failed.\n";
+      }
+    } else if (FixIt) {
+      if (Verify(Rep, IC, S)) {
+        Rep.print(llvm::outs(), true);
+      } else {
+        // Find RHS-fresh constants
+        std::vector<Inst *> LHSConsts, RHSConsts;
+        findInsts(Rep.Mapping.LHS, LHSConsts, [](Inst *I) {
+          return I->K == Inst::Const;
+        });
+        findInsts(Rep.Mapping.RHS, RHSConsts, [](Inst *I) {
+          return I->K == Inst::Const;
+        });
+        std::set<Inst *> LHSConstSet(LHSConsts.begin(), LHSConsts.end());
+        std::set<Inst *> RHSConstSet(RHSConsts.begin(), RHSConsts.end());
+        std::vector<Inst *> FreshConsts;
+        for (auto &&C : RHSConstSet) {
+          if (LHSConstSet.find(C) == LHSConstSet.end()) {
+            FreshConsts.push_back(C);
+          }
+        }
+        std::map<Inst *, Inst *> InstCache;
+        std::set<Inst *> ConstSet;
+        unsigned ConstID = 1;
+        for (auto &&C : FreshConsts) {
+          InstCache[C] = IC.createSynthesisConstant(C->Width, ConstID++);
+          ConstSet.insert(InstCache[C]);
+        }
+        auto Clone = Replace(Rep, IC, InstCache);
+        if (auto Fixed = Verify(Clone, IC, S)) {
+          ReplacementContext RC;
+          Fixed->printLHS(llvm::outs(), RC, true);
+          Fixed->printRHS(llvm::outs(), RC, true);
+        } else {
+          llvm::errs() << "Failed to fix the replacement.\n";
+        }
       }
     } else if (PrettyPrint != "") {
       if (PrettyPrint == "infix") {
