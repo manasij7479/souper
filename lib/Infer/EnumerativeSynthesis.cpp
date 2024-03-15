@@ -90,6 +90,9 @@ namespace {
   static cl::opt<bool> IgnoreCost("souper-enumerative-synthesis-ignore-cost",
     cl::desc("Ignore cost of RHSs -- just generate them (default=false)"),
     cl::init(false));
+  static cl::opt<bool> ExternalUses("souper-enumerative-synthesis-external-uses",
+    cl::desc("Ignore cost of values with external uses(default=true)"),
+    cl::init(true));
   static cl::opt<bool> SynFreeze("souper-synthesize-freeze",
     cl::desc("Generate Freeze (default=false)"),
     cl::init(false));
@@ -697,7 +700,7 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
       ReplacementContext RC;
       RC.printInst(I, llvm::errs(), /*printNames=*/true);
       llvm::errs() << "\n";
-      llvm::errs() << "Cost = " << souper::cost(I, /*IgnoreDepsWithExternalUses=*/true) << "\n";
+      llvm::errs() << "Cost = " << souper::cost(I, /*IgnoreDepsWithExternalUses=*/ExternalUses) << "\n";
     }
 
     Inst *RHS = nullptr;
@@ -838,7 +841,7 @@ EnumerativeSynthesis::synthesize(SMTLIBSolver *SMTSolver,
   // do not use LHS itself as a candidate
   Cands.erase(SC.LHS);
 
-  int LHSCost = souper::cost(SC.LHS, /*IgnoreDepsWithExternalUses=*/true) + CostFudge;
+  int LHSCost = souper::cost(SC.LHS, /*IgnoreDepsWithExternalUses=*/ExternalUses) + CostFudge;
   int TooExpensive = 0;
 
   std::vector<Inst *> Inputs;
