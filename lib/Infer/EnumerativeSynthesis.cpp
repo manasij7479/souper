@@ -92,7 +92,7 @@ namespace {
     cl::init(false));
   static cl::opt<bool> ExternalUses("souper-enumerative-synthesis-external-uses",
     cl::desc("Ignore cost of values with external uses(default=true)"),
-    cl::init(true));
+    cl::init(false)); // FIXME Change back before merging
   static cl::opt<bool> SynFreeze("souper-synthesize-freeze",
     cl::desc("Generate Freeze (default=false)"),
     cl::init(false));
