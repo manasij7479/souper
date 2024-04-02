@@ -984,8 +984,10 @@ std::vector<Inst *> InferPotentialRelations(
 
       for (auto &&XBit : XBits) {
         for (auto &&YBit : YBits) {
-          Results.push_back(Builder(XBit, IC).Ule(YBit)());
-          Results.push_back(Builder(XBit, IC).Ult(YBit)());
+          if (XBit->Width == YBit->Width) {
+            Results.push_back(Builder(XBit, IC).Ule(YBit)());
+            Results.push_back(Builder(XBit, IC).Ult(YBit)());
+          }
         }
       }
 
