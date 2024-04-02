@@ -19,7 +19,7 @@ you have to generate a replacement.
 The replacement can not be the same as the SSA value being optimized, it should
 be a simpler value that is faster to compute but still produce the same result
 for all possible inputs.
-Name of variables and expressions are prefixed with %.
+Name of SSA variables are prefixed with %.
 A pc is a boolean precondition that implies a valid optimization.
 The syntax is: pc %0 1, means that the optimization is valid when %%0 is 1.
 The pc does not count towards the cost of the input or the profitability of the optimization.
@@ -44,6 +44,16 @@ Avoid using the same constant in the replacement as the original.
 Avoid using the poison versions of the operations unless necessary for the optimization to be valid.
 Make sure the generated replacement is well-formed and well-typed.
 If nothing else works, try elementary algebraic operations on the variables.
+
+Most operations cost 1.
+bitreverse, bswap, ctpop, cttz, ctlz, udiv, sdiv, urem, srem cost 5.
+fshl, fshr, select cost 3.
+The profitability of an optimization is the cost of the original expression minus the cost of the replacement.
+The goal is to maximize the profitability by eliminating costlier operations and replacing them with cheaper ones.
+
+eq, ne, ult, slt, ule, sle return a 1 bit result.
+zext, sext, trunc change the width of the result.
+select returns the type of the second and third arguments.
 
 Here are some complete examples to illustrate the syntax:
 
@@ -132,15 +142,30 @@ infer %3
 %4:i32 = select %1, 3:i32, 0:i32
 %5:i32 = lshr %0, %4
 result %5
+
+%0:i64 = var
+%1:i64 = add 1:i64, %0 (hasExternalUses)
+%2:i64 = var
+%3:i1 = ult %1, %2
+pc %3 0:i1
+%4:i1 = slt 18446744073709551615:i64, %2
+%5:i64 = shl %2, 1:i64
+%6:i64 = select %4, %5, 18446744073709551615:i64 (hasExternalUses)
+%7:i1 = ult %6, 209622091746699451:i64
+infer %7
+%8:i1 = ult %2, 104811045873349726:i64
+result %8
+
+%0:i32 = var
+%1:i1 = eq 2139095040:i32, %0
+%2:i1 = ne 4286578688:i32, %0
+%3:i1 = select %1, 0:i1, %2
+infer %3
+%4:i1 = xor %1, %2
+result %4
+
 """
 }]
-
-# Most operations cost 1.
-# bitreverse, bswap, ctpop, cttz, ctlz, udiv, sdiv, urem, srem cost 5.
-# fshl, fshr, select cost 3.
-# The profitability of an optimization is the cost of the original expression minus the cost of the replacement.
-# The goal is to maximize the profitability.
-# This can be done by eliminating costly operations in favor of cheaper ones.
 
 def splitOpt(opt):
   lines = opt.split("\n")
@@ -282,8 +307,8 @@ def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_prof
     "content": lhs,
     })
 
-  oracle = "init"
   tries = 0
+  invalid = set()
   while True:
     chat_completion = client.chat.completions.create(
       messages = log, model=model, n = 1, temperature=0.7, presence_penalty=0.5, frequency_penalty=0.5)
@@ -302,6 +327,18 @@ def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_prof
       if debug:
         print("Invalid results: ", results['invalid'])
       log = log + results['invalid']
+
+    # Quit if no new invalid results are generated
+    foundNewInvalid = False
+    for i in results['invalid']:
+      if i['role'] == "assistant":
+        if i['content'] not in invalid:
+          foundNewInvalid = True
+          invalid.add(i['content'])
+    if not foundNewInvalid:
+      if debug:
+        print("No new invalid results are generated. Quitting.")
+      return "Failed to infer RHS."
 
     if tries >= max_tries/2:
       log = log[0:2] # clear the log, take a fresh look at the problem
