@@ -415,8 +415,10 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
 
   if (DebugLevel > 2) {
     std::cerr << "Verifying following Alive Transformation ... \n\n";
+    LHSF.setName("src");
+    RHSF.setName("tgt");
     std::cerr << LHSF << '\n';
-    std::cerr << " => \n\n";
+    std::cerr << " \n\n";
     std::cerr << RHSF << '\n';
   }
 
