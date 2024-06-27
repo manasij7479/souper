@@ -43,7 +43,7 @@ Inst *getUBConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
   case Inst::AShr:
     // right operand has to be < Width
     return (OpNum == 0) ?
-      IC.getConst(llvm::APInt(1, true)) : 
+      IC.getConst(llvm::APInt(1, true)) :
       IC.getInst(Inst::Ult, 1, { C, IC.getConst(llvm::APInt(C->Width, C->Width)) });
 
   case Inst::UDiv:
@@ -81,7 +81,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
   case Inst::USubSat:
     // left operand cannot be 0, right operand cannot be 0 or -1
     return (OpNum == 0) ?
-      IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C }) : 
+      IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C }) :
       IC.getInst(Inst::And, 1, {
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C }),
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getAllOnes(C->Width)), C })
@@ -147,7 +147,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
         IC.getInst(Inst::Ult, 1, { IC.getConst(llvm::APInt(C->Width, 2)), C }),
         IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getAllOnes(C->Width)), C })
       });
-    
+
   case Inst::SDiv:
   case Inst::SRem:
   case Inst::URem:
@@ -193,7 +193,7 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
       IC.getInst(Inst::And, 1, {
           IC.getInst(Inst::Ult, 1, { C, IC.getConst(llvm::APInt::getAllOnes(C->Width) - 1) }),
           IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt(C->Width, 0)), C })
-      });    
+      });
 
   case Inst::Slt:
     // we don't want:
@@ -230,21 +230,8 @@ Inst *getConstConstraint(Inst::Kind K, unsigned OpNum, Inst *C,
           IC.getInst(Inst::Slt, 1, { C, IC.getConst(llvm::APInt::getSignedMaxValue(C->Width) - 1) }),
           IC.getInst(Inst::Ne, 1, { IC.getConst(llvm::APInt::getSignedMinValue(C->Width)), C })
       });
-
-  case Inst::Eq:
-  case Inst::Ne:
-  case Inst::SAddO:
-  case Inst::UAddO:
-  case Inst::SSubO:
-  case Inst::USubO:
-  case Inst::SMulO:
-  case Inst::UMulO:
-  case Inst::Select: // handled elsewhere: 2nd and 3rd arguments can't be same constant
-    // no constraint
+  default: // no constraint
     return IC.getConst(llvm::APInt(1, true));
-
-  default:
-    llvm::report_fatal_error(("unmatched: " + (std::string)Inst::getKindName(K)).c_str());
   }
 }
 
@@ -256,7 +243,7 @@ void addComplexConstraints(Inst *I,
   // --x
   // ~~x
   // 2 * x / 2
-  
+
   // first and second arguments to funnel shift can't both be zero
   if (I->K == Inst::FShl || I->K == Inst::FShr) {
     if (ConstSet.find(I->Ops[0]) != ConstSet.end() &&
