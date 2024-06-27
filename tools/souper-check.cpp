@@ -55,6 +55,10 @@ static cl::opt<bool> InferRHS("infer-rhs",
     cl::desc("Try to infer a RHS for a Souper LHS (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> SymInferRHS("sym-infer-rhs",
+    cl::desc("Try to infer RHS for a Souper Symbolic LHS (default=false)"),
+    cl::init(false));
+
 static cl::opt<bool> InferConst("infer-const",
     cl::desc("Try to infer constants for a Souper replacement (default=false)"),
     cl::init(false));
@@ -94,7 +98,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
 
   std::vector<ParsedReplacement> Reps;
   std::vector<ReplacementContext> Contexts;
-  if (InferRHS || ParseLHSOnly || isInferDFA()) {
+  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA()) {
     Reps = ParseReplacementLHSs(IC, MB.getBufferIdentifier(), MB.getBuffer(),
                                 Contexts, ErrStr);
   } else {
@@ -224,7 +228,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         }
         return 0;
       }
-    } else if (InferRHS || ReInferRHS) {
+    } else if (InferRHS || ReInferRHS || SymInferRHS) {
       int OldCost;
       std::vector<Inst *> RHSs;
       if (ReInferRHS) {
@@ -267,6 +271,11 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
             ReplacementContext Context;
             PrintReplacementLHS(llvm::outs(), Rep.BPCs, Rep.PCs,
                                 Rep.Mapping.LHS, Context);
+            PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, Context);
+          } else if (SymInferRHS) {
+            ReplacementContext Context;
+            PrintReplacementLHS(llvm::outs(), Rep.BPCs, Rep.PCs,
+                                Rep.Mapping.RHS->Aux, Context);
             PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, Context);
           } else {
             ReplacementContext Context;

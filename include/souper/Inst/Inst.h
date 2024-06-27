@@ -139,6 +139,7 @@ struct Inst : llvm::FoldingSetNode {
   std::vector<Inst *> Ops;
   mutable std::vector<Inst *> OrderedOps;
   std::vector<llvm::Value *> Origins;
+  Inst *Aux;
 
   bool operator<(const Inst &I) const;
   const std::vector<Inst *> &orderedOps() const;

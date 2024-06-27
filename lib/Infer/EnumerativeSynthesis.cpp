@@ -698,6 +698,7 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
     std::set<Inst *> ConstSet;
     std::map <Inst *, llvm::APInt> ResultConstMap;
     souper::getConstants(I, ConstSet);
+    souper::getConstants(SC.LHS, ConstSet);
     bool GuessHasConstant = !ConstSet.empty();
     if (!GuessHasConstant) {
       bool IsSAT;
@@ -728,6 +729,8 @@ std::error_code synthesizeWithKLEE(SynthesisContext &SC, std::vector<Inst *> &RH
       std::map<Inst *, Inst *> InstCache;
       std::map<Block *, Block *> BlockCache;
       RHS = getInstCopy(I, SC.IC, InstCache, BlockCache, &ResultConstMap, false, false);
+      auto NewLHS = getInstCopy(SC.LHS, SC.IC, InstCache, BlockCache, &ResultConstMap, false, false);
+      RHS->Aux = NewLHS;
     }
 
     assert(RHS);
