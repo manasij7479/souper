@@ -972,6 +972,18 @@ int Inst::getCost(Inst::Kind K) {
     case USubSat:
     case Select:
       return 3;
+    case Mul:
+    case MulNSW:
+    case MulNUW:
+    case MulNW:
+      return 2;
+    case SMulWithOverflow:
+    case UMulWithOverflow:
+    case SAddWithOverflow:
+    case UAddWithOverflow:
+    case SSubWithOverflow:
+    case USubWithOverflow:
+      return 2;
     default:
       return 1;
   }

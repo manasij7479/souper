@@ -139,20 +139,21 @@ struct StoredObject {
     return std::nullopt;
   }
 
-  // template <>
-  // std::optional<std::unique_ptr<llvm::Module>> get(SymbolTable *S) {
-  //   if (Data.size() != 1) return std::nullopt;
-  //   std::string ErrStr;
-  //   llvm::MemoryBufferRef MB(Data[0], "temp");
-  //   // auto M = getLazyIRModule(MB, ErrStr, S->LC,
-  //   //                          /*ShouldLazyLoadMetadata=*/true);
-  //   std::unique_ptr<llvm::Module> M;
-  //   if (!M) {
-  //     llvm::errs() << ErrStr << '\n';
-  //     return std::nullopt;
-  //   }
-  //   return std::move(M);
-  // }
+  template <>
+  std::optional<std::unique_ptr<llvm::Module>> get(SymbolTable *S) {
+    if (Data.size() != 1) return std::nullopt;
+    std::string ErrStr;
+    auto &&MB = llvm::MemoryBuffer::getMemBufferCopy(Data[0]);
+    // std::make_unique<llvm::MemoryBuffer>(Data[0], "temp");
+    llvm::SMDiagnostic Err;
+    auto &&M = getLazyIRModule(std::move(MB), Err, S->LC,
+                             /*ShouldLazyLoadMetadata=*/true);
+    if (!M) {
+      llvm::errs() << ErrStr << '\n';
+      return std::nullopt;
+    }
+    return std::move(M);
+  }
 
 };
 
@@ -376,12 +377,44 @@ struct REPL {
     if (!Inputs.empty()) {
       Tab.put("_", Inputs[0]);
     }
+
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    CB.SetCompilerArgs({"-std=c++20", "-O0", "-g0"});
+    CI = ExitOnErr(CB.CreateCpp());
+    Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
   }
 
   InstContext &IC;
+  ExprBuilderContext EBC;
   Solver *S;
   std::vector<ParsedReplacement> &Inputs;
   SymbolTable Tab;
+
+  clang::IncrementalCompilerBuilder CB;
+  std::unique_ptr<clang::CompilerInstance> CI;
+  std::unique_ptr<clang::Interpreter> Interp;
+  llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
+
+  std::vector<ParsedReplacement> Extract(llvm::Module *M) {
+    std::vector<ParsedReplacement> Results;
+    for (auto &&F : *M) {
+      if (F.isDeclaration()) {
+        continue;
+      }
+      auto Candidates = ExtractCandidates(F, IC, EBC);
+      ParsedReplacement PR;
+      for (auto &Cand : Candidates.Blocks) {
+        PR.BPCs = Cand->BPCs;
+        PR.PCs = Cand->PCs;
+        for (auto &Rep : Cand->Replacements) {
+          PR.Mapping = Rep.Mapping;
+          Results.push_back(PR);
+        }
+      }
+    }
+    return Results;
+  }
 
   bool match(std::string in, const std::set<std::string> &possibilities) {
     return possibilities.find(in) != possibilities.end();
@@ -545,8 +578,23 @@ struct REPL {
       return false;
     }
 
-    // parse C and C++
-
+    // extract
+    if (match(Cmds[0], {"e", "extract"})) {
+      if (auto In = Tab.warn_get(Cmds[1], "module")) {
+        auto M = In->get<std::unique_ptr<llvm::Module>>(&Tab).value();
+        auto Results = Extract(M.get());
+        for (size_t i = 0; i < Results.size(); ++i) {
+          auto Name = "_" + std::to_string(i);
+          Tab.put(Name, Results[i]);
+          PrettyPrint(Name, Tab);
+        }
+        if (!Results.empty()) {
+          Tab.current("_0");
+        }
+        return true;
+      }
+      return false;
+    }
 
     // infer
     if (match(Cmds[0], {"i", "infer"})) {
@@ -617,6 +665,14 @@ struct REPL {
       return false;
     }
 
+    // undo
+    if (match(Cmds[0], {"undo"})) {
+      if (Interp->Undo()) {
+        llvm::errs() << "Nothing to undo.\n";
+      }
+      return true;
+    }
+
     // push
     if (match(Cmds[0], {"push"})) {
       Tab.push();
@@ -662,7 +718,6 @@ struct REPL {
       Tab.put("_", SymbolTable::StoredObject(Data, "string"));
       return true;
     }
-
     return false;
   }
 
@@ -721,24 +776,6 @@ struct REPL {
   bool operator()() {
     std::string Line;
     Mode CurrentMode = Mode::command;
-
-    llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
-
-    // Allow low-level execution.
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    // Initialize our builder class.
-    clang::IncrementalCompilerBuilder CB;
-    CB.SetCompilerArgs({"-std=c++20", "-O1"});
-
-    // Create the incremental compiler instance.
-    std::unique_ptr<clang::CompilerInstance> CI;
-    CI = ExitOnErr(CB.CreateCpp());
-
-    // Create the interpreter instance.
-    std::unique_ptr<clang::Interpreter> Interp
-        = ExitOnErr(clang::Interpreter::create(std::move(CI)));
-
 
     do {
       llvm::outs() << "souper-repl [" + getModeName(CurrentMode) + "]> ";
@@ -818,11 +855,14 @@ struct REPL {
         auto &&PTU = Interp->Parse(Line);
         if (!PTU) {
           llvm::errs() << "Failed to parse\n";
-          return 1;
+          continue;
+        } else {
+          if (DebugLevel > 2) {
+            PTU->TheModule->print(llvm::outs(), nullptr);
+          }
+          Tab.put("_", SymbolTable::StoredObject(std::move(PTU->TheModule)));
         }
-        PTU->TheModule->print(llvm::outs(), nullptr);
       }
-
     } while(std::cin.good());
     return true;
   }
