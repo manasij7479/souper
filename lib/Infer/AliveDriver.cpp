@@ -198,7 +198,8 @@ private:
       if (x.find("var_sym") != std::string::npos) {
         Attrs = IR::ParamAttrs::NoUndef;
       }
-      auto i = std::make_unique<IR::Input>(t, std::move(x), std::move(Attrs));
+      auto i = std::make_unique<IR::Input>(t, std::move(x));
+      i->setAttributes(std::move(Attrs));
       auto ptr = i.get();
       F.addInput(std::move(i));
       identifiers[x] = ptr;
@@ -394,8 +395,8 @@ void souper::AliveDriver::copyInputs(souper::AliveDriver::Cache &To,
         Attrs = IR::ParamAttrs::NoUndef;
       }
       auto Input = std::make_unique<IR::Input>(Val->getType(),
-                                                std::string(NameMap[I]),
-                                                std::move(Attrs));
+                                                std::string(NameMap[I]));
+      Input->setAttributes(std::move(Attrs));
       To[I] = Input.get();
       RHS.addInput(std::move(Input));
     }
@@ -415,10 +416,8 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
 
   if (DebugLevel > 2) {
     std::cerr << "Verifying following Alive Transformation ... \n\n";
-    LHSF.setName("src");
-    RHSF.setName("tgt");
     std::cerr << LHSF << '\n';
-    std::cerr << " \n\n";
+    std::cerr << " => \n\n";
     std::cerr << RHSF << '\n';
   }
 
@@ -785,16 +784,6 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
     }
 
     // TODO: Desugar log2. Alive2 only supports log2 for concrete constants.
-
-    case souper::Inst::Custom: {
-      auto Desugared = CustomInstructionMap[I->Name](&IC, I->Ops);
-      if (!translateAndCache(Desugared, F, ExprCache)) {
-        llvm::errs() << "Failed to translate Custom Instruction.\n";
-        return false;
-      }
-      ExprCache[I] = ExprCache[Desugared];
-      return true;
-    }
 
     default:{
       llvm::errs() << "Unsupported Instruction Kind : " << I->getKindName(I->K) << "\n";

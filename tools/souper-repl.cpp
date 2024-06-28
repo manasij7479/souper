@@ -1,8 +1,17 @@
 #define _LIBCPP_DISABLE_DEPRECATION_WARNINGS
 
+#include "clang/Frontend/CompilerInstance.h"
+#include "clang/Interpreter/Interpreter.h"
+
+#include "llvm/Support/ManagedStatic.h" // llvm_shutdown
+#include "llvm/Support/TargetSelect.h"
+
+llvm::ExitOnError ExitOnErr;
+
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/KnownBits.h"
+#include "souper/Extractor/Candidates.h"
 #include "souper/Generalize/Generalize.h"
 #include "souper/Infer/AliveDriver.h"
 #include "souper/Infer/EnumerativeSynthesis.h"
@@ -250,6 +259,9 @@ void PrettyPrint(std::string Name, SymbolTable &Tab) {
   }
 }
 
+
+// FIXME!!!!! Language Design and actual parser
+// Think about the amb idea
 // cmd1 (> save1) (| cmd2 (>save2)) ...
 // write a real parser instead of this weird state machine if the dsl has to evolve further
 std::vector<std::pair<std::vector<std::string>, std::string>> SplitCommands(std::vector<std::string> Input) {
@@ -533,6 +545,9 @@ struct REPL {
       return false;
     }
 
+    // parse C and C++
+
+
     // infer
     if (match(Cmds[0], {"i", "infer"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
@@ -688,49 +703,181 @@ struct REPL {
     return Result;
   }
 
+  enum class Mode {
+    clang,  // clang mode, behavior TBD
+    command, // execute commands
+    text,   // keep storing text line by line, until a command is issued
+  };
+  std::string getModeName(Mode M) {
+    switch (M) {
+      case Mode::clang:
+        return "cling";
+      case Mode::command:
+        return "shell";
+      case Mode::text:
+        return "text";
+    }
+  }
   bool operator()() {
     std::string Line;
+    Mode CurrentMode = Mode::command;
+
+    llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
+
+    // Allow low-level execution.
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    // Initialize our builder class.
+    clang::IncrementalCompilerBuilder CB;
+    CB.SetCompilerArgs({"-std=c++20", "-O1"});
+
+    // Create the incremental compiler instance.
+    std::unique_ptr<clang::CompilerInstance> CI;
+    CI = ExitOnErr(CB.CreateCpp());
+
+    // Create the interpreter instance.
+    std::unique_ptr<clang::Interpreter> Interp
+        = ExitOnErr(clang::Interpreter::create(std::move(CI)));
+
+
     do {
-      llvm::outs() << "souper-repl> ";
+      llvm::outs() << "souper-repl [" + getModeName(CurrentMode) + "]> ";
       if (!std::getline(std::cin, Line)) break;
+      if (Line == "") continue;
 
-      auto Cmds = split(Line);
+      if (Line[0] == ':') {
+        if (Line == ":mode clang" || Line == ":c") {
+          CurrentMode = Mode::clang;
+          continue;
+        }
+        if (Line == ":mode text" || Line == ":t") {
+          CurrentMode = Mode::text;
+          continue;
+        }
+        if (Line == ":mode shell" || Line == ":s") {
+          CurrentMode = Mode::command;
+          continue;
+        }
 
-      if (Cmds.empty()) continue;
-      if (Cmds[0] == "exit" || Cmds[0] == "quit" || Cmds[0] == "q") break;
+        // TODO : Treat the rest of the line as a command
 
+        llvm::errs() << "Unknown mode.\n";
+        continue;
+      }
 
-      auto Split = SplitCommands(expand(Cmds));
-
-      size_t cmd_index = 0;
-
-      for (auto SubCmds : Split) {
-
-        if (!dispatch(SubCmds.first)) {
-          if (auto Obj = Tab.get(SubCmds.first[0])) {
-            Cmds.push_back(SubCmds.first[0]);
-            Cmds[0] = "p";
-            dispatch(Cmds);
+      if (CurrentMode == Mode::text) {
+        auto Cur = Tab.get("_");
+        if (Cur.has_value()) {
+          if (Cur.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "string") {
+            Cur.value().Data[0] += Line + '\n';
+            Tab.put("_", SymbolTable::StoredObject(Cur.value().Data[0], "string"));
+            continue;
           } else {
-            llvm::errs() << "Error while trying to execute " << SubCmds.first[0] << '\n';
-            break;
+            llvm::errs() << "Warning: _ is not a string, overwriting\n";
+            Tab.put("_", SymbolTable::StoredObject(Line + "\n", "string"));
           }
+        } else {
+          Tab.put("_", SymbolTable::StoredObject(Line + "\n", "string"));
         }
+        continue;
+      }
 
-        if (SubCmds.second != "") {
-          Tab.put(SubCmds.second, Tab.get("_").value());
-        }
+      if (CurrentMode == Mode::command) {
+        auto Cmds = split(Line);
 
-        if (cmd_index++ != Split.size() - 1) {
-          llvm::outs() << "----------------------------\n";
+        if (Cmds.empty()) continue;
+        if (Cmds[0] == "exit" || Cmds[0] == "quit" || Cmds[0] == "q") break;
+
+        auto Split = SplitCommands(expand(Cmds));
+        size_t cmd_index = 0;
+
+        for (auto SubCmds : Split) {
+
+          if (!dispatch(SubCmds.first)) {
+            if (auto Obj = Tab.get(SubCmds.first[0])) {
+              Cmds.push_back(SubCmds.first[0]);
+              Cmds[0] = "p";
+              dispatch(Cmds);
+            } else {
+              llvm::errs() << "Error while trying to execute " << SubCmds.first[0] << '\n';
+              break;
+            }
+          }
+
+          if (SubCmds.second != "") {
+            Tab.put(SubCmds.second, Tab.get("_").value());
+          }
+
+          if (cmd_index++ != Split.size() - 1) {
+            llvm::outs() << "----------------------------\n";
+          }
         }
       }
 
+      if (CurrentMode == Mode::clang) {
+        auto &&PTU = Interp->Parse(Line);
+        if (!PTU) {
+          llvm::errs() << "Failed to parse\n";
+          return 1;
+        }
+        PTU->TheModule->print(llvm::outs(), nullptr);
+      }
 
     } while(std::cin.good());
     return true;
   }
 };
+
+// int test_repl() {
+//   using namespace clang;
+
+//   llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
+
+//   // Allow low-level execution.
+//   llvm::InitializeNativeTarget();
+//   llvm::InitializeNativeTargetAsmPrinter();
+//   // Initialize our builder class.
+//   clang::IncrementalCompilerBuilder CB;
+//   CB.SetCompilerArgs({"-std=c++20"});
+
+//   // Create the incremental compiler instance.
+//   std::unique_ptr<clang::CompilerInstance> CI;
+//   CI = ExitOnErr(CB.CreateCpp());
+
+//   // Create the interpreter instance.
+//   std::unique_ptr<Interpreter> Interp
+//       = ExitOnErr(Interpreter::create(std::move(CI)));
+
+//   auto &&PTU = Interp->Parse(R"(
+//     extern "C" int printf(const char*,...);
+//     printf("Hello Interpreter World!\n");
+//   )");
+
+//   if (!PTU) {
+//     llvm::errs() << "Failed to parse\n";
+//     return 1;
+//   }
+
+//   PTU->TheModule->print(llvm::outs(), nullptr);
+//   return 0;
+
+  // // Parse and execute simple code.
+  // ExitOnErr(Interp->ParseAndExecute(R"(extern "C" int printf(const char*,...);
+  //                                      printf("Hello Interpreter World!\n");
+  //                                     )"));
+
+  // // Create a value to store the transport the execution result from the JIT.
+  // clang::Value V;
+  // ExitOnErr(Interp->ParseAndExecute(R"(extern "C" int square(int x){return x*x;}
+  //                                      square(12)
+  //                                     )", &V));
+  // printf("From JIT: square(12)=%d\n", V.getInt());
+
+  // // Or just get the function pointer and call it from compiled code:
+  // auto SymAddr = ExitOnErr(Interp->getSymbolAddress("square"));
+  // auto squarePtr = SymAddr.toPtr<int(*)(int)>();
+  // printf("From compiled code: square(13)=%d\n", squarePtr(13));
+// }
 
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
@@ -757,11 +904,12 @@ int main(int argc, char **argv) {
     std::vector<ReplacementContext> Contexts;
     Inputs = ParseReplacementLHSs(IC, Data.getBufferIdentifier(), Data.getBuffer(),
                                 Contexts, ErrStr);
-  } else {
-
   }
+
+  // return test_repl();
 
   llvm::outs() << "Got " << Inputs.size() << " inputs\n";
   REPL SouperRepl(IC, S.get(), Inputs);
   return SouperRepl();
 }
+
