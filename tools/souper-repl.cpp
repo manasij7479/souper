@@ -402,6 +402,7 @@ struct REPL {
       if (F.isDeclaration()) {
         continue;
       }
+      llvm::errs() << "Extracting from: " << F.getName() << '\n';
       auto Candidates = ExtractCandidates(F, IC, EBC);
       ParsedReplacement PR;
       for (auto &Cand : Candidates.Blocks) {
