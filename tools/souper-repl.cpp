@@ -255,7 +255,7 @@ void PrettyPrint(std::string Name, SymbolTable &Tab) {
     bool WIFlag = In.value().Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
     InfixPrinter IP(Rep.value(), !WIFlag);
     IP(llvm::outs());
-  } else if (In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "string") {
+  } else {
     llvm::outs() << In.value().Data[0] << '\n';
   }
 }
@@ -767,7 +767,7 @@ struct REPL {
   std::string getModeName(Mode M) {
     switch (M) {
       case Mode::clang:
-        return "cling";
+        return "clang-repl";
       case Mode::command:
         return "shell";
       case Mode::text:
@@ -779,7 +779,7 @@ struct REPL {
     Mode CurrentMode = Mode::command;
 
     do {
-      llvm::outs() << "souper-repl [" + getModeName(CurrentMode) + "]> ";
+      llvm::outs() << "chimera [" + getModeName(CurrentMode) + "]> ";
       if (!std::getline(std::cin, Line)) break;
       if (Line == "") continue;
 
@@ -946,8 +946,6 @@ int main(int argc, char **argv) {
     Inputs = ParseReplacementLHSs(IC, Data.getBufferIdentifier(), Data.getBuffer(),
                                 Contexts, ErrStr);
   }
-
-  // return test_repl();
 
   llvm::outs() << "Got " << Inputs.size() << " inputs\n";
   REPL SouperRepl(IC, S.get(), Inputs);

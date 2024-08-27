@@ -1271,9 +1271,9 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
   for (auto &&P : SymCS) {
     auto C = P.first;
     DF(PowOfTwo, Val.isPowerOf2()); // Invoke solver only if Val is a power of 2
-    DF(NonNegative, Val.uge(0));
+    // DF(NonNegative, Val.uge(0));
     DF(NonZero, Val != 0);
-    DF(Negative, Val.slt(0));
+    // DF(Negative, Val.slt(0));
     DF2(C, C, NonNegative, Val.uge(0), NonZero, Val != 0);
     for (auto &&P2 : SymCS) {
       if (P.first == P2.first) {
