@@ -76,7 +76,7 @@ set(ALIVE_BUILDDIR "${CMAKE_SOURCE_DIR}/third_party/alive2-build")
 include_directories("${CMAKE_SOURCE_DIR}/third_party")
 include_directories("${ALIVE_SRCDIR}")
 
-set(CLANG_LIBS "-lclangCodeGen -lclangTooling -lclangInterpreter -lclangRewrite -lclangFrontend -lclangAnalysis -lclangParse -lclangSerialization -lclangSema -lclangEdit -lclangAnalysis -lclangAST -lclangDriver -lclangLex -lclangBasic -lclangASTMatchers")
+set(CLANG_LIBS "-lclangBasic -lclangLex -lclangTooling -lclangInterpreter -lclangFrontend -lclangAST -lclangSerialization -lclangAPINotes -lclangEdit -lclangSema -lclangARCMigrate -lclangExtractAPI -lclangSerialization -lclangAST -lclangFormat -lclangStaticAnalyzerCheckers -lclangASTMatchers -lclangFrontend -lclangStaticAnalyzerCore -lclangAnalysis -lclangFrontendTool -lclangStaticAnalyzerFrontend -lclangAnalysisFlowSensitive -lclangHandleCXX -lclangSupport -lclangAnalysisFlowSensitiveModels -lclangHandleLLVM -lclangTooling -lclangIndex -lclangToolingASTDiff -lclangCodeGen -lclangIndexSerialization -lclangToolingCore -lclangCrossTU -lclangInterpreter -lclangToolingInclusions -lclangDependencyScanning -lclangLex -lclangToolingInclusionsStdlib -lclangDirectoryWatcher -lclangParse -lclangToolingRefactoring -lclangDriver -lclangRewrite -lclangToolingSyntax -lclangDynamicASTMatchers -lclangRewriteFrontend -lclangTransformer")
 
 set(GTEST_CXXFLAGS "-DGTEST_HAS_RTTI=0")
 set(GTEST_INCLUDEDIR "${LLVM_BINDIR}/../include/llvm-gtest/")
