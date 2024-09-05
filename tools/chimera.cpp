@@ -3,7 +3,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Interpreter/Interpreter.h"
 
-#include "llvm/Support/ManagedStatic.h" // llvm_shutdown
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/TargetSelect.h"
 
 llvm::ExitOnError ExitOnErr;
@@ -27,12 +27,19 @@ llvm::ExitOnError ExitOnErr;
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/LineEditor/LineEditor.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/YAMLParser.h"
+#include "llvm/Support/YAMLTraits.h"
 
 #include <cstdlib>
 #include <sstream>
 #include <iostream>
 #include <optional>
 #include <sys/wait.h>
+
+#include <vector>
+
 
 using namespace llvm;
 using namespace souper;
@@ -47,8 +54,43 @@ DebugFlagParser("souper-debug-level",
      cl::location(DebugLevel), cl::init(1));
 
 static cl::opt<std::string>
-InputFilename(cl::Positional, cl::desc("<input souper optimization>"),
+InputFilename(cl::Positional, cl::desc("<input file>"),
               cl::init("-"));
+
+static cl::opt<std::string>
+ConfigFile("config", cl::desc("YAML config file"), cl::init(""));
+
+
+struct ClangReplEnv {
+    std::string name;
+    std::vector<std::string> options;
+    int persistent;
+    int execute;
+    std::string prelude;
+};
+
+template<>
+struct llvm::yaml::MappingTraits<ClangReplEnv> {
+  static void mapping(llvm::yaml::IO &io, ClangReplEnv &env) {
+      io.mapRequired("name", env.name);
+      io.mapRequired("options", env.options);
+      io.mapRequired("persistent", env.persistent);
+      io.mapRequired("execute", env.execute);
+      io.mapRequired("prelude", env.prelude);
+  }
+};
+LLVM_YAML_IS_SEQUENCE_VECTOR(ClangReplEnv)
+
+struct Configuration {
+  std::vector<ClangReplEnv> environments;
+};
+
+template<>
+struct llvm::yaml::MappingTraits<Configuration> {
+    static void mapping(llvm::yaml::IO &io, Configuration &config) {
+        io.mapRequired("environments", config.environments);
+    }
+};
 
 struct SymbolTable {
 // Every object is a list of strings
@@ -109,6 +151,19 @@ struct StoredObject {
 
   template <>
   std::optional<ParsedReplacement> get(SymbolTable *S) {
+    // parse from string
+    if (Attributes[Attr::Type] == "string") {
+      llvm::MemoryBufferRef MB(Data[0], "temp");
+      std::string ErrStr;
+      auto Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
+                                  MB.getBuffer(), ErrStr);
+      if (!ErrStr.empty()) {
+        llvm::errs() << ErrStr << '\n';
+        return std::nullopt;
+      }
+      return Rep;
+    }
+
     if (Attributes[Attr::Type] != "replacement" && Attributes[Attr::Type] != "lhs") {
       llvm::errs() << "Expected replacement, got " << Attributes[Attr::Type] << '\n';
       return std::nullopt;
@@ -200,7 +255,6 @@ struct StoredObject {
         llvm::errs() << "Expected " << Type << ", got " << Obj->Attributes[StoredObject::Attr::Type] << '\n';
         return std::nullopt;
       }
-
       return Obj;
     } else {
       llvm::errs() << "Unknown name: " << Name << '\n';
@@ -367,33 +421,56 @@ std::optional<std::string> executeCommandWithInput(const std::string& command, c
 }
 
 struct REPL {
-  REPL(InstContext &IC, Solver *S, std::vector<ParsedReplacement> &Inputs)
-      : IC(IC), S(S), Inputs(Inputs), Tab(IC) {
-    for (size_t i = 0 ; i < Inputs.size(); ++i) {
-      auto Name = "_" + std::to_string(i);
-      Tab.put(Name, Inputs[i]);
+  Configuration Config;
+  std::map<std::string, ClangReplEnv> ClangReplEnvs;
+
+  REPL(InstContext &IC, Solver *S, Configuration Config_)
+      : IC(IC), S(S), Tab(IC), Config(Config_) {
+    // for (size_t i = 0 ; i < Inputs.size(); ++i) {
+    //   auto Name = "_" + std::to_string(i);
+    //   Tab.put(Name, Inputs[i]);
+    // }
+    // // The current input is _ by default
+    // if (!Inputs.empty()) {
+    //   Tab.put("_", Inputs[0]);
+    // }
+  llvm::InitializeAllTargetInfos();
+  llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
+  llvm::InitializeAllAsmPrinters();
+
+    for (auto &&Env : Config.environments) {
+      ClangReplEnvs[Env.name] = Env;
     }
-    // The current input is _ by default
-    if (!Inputs.empty()) {
-      Tab.put("_", Inputs[0]);
+  }
+
+  void CreateClangRepl(ClangReplEnv Env) {
+    if (ClangRepls.find(Env.name) != ClangRepls.end() && Env.persistent) {
+      return;
     }
 
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    CB.SetCompilerArgs({"-std=c++20", "-O0", "-g0"});
-    CI = ExitOnErr(CB.CreateCpp());
-    Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
+    std::vector<const char *> ClangArgv(Env.options.size());
+    std::transform(Env.options.begin(), Env.options.end(), ClangArgv.begin(),
+                 [](const std::string &s) -> const char * { return s.data(); });
+
+    clang::IncrementalCompilerBuilder CB;
+    CB.SetCompilerArgs(ClangArgv);
+    auto CI = ExitOnErr(CB.CreateCpp());
+    auto Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
+    if (auto Err = Interp->ParseAndExecute(Env.prelude)) {
+      llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
+    }
+    ClangRepls[Env.name] = std::move(Interp);
   }
 
   InstContext &IC;
   ExprBuilderContext EBC;
   Solver *S;
-  std::vector<ParsedReplacement> &Inputs;
+
   SymbolTable Tab;
 
-  clang::IncrementalCompilerBuilder CB;
-  std::unique_ptr<clang::CompilerInstance> CI;
-  std::unique_ptr<clang::Interpreter> Interp;
+  std::map<std::string, std::unique_ptr<clang::Interpreter>> ClangRepls;
+
   llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
 
   std::vector<ParsedReplacement> Extract(llvm::Module *M) {
@@ -474,7 +551,7 @@ struct REPL {
 
     // generalize
     if (match(Cmds[0], {"g", "gen", "generalize"})) {
-      if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
+      if (auto In = Tab.warn_get(Cmds[1], "")) {
 
         ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
         if (auto Gen = GeneralizeRep(Rep, IC, S)) {
@@ -666,13 +743,13 @@ struct REPL {
       return false;
     }
 
-    // undo
-    if (match(Cmds[0], {"undo"})) {
-      if (Interp->Undo()) {
-        llvm::errs() << "Nothing to undo.\n";
-      }
-      return true;
-    }
+    // // undo
+    // if (match(Cmds[0], {"undo"})) {
+    //   if (Interp->Undo()) {
+    //     llvm::errs() << "Nothing to undo.\n";
+    //   }
+    //   return true;
+    // }
 
     // push
     if (match(Cmds[0], {"push"})) {
@@ -733,6 +810,7 @@ struct REPL {
   }
 
   // TODO: Might have to implement context sensitive lookahead
+  // TODO: Put macros in config file
   std::vector<std::string> expandMacro(std::string Atom) {
     if (Atom == "compile") {
       return split("save ../tools/pass-generator/src/gen.cpp.inc | exec ninja -C ../tools/pass-generator/build");
@@ -777,22 +855,34 @@ struct REPL {
   bool operator()() {
     std::string Line;
     Mode CurrentMode = Mode::command;
+    std::string CurrentEnv = "default";
 
     do {
-      llvm::outs() << "chimera [" + getModeName(CurrentMode) + "]> ";
+      if (CurrentMode == Mode::command || CurrentMode == Mode::text) {
+        llvm::outs() << "chimera [" + getModeName(CurrentMode) + "]> ";
+      } else {
+      llvm::outs() << "(" + CurrentEnv + ")> ";
+      }
       if (!std::getline(std::cin, Line)) break;
       if (Line == "") continue;
 
       if (Line[0] == ':') {
-        if (Line == ":mode clang" || Line == ":c") {
-          CurrentMode = Mode::clang;
-          continue;
-        }
-        if (Line == ":mode text" || Line == ":t") {
+        auto Cmds = split(Line);
+        if (Cmds[0] == ":text" || Cmds[0] == ":t") {
           CurrentMode = Mode::text;
           continue;
         }
-        if (Line == ":mode shell" || Line == ":s") {
+        if (Cmds[0] == ":c" || Cmds[0] == ":clang" || Cmds[0] == ":interpreter") {
+          CurrentMode = Mode::clang;
+          if (Cmds.size() == 2) {
+            CurrentEnv = Cmds[1];
+          } else {
+            CurrentEnv = "default";
+          }
+          CreateClangRepl(ClangReplEnvs[CurrentEnv]);
+          continue;
+        }
+        if (Cmds[0] == ":s" || Cmds[0] == ":shell" || Cmds[0] == ":command") {
           CurrentMode = Mode::command;
           continue;
         }
@@ -853,72 +943,30 @@ struct REPL {
       }
 
       if (CurrentMode == Mode::clang) {
-        auto &&PTU = Interp->Parse(Line);
-        if (!PTU) {
-          llvm::errs() << "Failed to parse\n";
-          continue;
-        } else {
-          if (DebugLevel > 2) {
-            PTU->TheModule->print(llvm::outs(), nullptr);
+        auto &&Interp = ClangRepls[CurrentEnv];
+        if (ClangReplEnvs[CurrentEnv].execute) {
+          if (auto Res = Interp->ParseAndExecute(Line)) {
+            llvm::outs() << Res << '\n';
           }
-          Tab.put("_", SymbolTable::StoredObject(std::move(PTU->TheModule)));
+        } else {
+          auto &&PTU =Interp->Parse(Line);
+          if (!PTU) {
+            llvm::errs() << "Failed to parse\n";
+            continue;
+          } else {
+            if (DebugLevel > 2) {
+              PTU->TheModule->print(llvm::outs(), nullptr);
+            }
+            Tab.put("_", SymbolTable::StoredObject(std::move(PTU->TheModule)));
+            // TODO: Access previous PTUs
+            // Is that useful?
+          }
         }
       }
     } while(std::cin.good());
     return true;
   }
 };
-
-// int test_repl() {
-//   using namespace clang;
-
-//   llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
-
-//   // Allow low-level execution.
-//   llvm::InitializeNativeTarget();
-//   llvm::InitializeNativeTargetAsmPrinter();
-//   // Initialize our builder class.
-//   clang::IncrementalCompilerBuilder CB;
-//   CB.SetCompilerArgs({"-std=c++20"});
-
-//   // Create the incremental compiler instance.
-//   std::unique_ptr<clang::CompilerInstance> CI;
-//   CI = ExitOnErr(CB.CreateCpp());
-
-//   // Create the interpreter instance.
-//   std::unique_ptr<Interpreter> Interp
-//       = ExitOnErr(Interpreter::create(std::move(CI)));
-
-//   auto &&PTU = Interp->Parse(R"(
-//     extern "C" int printf(const char*,...);
-//     printf("Hello Interpreter World!\n");
-//   )");
-
-//   if (!PTU) {
-//     llvm::errs() << "Failed to parse\n";
-//     return 1;
-//   }
-
-//   PTU->TheModule->print(llvm::outs(), nullptr);
-//   return 0;
-
-  // // Parse and execute simple code.
-  // ExitOnErr(Interp->ParseAndExecute(R"(extern "C" int printf(const char*,...);
-  //                                      printf("Hello Interpreter World!\n");
-  //                                     )"));
-
-  // // Create a value to store the transport the execution result from the JIT.
-  // clang::Value V;
-  // ExitOnErr(Interp->ParseAndExecute(R"(extern "C" int square(int x){return x*x;}
-  //                                      square(12)
-  //                                     )", &V));
-  // printf("From JIT: square(12)=%d\n", V.getInt());
-
-  // // Or just get the function pointer and call it from compiled code:
-  // auto SymAddr = ExitOnErr(Interp->getSymbolAddress("square"));
-  // auto squarePtr = SymAddr.toPtr<int(*)(int)>();
-  // printf("From compiled code: square(13)=%d\n", squarePtr(13));
-// }
 
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
@@ -933,22 +981,42 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  Configuration Config;
+
+  if (ConfigFile != "") {
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> bufferOrErr =
+        llvm::MemoryBuffer::getFile(ConfigFile);
+    if (!bufferOrErr) {
+        std::cerr << "Error reading file: " << ConfigFile << " :" << bufferOrErr.getError().message() << std::endl;
+        return 1;
+    }
+    std::unique_ptr<llvm::MemoryBuffer> buffer = std::move(*bufferOrErr);
+
+    llvm::yaml::Input YIn(buffer->getBuffer());
+    YIn >> Config;
+    if (YIn.error()) {
+        std::cerr << "Error reading YAML file: " << ConfigFile << " :" << YIn.error().message() << std::endl;
+        return 1;
+    }
+  }
+
   InstContext IC;
   std::string ErrStr;
 
   auto &&Data = (*MB)->getMemBufferRef();
-  auto Inputs = ParseReplacements(IC, Data.getBufferIdentifier(),
-                                  Data.getBuffer(), ErrStr);
+  // auto Inputs = ParseReplacements(IC, Data.getBufferIdentifier(),
+  //                                 Data.getBuffer(), ErrStr);
 
 
-  if (!ErrStr.empty()) {
-    std::vector<ReplacementContext> Contexts;
-    Inputs = ParseReplacementLHSs(IC, Data.getBufferIdentifier(), Data.getBuffer(),
-                                Contexts, ErrStr);
-  }
+  // if (!ErrStr.empty()) {
+  //   std::vector<ReplacementContext> Contexts;
+  //   Inputs = ParseReplacementLHSs(IC, Data.getBufferIdentifier(), Data.getBuffer(),
+  //                               Contexts, ErrStr);
+  // }
 
-  llvm::outs() << "Got " << Inputs.size() << " inputs\n";
-  REPL SouperRepl(IC, S.get(), Inputs);
+  // llvm::outs() << "Got " << Inputs.size() << " inputs\n";
+  REPL SouperRepl(IC, S.get(), Config);
+  SouperRepl.Tab.put("_", SymbolTable::StoredObject(Data.getBuffer().data(), "string"));
   return SouperRepl();
 }
 
