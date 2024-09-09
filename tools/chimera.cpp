@@ -444,9 +444,14 @@ struct REPL {
     }
   }
 
-  void CreateClangRepl(ClangReplEnv Env) {
+  clang::Interpreter *CreateOrGetClangRepl(ClangReplEnv Env, const std::string &Data) {
     if (ClangRepls.find(Env.name) != ClangRepls.end() && Env.persistent) {
-      return;
+      std::string str = "_ = R\"(" + Data + ")\";";
+      auto I = ClangRepls[Env.name].get();
+      if (auto Err = I->ParseAndExecute(str)) {
+        llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
+      }
+      return I;
     }
 
     std::vector<const char *> ClangArgv(Env.options.size());
@@ -457,10 +462,16 @@ struct REPL {
     CB.SetCompilerArgs(ClangArgv);
     auto CI = ExitOnErr(CB.CreateCpp());
     auto Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
+
+    std::string str = "const char *_ = R\"(" + Data + ")\";";
+    if (auto Err = Interp->ParseAndExecute(str)) {
+      llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
+    }
     if (auto Err = Interp->ParseAndExecute(Env.prelude)) {
       llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
     }
     ClangRepls[Env.name] = std::move(Interp);
+    return ClangRepls[Env.name].get();
   }
 
   InstContext &IC;
@@ -879,7 +890,7 @@ struct REPL {
           } else {
             CurrentEnv = "default";
           }
-          CreateClangRepl(ClangReplEnvs[CurrentEnv]);
+          auto *Interp = CreateOrGetClangRepl(ClangReplEnvs[CurrentEnv], Tab.get("_").value().Data[0]);
           continue;
         }
         if (Cmds[0] == ":s" || Cmds[0] == ":shell" || Cmds[0] == ":command") {
@@ -945,8 +956,8 @@ struct REPL {
       if (CurrentMode == Mode::clang) {
         auto &&Interp = ClangRepls[CurrentEnv];
         if (ClangReplEnvs[CurrentEnv].execute) {
-          if (auto Res = Interp->ParseAndExecute(Line)) {
-            llvm::outs() << Res << '\n';
+          if (auto &&Err = Interp->ParseAndExecute(Line)) {
+            llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
           }
         } else {
           auto &&PTU =Interp->Parse(Line);
@@ -1004,19 +1015,7 @@ int main(int argc, char **argv) {
   std::string ErrStr;
 
   auto &&Data = (*MB)->getMemBufferRef();
-  // auto Inputs = ParseReplacements(IC, Data.getBufferIdentifier(),
-  //                                 Data.getBuffer(), ErrStr);
-
-
-  // if (!ErrStr.empty()) {
-  //   std::vector<ReplacementContext> Contexts;
-  //   Inputs = ParseReplacementLHSs(IC, Data.getBufferIdentifier(), Data.getBuffer(),
-  //                               Contexts, ErrStr);
-  // }
-
-  // llvm::outs() << "Got " << Inputs.size() << " inputs\n";
   REPL SouperRepl(IC, S.get(), Config);
   SouperRepl.Tab.put("_", SymbolTable::StoredObject(Data.getBuffer().data(), "string"));
   return SouperRepl();
 }
-
