@@ -895,6 +895,7 @@ struct REPL {
   }
   bool operator()() {
     std::string Line;
+    std::string ExtLine;
     Mode CurrentMode = Mode::command;
     std::string CurrentEnv = "default";
     bool ImmFlag = false;
@@ -906,6 +907,14 @@ struct REPL {
       }
       if (!std::getline(std::cin, Line)) break;
       if (Line == "") continue;
+
+      if (Line[Line.length() - 1] == '\\') {
+        ExtLine += Line.substr(0, Line.length() - 1) + " ";
+        continue;
+      } else {
+        Line = ExtLine + Line;
+        ExtLine = "";
+      }
 
       if (Line[0] == ':') {
         auto Cmds = split(Line);
