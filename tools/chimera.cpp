@@ -67,6 +67,7 @@ struct ClangReplEnv {
     std::vector<std::string> options;
     int persistent;
     int execute;
+    int runtime_args;
     std::string prelude;
 };
 
@@ -78,6 +79,7 @@ struct llvm::yaml::MappingTraits<ClangReplEnv> {
       io.mapOptional("deps", env.deps);
       io.mapRequired("persistent", env.persistent);
       io.mapRequired("execute", env.execute);
+      io.mapOptional("runtime_args", env.runtime_args);
       io.mapOptional("prelude", env.prelude);
   }
 };
@@ -461,11 +463,14 @@ struct REPL {
     Prelude += ClangReplEnvs[Env].prelude;
   }
 
-  clang::Interpreter *CreateOrGetClangRepl(ClangReplEnv Env, const std::string &Data) {
+  clang::Interpreter *CreateOrGetClangRepl(ClangReplEnv Env,
+    const std::string &Data,
+    const std::vector<std::string> &Argv) {
+    std::string DataStr = "_ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
+
     if (ClangRepls.find(Env.name) != ClangRepls.end() && Env.persistent) {
-      std::string str = "_ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
       auto I = ClangRepls[Env.name].get();
-      if (auto Err = I->ParseAndExecute(str)) {
+      if (auto Err = I->ParseAndExecute(DataStr)) {
         llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
       }
       return I;
@@ -485,8 +490,15 @@ struct REPL {
     auto CI = ExitOnErr(CB.CreateCpp());
     auto Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
 
-    std::string str = "const char *_ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
-    if (auto Err = Interp->ParseAndExecute(str)) {
+    DataStr = "const char *" + DataStr;
+
+    std::string ArgvStr = "const char *argv[] = {";
+    for (auto &Arg : Argv) {
+      ArgvStr += "\"" + Arg + "\", ";
+    }
+    ArgvStr += "};";
+
+    if (auto Err = Interp->ParseAndExecute(DataStr + ArgvStr)) {
       llvm::errs() << "Failed to insert _ into " << Env.name << '\n';
     }
     if (auto Err = Interp->ParseAndExecute(Prelude)) {
@@ -741,10 +753,6 @@ struct REPL {
       return true;
     }
 
-    // constant synthesis
-
-    // Compile matcher
-
     // generic exec
     if (match(Cmds[0], {"exec"})) {
       std::string Command;
@@ -889,7 +897,7 @@ struct REPL {
     std::string Line;
     Mode CurrentMode = Mode::command;
     std::string CurrentEnv = "default";
-
+    bool ImmFlag = false;
     do {
       if (CurrentMode == Mode::command || CurrentMode == Mode::text) {
         llvm::outs() << "chimera [" + getModeName(CurrentMode) + "]> ";
@@ -904,29 +912,56 @@ struct REPL {
         if (Cmds[0] == ":text" || Cmds[0] == ":t") {
           CurrentMode = Mode::text;
           continue;
-        }
-        if (Cmds[0] == ":c" || Cmds[0] == ":clang" || Cmds[0] == ":interpreter") {
+        } else if (Cmds[0] == ":c" || Cmds[0] == ":clang" || Cmds[0] == ":interpreter") {
           CurrentMode = Mode::clang;
-          if (Cmds.size() == 2) {
+          if (Cmds.size() >= 2) {
             CurrentEnv = Cmds[1];
           } else {
             CurrentEnv = "default";
           }
-          auto *Interp = CreateOrGetClangRepl(ClangReplEnvs[CurrentEnv], Tab.get("_").value().Data[0]);
+          CreateOrGetClangRepl(ClangReplEnvs[CurrentEnv], Tab.get("_").value().Data[0], Cmds);
           continue;
-        }
-        if (Cmds[0] == ":s" || Cmds[0] == ":shell" || Cmds[0] == ":command") {
+        } else if (Cmds[0] == ":s" || Cmds[0] == ":shell" || Cmds[0] == ":command") {
           CurrentMode = Mode::command;
           continue;
+        } else if (Cmds[0] == ":i") { // example :i int x = 5;
+          Line = Line.substr(3);
+          ImmFlag = true;
+          CreateOrGetClangRepl(ClangReplEnvs["default"], "", {});
+        } else {
+          llvm::errs() << "Unknown mode.\n";
+          continue;
         }
-
-        // TODO : Treat the rest of the line as a command
-
-        llvm::errs() << "Unknown mode.\n";
-        continue;
       }
 
-      if (CurrentMode == Mode::text) {
+      if (CurrentMode == Mode::clang || ImmFlag) {
+        auto OldEnv = CurrentEnv;
+        if (ImmFlag) {
+          CurrentEnv = "default";
+        }
+        auto &&Interp = ClangRepls[CurrentEnv];
+        if (ClangReplEnvs[CurrentEnv].execute) {
+          if (auto &&Err = Interp->ParseAndExecute(Line)) {
+            llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+          }
+        } else {
+          auto &&PTU =Interp->Parse(Line);
+          if (!PTU) {
+            llvm::errs() << "Failed to parse\n";
+            continue;
+          } else {
+            if (DebugLevel > 2) {
+              PTU->TheModule->print(llvm::outs(), nullptr);
+            }
+            Tab.put("_", SymbolTable::StoredObject(std::move(PTU->TheModule)));
+            // TODO: Access previous PTUs. Is that useful for anything?
+          }
+        }
+        if (ImmFlag) {
+          CurrentEnv = OldEnv;
+          ImmFlag = false;
+        }
+      } else if (CurrentMode == Mode::text) {
         auto Cur = Tab.get("_");
         if (Cur.has_value()) {
           if (Cur.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "string") {
@@ -941,9 +976,7 @@ struct REPL {
           Tab.put("_", SymbolTable::StoredObject(Line + "\n", "string"));
         }
         continue;
-      }
-
-      if (CurrentMode == Mode::command) {
+      } else if (CurrentMode == Mode::command) {
         auto Cmds = split(Line);
 
         if (Cmds.empty()) continue;
@@ -971,28 +1004,6 @@ struct REPL {
 
           if (cmd_index++ != Split.size() - 1) {
             llvm::outs() << "----------------------------\n";
-          }
-        }
-      }
-
-      if (CurrentMode == Mode::clang) {
-        auto &&Interp = ClangRepls[CurrentEnv];
-        if (ClangReplEnvs[CurrentEnv].execute) {
-          if (auto &&Err = Interp->ParseAndExecute(Line)) {
-            llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
-          }
-        } else {
-          auto &&PTU =Interp->Parse(Line);
-          if (!PTU) {
-            llvm::errs() << "Failed to parse\n";
-            continue;
-          } else {
-            if (DebugLevel > 2) {
-              PTU->TheModule->print(llvm::outs(), nullptr);
-            }
-            Tab.put("_", SymbolTable::StoredObject(std::move(PTU->TheModule)));
-            // TODO: Access previous PTUs
-            // Is that useful?
           }
         }
       }
