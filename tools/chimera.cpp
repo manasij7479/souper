@@ -63,6 +63,7 @@ ConfigFile("config", cl::desc("YAML config file"), cl::init(""));
 
 struct ClangReplEnv {
     std::string name;
+    std::vector<std::string> deps;
     std::vector<std::string> options;
     int persistent;
     int execute;
@@ -73,10 +74,11 @@ template<>
 struct llvm::yaml::MappingTraits<ClangReplEnv> {
   static void mapping(llvm::yaml::IO &io, ClangReplEnv &env) {
       io.mapRequired("name", env.name);
-      io.mapRequired("options", env.options);
+      io.mapOptional("options", env.options);
+      io.mapOptional("deps", env.deps);
       io.mapRequired("persistent", env.persistent);
       io.mapRequired("execute", env.execute);
-      io.mapRequired("prelude", env.prelude);
+      io.mapOptional("prelude", env.prelude);
   }
 };
 LLVM_YAML_IS_SEQUENCE_VECTOR(ClangReplEnv)
@@ -444,9 +446,24 @@ struct REPL {
     }
   }
 
+  void AccumulateOptionsAndPrelude(std::vector<std::string> &opts, std::string &Prelude,
+                                   const std::string &Env, std::set<std::string> &Visited) {
+    if (Visited.find(Env) != Visited.end()) {
+      return;
+    }
+    Visited.insert(Env);
+    for (auto &Dep : ClangReplEnvs[Env].deps) {
+      AccumulateOptionsAndPrelude(opts, Prelude, Dep, Visited);
+    }
+    for (auto &Opt : ClangReplEnvs[Env].options) {
+      opts.push_back(Opt);
+    }
+    Prelude += ClangReplEnvs[Env].prelude;
+  }
+
   clang::Interpreter *CreateOrGetClangRepl(ClangReplEnv Env, const std::string &Data) {
     if (ClangRepls.find(Env.name) != ClangRepls.end() && Env.persistent) {
-      std::string str = "_ = R\"(" + Data + ")\";";
+      std::string str = "_ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
       auto I = ClangRepls[Env.name].get();
       if (auto Err = I->ParseAndExecute(str)) {
         llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
@@ -454,8 +471,13 @@ struct REPL {
       return I;
     }
 
-    std::vector<const char *> ClangArgv(Env.options.size());
-    std::transform(Env.options.begin(), Env.options.end(), ClangArgv.begin(),
+    std::set<std::string> Visited;
+    std::vector<std::string> Opts;
+    std::string Prelude;
+    AccumulateOptionsAndPrelude(Opts, Prelude, Env.name, Visited);
+
+    std::vector<const char *> ClangArgv(Opts.size());
+    std::transform(Opts.begin(), Opts.end(), ClangArgv.begin(),
                  [](const std::string &s) -> const char * { return s.data(); });
 
     clang::IncrementalCompilerBuilder CB;
@@ -463,11 +485,11 @@ struct REPL {
     auto CI = ExitOnErr(CB.CreateCpp());
     auto Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
 
-    std::string str = "const char *_ = R\"(" + Data + ")\";";
+    std::string str = "const char *_ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
     if (auto Err = Interp->ParseAndExecute(str)) {
-      llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
+      llvm::errs() << "Failed to insert _ into " << Env.name << '\n';
     }
-    if (auto Err = Interp->ParseAndExecute(Env.prelude)) {
+    if (auto Err = Interp->ParseAndExecute(Prelude)) {
       llvm::errs() << "Failed to load prelude for " << Env.name << '\n';
     }
     ClangRepls[Env.name] = std::move(Interp);
