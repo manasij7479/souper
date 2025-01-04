@@ -103,6 +103,14 @@ static cl::opt<bool> FixIt("fixit",
     cl::desc("Replace constants with ones that work. (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> InferInv("infer-invariants",
+    cl::desc("Infer invariants. (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> VerifyInv("verify-invariants",
+    cl::desc("Verify invariants. (default=false)"),
+    cl::init(false));
+
 static cl::opt<bool> FilterRedundant("filter-redundant",
     cl::desc("Filter redundant transformations based on static hashing (default=false)"),
     cl::init(false));
