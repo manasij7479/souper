@@ -593,7 +593,19 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       } else {
         llvm::outs() << souper::profit(Rep) << '\n';
       }
-    } else {
+    } else if (VerifyInv) {
+      if (VerifyInvariant(Rep, IC, S)) {
+        llvm::outs() << "; LGTM\n";
+      } else {
+        llvm::outs() << "; Failed to verify invariant\n";
+      }
+    } /* else if (InferInv) {
+      if (InferInvariant(Rep, IC, S)) {
+        Rep.print(llvm::outs(), true);
+      } else {
+        llvm::outs() << "; Failed to infer invariant\n";
+      }
+    } */ else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;
       if (std::error_code EC = S->isValid(IC, Rep.BPCs, Rep.PCs,

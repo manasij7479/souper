@@ -940,7 +940,8 @@ bool Parser::parseLine(std::string &ErrStr) {
         Inst *RHS = parseInst(ErrStr);
         if (!RHS)
           return false;
-        if (LHS && (LHS->Width != RHS->Width)) {
+        if (LHS && (LHS->Width != RHS->Width) && RHS->Width != 1) {
+          // RHS can be a predicate for specifying invariants
           ErrStr = makeErrStr("width of result and infer operands mismatch");
           return false;
         }

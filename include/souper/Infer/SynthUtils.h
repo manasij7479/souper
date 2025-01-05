@@ -147,6 +147,8 @@ ParsedReplacement Clone(ParsedReplacement In, InstContext &IC);
 std::optional<ParsedReplacement> Verify(ParsedReplacement Input, InstContext &IC, Solver *S);
 // bool IsValid(ParsedReplacement Input, InstContext &IC, Solver *S);
 
+bool VerifyInvariant(ParsedReplacement Input, InstContext &IC, Solver *S);
+
 std::map<Inst *, llvm::APInt> findOneConstSet(ParsedReplacement Input, const std::set<Inst *> &SymCS, InstContext &IC, Solver *S);
 
 std::vector<std::map<Inst *, llvm::APInt>> findValidConsts(ParsedReplacement Input, const std::set<Inst *> &Insts, InstContext &IC, Solver *S, size_t MaxCount);

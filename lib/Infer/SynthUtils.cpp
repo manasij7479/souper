@@ -171,6 +171,13 @@ std::optional<ParsedReplacement> Verify(ParsedReplacement Input, InstContext &IC
   }
 }
 
+bool VerifyInvariant(ParsedReplacement Input, InstContext &IC, Solver *S) {
+  ParsedReplacement NewInput = Clone(Input, IC);
+  NewInput.Mapping.LHS = NewInput.Mapping.RHS;
+  NewInput.Mapping.RHS = IC.getConst(llvm::APInt(1, 1));
+  return Verify(NewInput, IC, S).has_value();
+}
+
 std::map<Inst *, llvm::APInt> findOneConstSet(ParsedReplacement Input, const std::set<Inst *> &SymCS, InstContext &IC, Solver *S) {
 
   std::map<Inst *, Inst *> InstCache;
