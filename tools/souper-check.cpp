@@ -19,6 +19,7 @@
 #include "souper/Infer/ConstantSynthesis.h"
 #include "souper/Infer/Pruning.h"
 #include "souper/Infer/SynthUtils.h"
+#include "souper/Infer/Invariants.h"
 #include "souper/Inst/InstGraph.h"
 #include "souper/Parser/Parser.h"
 #include "souper/Tool/GetSolver.h"
@@ -189,7 +190,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
 
   std::vector<ParsedReplacement> Reps;
   std::vector<ReplacementContext> Contexts;
-  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA()) {
+  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA() || InferInv) {
     Reps = ParseReplacementLHSs(IC, MB.getBufferIdentifier(), MB.getBuffer(),
                                 Contexts, ErrStr);
   } else {
@@ -599,13 +600,16 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       } else {
         llvm::outs() << "; Failed to verify invariant\n";
       }
-    } /* else if (InferInv) {
-      if (InferInvariant(Rep, IC, S)) {
-        Rep.print(llvm::outs(), true);
+    } else if (InferInv) {
+      auto &&Invs = InferInvariants(IC, Rep, S);
+      if (Invs.empty()) {
+        llvm::outs() << "; Failed to infer invariants\n";
       } else {
-        llvm::outs() << "; Failed to infer invariant\n";
+        for (auto &&Inv : Invs) {
+          Inv.print(llvm::outs(), true);
+        }
       }
-    } */ else {
+    } else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;
       if (std::error_code EC = S->isValid(IC, Rep.BPCs, Rep.PCs,

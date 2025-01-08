@@ -208,6 +208,8 @@ set(SOUPER_INFER_FILES
   include/souper/Infer/Interpreter.h
   lib/Infer/SynthUtils.cpp
   include/souper/Infer/SynthUtils.h
+  lib/Infer/Invariants.cpp
+  include/souper/Infer/Invariants.h
 )
 
 add_library(souperInfer STATIC
