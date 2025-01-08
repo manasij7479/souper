@@ -37,6 +37,10 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
       Guesses.push_back(I);                 \
     }                                       \
   }
+#define COMMUTATIVE_BIN(X, Y, OP) \
+  {                               \
+    if (C2(X, Y)) BIN(X, Y, OP);  \
+  }
 
   for (auto X : SubExpressions) {
     for (auto Y : SubExpressions) {
@@ -50,8 +54,8 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
         continue; // todo handle this
       }
 
-      if (C2(X, Y)) BIN(X, Y, Eq);
-      if (C2(X, Y)) BIN(X, Y, Ne);
+      COMMUTATIVE_BIN(X, Y, Eq);
+      COMMUTATIVE_BIN(X, Y, Ne);
       BIN(X, Y, Ult);
       BIN(X, Y, Ule);
       BIN(X, Y, Slt);
@@ -62,6 +66,7 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
   }
 
 #undef BIN
+#undef COMMUTATIVE_BIN
 
   return Guesses;
 }
