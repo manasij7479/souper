@@ -606,7 +606,10 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         llvm::outs() << "; Failed to infer invariants\n";
       } else {
         for (auto &&Inv : Invs) {
-          Inv.print(llvm::outs(), true);
+          ReplacementContext RC;
+          Inv.printLHS(llvm::outs(), RC, true);
+          Inv.printRHS(llvm::outs(), RC, true);
+          llvm::outs() << "\n";
         }
       }
     } else {
