@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.8)
 project(Souper)
 
 set(CMAKE_MACOSX_RPATH NEW)
-
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING
       "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
@@ -76,7 +75,7 @@ set(ALIVE_BUILDDIR "${CMAKE_SOURCE_DIR}/third_party/alive2-build")
 include_directories("${CMAKE_SOURCE_DIR}/third_party")
 include_directories("${ALIVE_SRCDIR}")
 
-set(CLANG_LIBS "-lclangBasic -lclangLex -lclangTooling -lclangInterpreter -lclangFrontend -lclangAST -lclangSerialization -lclangAPINotes -lclangEdit -lclangSema -lclangARCMigrate -lclangExtractAPI -lclangSerialization -lclangAST -lclangFormat -lclangStaticAnalyzerCheckers -lclangASTMatchers -lclangFrontend -lclangStaticAnalyzerCore -lclangAnalysis -lclangFrontendTool -lclangStaticAnalyzerFrontend -lclangAnalysisFlowSensitive -lclangHandleCXX -lclangSupport -lclangAnalysisFlowSensitiveModels -lclangHandleLLVM -lclangTooling -lclangIndex -lclangToolingASTDiff -lclangCodeGen -lclangIndexSerialization -lclangToolingCore -lclangCrossTU -lclangInterpreter -lclangToolingInclusions -lclangDependencyScanning -lclangLex -lclangToolingInclusionsStdlib -lclangDirectoryWatcher -lclangParse -lclangToolingRefactoring -lclangDriver -lclangRewrite -lclangToolingSyntax -lclangDynamicASTMatchers -lclangRewriteFrontend -lclangTransformer")
+set(CLANG_LIBS "-lclangBasic -lclangLex -lclangTooling -lclangInterpreter -lclangFrontend -lclangAST -lclangSerialization -lclangAPINotes -lclangEdit -lclangSema -lclangARCMigrate -lclangExtractAPI -lclangSerialization -lclangAST -lclangFormat -lclangStaticAnalyzerCheckers -lclangASTMatchers -lclangFrontend -lclangStaticAnalyzerCore -lclangAnalysis -lclangFrontendTool -lclangStaticAnalyzerFrontend -lclangAnalysisFlowSensitive -lclangHandleCXX -lclangSupport -lclangAnalysisFlowSensitiveModels -lclangHandleLLVM -lclangTooling -lclangIndex -lclangToolingASTDiff -lclangCodeGen -lclangIndexSerialization -lclangToolingCore -lclangCrossTU -lclangInterpreter -lclangToolingInclusions -lclangDependencyScanning -lclangLex -lclangToolingInclusionsStdlib -lclangDirectoryWatcher -lclangParse -lclangToolingRefactoring -lclangDriver -lclangRewrite -lclangToolingSyntax -lclangDynamicASTMatchers -lclangRewriteFrontend -lclangTransformer -lclangRewriteFrontend")
 
 set(GTEST_CXXFLAGS "-DGTEST_HAS_RTTI=0")
 set(GTEST_INCLUDEDIR "${LLVM_BINDIR}/../include/llvm-gtest/")
@@ -323,9 +322,9 @@ add_executable(generalize
   tools/generalize.cpp
 )
 
-add_executable(chimera
-  tools/chimera.cpp
-)
+#add_executable(chimera
+#  tools/chimera.cpp
+#)
 
 add_executable(matcher-gen
   tools/matcher-gen.cpp
@@ -402,7 +401,8 @@ configure_file(
 )
 
 foreach(target souper internal-solver-test lexer-test parser-test souper-check count-insts
-               souper2llvm souper-interpret generalize chimera matcher-gen
+               souper2llvm souper-interpret generalize #chimera
+               matcher-gen
                souperExtractor souperInfer souperGeneralize souperInst souperKVStore souperParser
                souperSMTLIB2 souperTool souperPass souperPassProfileAll kleeExpr
                souperCodegen)
@@ -438,7 +438,7 @@ target_link_libraries(lexer-test souperParser)
 target_link_libraries(parser-test souperParser)
 target_link_libraries(souper-check souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(generalize souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser souperInfer souperGeneralize ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
-target_link_libraries(chimera  souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser souperInfer souperGeneralize ${CLANG_LIBS} ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+#target_link_libraries(chimera  souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser souperInfer souperGeneralize ${CLANG_LIBS} ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(matcher-gen souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(souper-interpret souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 target_link_libraries(count-insts souperParser)
