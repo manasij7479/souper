@@ -105,25 +105,21 @@ private:
     return B.IC.getConst(llvm::APInt(B.I->Width, Number, false));
   }
 
-  template<>
-  Inst *i<Inst *>(Inst *I, Builder B) {
+  Inst *i(Inst *I, Builder B) {
     assert(I);
     return I;
   }
 
-  template<>
-  Inst *i<Builder>(Builder A, Builder B) {
+  Inst *i(Builder A, Builder B) {
     assert(A.I);
     return A.I;
   }
 
-  template<>
-  Inst *i<std::string>(std::string Number, Builder B) {
+  Inst *i(std::string Number, Builder B) {
     return B.IC.getConst(llvm::APInt(B.I->Width, Number, 10));
   }
 
-  template<>
-  Inst *i<llvm::APInt>(llvm::APInt Number, Builder B) {
+  Inst *i(llvm::APInt Number, Builder B) {
     return B.IC.getConst(Number);
   }
 };

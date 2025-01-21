@@ -142,19 +142,20 @@ struct StoredObject {
     Attributes[Attr::Type] = "module";
   }
 
+  /*
   template <typename T>
   std::optional<T> get(SymbolTable *S) {
     return std::nullopt;
-  }
+  }*/
 
-  template <>
-  std::optional<std::string> get(SymbolTable *S) {
+  // template <>
+  std::optional<std::string> getString(SymbolTable *S) {
     if (Data.size() != 1) return std::nullopt;
     return Data[0];
   }
 
-  template <>
-  std::optional<ParsedReplacement> get(SymbolTable *S) {
+  // template <>
+  std::optional<ParsedReplacement> getPR(SymbolTable *S) {
     // parse from string
     if (Attributes[Attr::Type] == "string") {
       llvm::MemoryBufferRef MB(Data[0], "temp");
@@ -198,8 +199,8 @@ struct StoredObject {
     return std::nullopt;
   }
 
-  template <>
-  std::optional<std::unique_ptr<llvm::Module>> get(SymbolTable *S) {
+  //template <>
+  std::optional<std::unique_ptr<llvm::Module>> getModule(SymbolTable *S) {
     if (Data.size() != 1) return std::nullopt;
     std::string ErrStr;
     auto &&MB = llvm::MemoryBuffer::getMemBufferCopy(Data[0]);
@@ -308,7 +309,7 @@ void PrettyPrint(std::string Name, SymbolTable &Tab) {
 
   if (In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "replacement" ||
       In.value().Attributes[SymbolTable::StoredObject::Attr::Type] == "lhs") {
-    auto Rep = In.value().get<ParsedReplacement>(&Tab);
+    auto Rep = In.value().getPR(&Tab);
 
     bool WIFlag = In.value().Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
     InfixPrinter IP(Rep.value(), !WIFlag);
@@ -582,7 +583,7 @@ struct REPL {
     if (match(Cmds[0], {"v", "verify"})) {
       if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
 
-        if (Verify(In->get<ParsedReplacement>(&Tab).value(), IC, S)) {
+        if (Verify(In->getPR(&Tab).value(), IC, S)) {
           llvm::outs() << "Valid\n";
           Tab.current(Cmds[1]);
           return true;
@@ -598,7 +599,7 @@ struct REPL {
     if (match(Cmds[0], {"g", "gen", "generalize"})) {
       if (auto In = Tab.warn_get(Cmds[1], "")) {
 
-        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        ParsedReplacement Rep = In->getPR(&Tab).value();
         if (auto Gen = GeneralizeRep(Rep, IC, S)) {
           InfixPrinter IP(Gen.value(), false);
           IP(llvm::outs());
@@ -615,7 +616,7 @@ struct REPL {
     // reduce
     if (match(Cmds[0], {"r", "reduce"})) {
       if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
-        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        ParsedReplacement Rep = In->getPR(&Tab).value();
         auto Red = ReduceBasic(IC, S, Rep);
         InfixPrinter IP(Red);
         IP(llvm::outs());
@@ -629,7 +630,7 @@ struct REPL {
     // reduce-poison
     if (match(Cmds[0], {"rp", "reduce-poison"})) {
       if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
-        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        ParsedReplacement Rep = In->getPR(&Tab).value();
         auto Red = ReducePoison(IC, S, Rep);
         InfixPrinter IP(Red);
         IP(llvm::outs());
@@ -656,7 +657,7 @@ struct REPL {
 
           std::string data;
           llvm::raw_string_ostream OS(data);
-          In->get<ParsedReplacement>(&Tab).value().print(OS, true);
+          In->getPR(&Tab).value().print(OS, true);
           auto MatcherGenOutput = executeCommandWithInput(MatcherGenCommand, OS.str());
 
           if (MatcherGenOutput.has_value()) {
@@ -675,7 +676,7 @@ struct REPL {
     // shrink
     if (match(Cmds[0], {"s", "shrink"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
-        ParsedReplacement Rep = In->get<ParsedReplacement>(&Tab).value();
+        ParsedReplacement Rep = In->getPR(&Tab).value();
         // enforce that type of In is replacement
 
         if (In->Attributes[SymbolTable::StoredObject::Attr::Type] != "replacement") {
@@ -704,7 +705,7 @@ struct REPL {
     // extract
     if (match(Cmds[0], {"e", "extract"})) {
       if (auto In = Tab.warn_get(Cmds[1], "module")) {
-        auto M = In->get<std::unique_ptr<llvm::Module>>(&Tab).value();
+        auto M = In->getModule(&Tab).value();
         auto Results = Extract(M.get());
         for (size_t i = 0; i < Results.size(); ++i) {
           auto Name = "_" + std::to_string(i);
@@ -723,7 +724,7 @@ struct REPL {
     if (match(Cmds[0], {"i", "infer"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
         std::vector<Inst *> RHSs;
-        auto Rep = In->get<ParsedReplacement>(&Tab).value();
+        auto Rep = In->getPR(&Tab).value();
 
         if (std::error_code EC = S->infer(Rep.BPCs, Rep.PCs, Rep.Mapping.LHS,
                                         RHSs, false, IC)) {
@@ -761,7 +762,7 @@ struct REPL {
         for (size_t i = 2; i < Cmds.size(); ++i) {
           Command += Cmds[i] + " ";
         }
-        stdin = In->get<std::string>(&Tab).value();
+        stdin = In->getString(&Tab).value();
       } else {
         for (size_t i = 1; i < Cmds.size(); ++i) {
           Command += Cmds[i] + " ";
@@ -815,7 +816,7 @@ struct REPL {
           llvm::errs() << "Could not save to file " << Cmds[2] << '\n';
           return false;
         } else {
-          OutFile << In->get<std::string>(&Tab).value();
+          OutFile << In->getString(&Tab).value();
           OutFile.close();
           llvm::outs() << "Saved to file " << Cmds[2] << '\n';
           return true;
