@@ -57,8 +57,8 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
       COMMUTATIVE_BIN(X, Y, Eq);
       COMMUTATIVE_BIN(X, Y, Ne);
       BIN(X, Y, Ult);
-      BIN(X, Y, Ule);
       BIN(X, Y, Slt);
+      BIN(X, Y, Ule);
       BIN(X, Y, Sle);
 
       // Todo others
@@ -71,10 +71,25 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
   return Guesses;
 }
 
+void sortGuesses(std::vector<Inst *> &Guesses) {
+  std::stable_sort(Guesses.begin(), Guesses.end(),
+                    [](Inst *a, Inst *b) -> bool {
+    if (a->K == Inst::Eq || a->K == Inst::Ne) {
+      return true;
+    }
+    if (a->K == Inst::Ult || a->K == Inst::Slt) {
+      return true;
+    }
+    return cost(a) < cost(b);
+    });
+}
+
 std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input, Solver *S) {
   std::vector<Inst *> Results;
 
   std::vector<Inst *> Guesses = GenerateInvariantCandidates(IC, Input);
+
+  sortGuesses(Guesses);
 
   for (Inst *Guess : Guesses) {
     ParsedReplacement Inv = Input;
