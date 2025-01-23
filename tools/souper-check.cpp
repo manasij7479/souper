@@ -104,9 +104,9 @@ static cl::opt<bool> FixIt("fixit",
     cl::desc("Replace constants with ones that work. (default=false)"),
     cl::init(false));
 
-static cl::opt<bool> InferInv("infer-invariants",
-    cl::desc("Infer invariants. (default=false)"),
-    cl::init(false));
+// static cl::opt<bool> InferInv("infer-invariants",
+//     cl::desc("Infer invariants. (default=false)"),
+//     cl::init(false));
 
 static cl::opt<bool> VerifyInv("verify-invariants",
     cl::desc("Verify invariants. (default=false)"),
@@ -190,7 +190,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
 
   std::vector<ParsedReplacement> Reps;
   std::vector<ReplacementContext> Contexts;
-  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA() || InferInv) {
+  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA()) {
     Reps = ParseReplacementLHSs(IC, MB.getBufferIdentifier(), MB.getBuffer(),
                                 Contexts, ErrStr);
   } else {
@@ -599,18 +599,6 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         llvm::outs() << "; LGTM\n";
       } else {
         llvm::outs() << "; Failed to verify invariant\n";
-      }
-    } else if (InferInv) {
-      auto &&Invs = InferInvariants(IC, Rep, S);
-      if (Invs.empty()) {
-        llvm::outs() << "; Failed to infer invariants\n";
-      } else {
-        for (auto &&Inv : Invs) {
-          ReplacementContext RC;
-          Inv.printLHS(llvm::outs(), RC, true);
-          Inv.printRHS(llvm::outs(), RC, true);
-          llvm::outs() << "\n";
-        }
       }
     } else {
       bool Valid;

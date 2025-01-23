@@ -24,6 +24,7 @@
 #include "souper/Infer/AliveDriver.h"
 #include "souper/Infer/ConstantSynthesis.h"
 #include "souper/Infer/EnumerativeSynthesis.h"
+#include "souper/Infer/Invariants.h"
 #include "souper/Infer/InstSynthesis.h"
 #include "souper/Infer/Pruning.h"
 #include "souper/KVStore/KVStore.h"
@@ -57,6 +58,9 @@ static cl::opt<int> MaxLHSSize("souper-max-lhs-size",
 static cl::opt<int> MaxConstantSynthesisTries("souper-max-constant-synthesis-tries",
     cl::desc("Max number of constant synthesis tries. (default=30)"),
     cl::init(30));
+static cl::opt<bool> InferInv("souper-infer-invariants",
+    cl::desc("Infer instructions (default=false)"),
+    cl::init(false));
 
 
 class BaseSolver : public Solver {
@@ -411,6 +415,15 @@ public:
       RHSs.emplace_back(RHS);
       if (EC || RHS)
         return EC;
+    } else if (InferInv) {
+      ParsedReplacement Rep;
+      Rep.Mapping = InstMapping(LHS, nullptr);
+      Rep.PCs = PCs;
+      Rep.BPCs = BPCs;
+      RHSs = InferInvariants(IC, Rep, this);
+      if (EC || !RHSs.empty())
+        return EC;
+
     } else {
       EnumerativeSynthesis ES;
       EC = ES.synthesize(SMTSolver.get(), BPCs, PCs, LHS, RHSs,
@@ -419,7 +432,6 @@ public:
         return EC;
     }
 
-//    RHSs.clear();
     return EC;
   }
 

@@ -6,7 +6,7 @@ namespace souper {
 
 
 
-// Enforce commutativity to prune search space
+// Exploit commutativity to prune search space
 bool C3(Inst *A, Inst *B, Inst *C) {
   return A > B && B > C;
 }
@@ -71,8 +71,8 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
   return Guesses;
 }
 
-std::vector<ParsedReplacement> InferInvariants(InstContext &IC, ParsedReplacement Input, Solver *S) {
-  std::vector<ParsedReplacement> Results;
+std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input, Solver *S) {
+  std::vector<Inst *> Results;
 
   std::vector<Inst *> Guesses = GenerateInvariantCandidates(IC, Input);
 
@@ -80,7 +80,7 @@ std::vector<ParsedReplacement> InferInvariants(InstContext &IC, ParsedReplacemen
     ParsedReplacement Inv = Input;
     Inv.Mapping.RHS = Guess;
     if (VerifyInvariant(Inv, IC, S)) {
-      Results.push_back(Inv);
+      Results.push_back(Guess);
     }
   }
 
