@@ -31,6 +31,7 @@ ssub.sat, usub.sat.
 The operations are named after the LLVM IR operations they represent, with the usual semantics.
 
 Do not explain the optimizations, just generate the replacement.
+Only produce the output in the prescribed syntax, do not produce extra text.
 Do not regenerate the existing infer command.
 Do not start a line with a variable that has already been defined.
 Do not declare new variables.
@@ -162,6 +163,7 @@ infer %3
 %4:i1 = xor %1, %2
 result %4
 
+
     """
 }]
 
@@ -284,7 +286,7 @@ def process_response(lhs, response, min_profit):
     return result
 
 
-def infer(lhs, debug=False, model="llama3.3:70b", max_tries=4, min_profit=1):
+def infer(lhs, debug=False, model="llama3.3:70b", max_tries=40, min_profit=1):
     global log
     log.append({
         "role": "user",
@@ -320,10 +322,10 @@ def infer(lhs, debug=False, model="llama3.3:70b", max_tries=4, min_profit=1):
             if i['role'] == "assistant" and i['content'] not in invalid:
                 foundNewInvalid = True
                 invalid.add(i['content'])
-        if not foundNewInvalid:
-            if debug:
-                print("No new invalid results are generated. Quitting.")
-            return "Failed to infer RHS."
+        # if not foundNewInvalid:
+        #     if debug:
+        #         print("No new invalid results are generated. Quitting.")
+            # return "Failed to infer RHS."
 
         if tries >= max_tries / 2:
             log = log[:2]  # Clear the log, take a fresh look at the problem
