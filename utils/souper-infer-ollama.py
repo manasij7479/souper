@@ -286,7 +286,7 @@ def process_response(lhs, response, min_profit):
     return result
 
 
-def infer(lhs, debug=False, model="llama3.3:70b", max_tries=40, min_profit=1):
+def infer(lhs, debug=False, model="llama3:70b-instruct", max_tries=40, min_profit=1):
     global log
     log.append({
         "role": "user",

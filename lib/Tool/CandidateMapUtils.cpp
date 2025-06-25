@@ -456,7 +456,8 @@ bool SolveCandidateMap(llvm::raw_ostream &OS, CandidateMap &M,
             S->infer(Cand.BPCs, Cand.PCs, Cand.Mapping.LHS,
                      RHSs, /*AllowMultipleRHSs=*/false, IC)) {
           llvm::errs() << "Unable to query solver: " << EC.message() << '\n';
-          return false;
+          // return false;
+          continue;
         }
 
         if (!RHSs.empty()) {
