@@ -44,6 +44,11 @@ static llvm::cl::opt<bool> FixIt("fixit",
                    "(default=false)"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> NoShrink("no-shrink",
+    llvm::cl::desc("No not reduce width before generalization."
+                   "(default=false)"),
+    llvm::cl::init(false));
+
 using namespace llvm;
 
 static cl::opt<size_t> NumResults("generalization-num-results",
@@ -3168,6 +3173,9 @@ InstantiateWidthChecks(InstContext &IC,
 std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement &Input,
                                             InstContext &IC,
                                             Solver *S, size_t Target) {
+  if (NoShrink) {
+    return Input;
+  }
   if (hasMultiArgumentPhi(Input.Mapping.LHS)) {
     return std::nullopt;
   }
@@ -3184,9 +3192,11 @@ std::optional<ParsedReplacement> GeneralizeShrinked(
 
   ShrinkWrap Shrink(IC, S, Input, 8);
 
-  // Input.print(llvm::errs(), true);
+  std::optional<ParsedReplacement> Smol;
 
-  auto Smol = Shrink();
+  if (!NoShrink) {
+    Smol = Shrink();
+  }
 
   if (Smol) {
     if (DebugLevel > 2) {
@@ -3253,6 +3263,45 @@ void PrintInputAndResult(ParsedReplacement Input, ParsedReplacement Result) {
   llvm::outs().flush();
 }
 
+std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input, InstContext &IC, Solver *S) {
+  std::vector<Inst *> Vars;
+  findVars(Input.Mapping.LHS, Vars);
+
+  std::map<size_t, Inst *> WidthMap;
+  
+  for (auto &&V : Vars) {
+    if (WidthMap.find(V->Width) == WidthMap.end()) {
+      WidthMap[V->Width] = V;
+    }
+  }
+
+  if (WidthMap.empty()) {
+    return std::nullopt;
+  }
+
+  std::map<Inst *, Inst *> RepMap;
+
+  std::vector<Inst *> Consts;
+  findInsts(Input.Mapping.LHS, Consts, [](Inst *I){return I->K == Inst::Const;});
+  findInsts(Input.Mapping.RHS, Consts, [](Inst *I){return I->K == Inst::Const;});
+
+  if (Consts.empty()) {
+    return std::nullopt;
+  }
+
+  for (auto C : Consts) {
+    if (WidthMap.find(C->Val.getLimitedValue()) != WidthMap.end()) {
+      RepMap[C] = Builder(IC, WidthMap[C->Val.getLimitedValue()]).BitWidth()();
+    }
+  }
+  
+  if (RepMap.empty()) {
+    return std::nullopt;
+  }
+
+  return Replace(Input, IC, RepMap);
+}
+
 std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
                                             InstContext &IC, Solver *S) {
 
@@ -3278,6 +3327,12 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
     }
 
     std::optional<ParsedReplacement> Opt;
+
+    if (auto Rep = ReplaceWidthVars(Input, IC, S)) {
+      Result = *Rep;
+    }
+    // TODO: run both variants?
+
     if (!NoWidth) {
       Opt = GeneralizeShrinked(Result, IC, S);
     }
