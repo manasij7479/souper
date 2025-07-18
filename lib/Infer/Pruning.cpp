@@ -739,7 +739,7 @@ namespace {
   llvm::APInt getSpecialAPInt(char C, unsigned Width) {
     switch (C) {
     case 'a':
-      return llvm::APInt(Width, -1);
+      return llvm::APInt::getAllOnes(Width);
     case 'b':
       return llvm::APInt(Width, 1);
     case 'c':
@@ -796,7 +796,7 @@ std::vector<ValueCache> PruningManager::generateInputSets(
 
   for (auto &&I : Inputs) {
     if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, -1)};
+      Cache[I] = {llvm::APInt::getAllOnes(I->Width)};
   }
   if (isInputValid(Cache))
     InputSets.push_back(Cache);
@@ -822,7 +822,7 @@ std::vector<ValueCache> PruningManager::generateInputSets(
   for (i = 0, m = 0; i < NumLargeInputs && m < MaxTries; ++m ) {
     for (auto &&I : Inputs) {
       if (I->K == souper::Inst::Var)
-        Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt(I->Width, -1).getLimitedValue())};
+        Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt::getAllOnes(I->Width).getLimitedValue())};
     }
     if (isInputValid(Cache)) {
       i++;
