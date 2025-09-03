@@ -84,7 +84,7 @@ void sortGuesses(std::vector<Inst *> &Guesses) {
     });
 }
 
-std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input) {
+std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input, Solver *S) {
   std::vector<Inst *> Results;
 
   std::vector<Inst *> Guesses = GenerateInvariantCandidates(IC, Input);
