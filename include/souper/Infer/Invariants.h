@@ -5,7 +5,7 @@
 
 namespace souper {
   class Solver;
-  std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Inputs, Solver *S);
+  std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Inputs);
 }
 
 #endif
