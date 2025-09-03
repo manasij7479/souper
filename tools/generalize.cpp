@@ -29,13 +29,17 @@ DebugFlagParser("souper-debug-level",
      llvm::cl::location(DebugLevel), llvm::cl::init(1));
 
 using namespace llvm;
+
+namespace souper {
+  Solver *S;
+}
+
 using namespace souper;
 
 static cl::opt<std::string>
 InputFilename(cl::Positional, cl::desc("<input souper optimization>"),
               cl::init("-"));
 
-Solver *S;
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
   KVStore *KV = 0;

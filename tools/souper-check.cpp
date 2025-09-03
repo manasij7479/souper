@@ -26,6 +26,11 @@
 #include "souper/Util/DfaUtils.h"
 
 using namespace llvm;
+
+namespace souper {
+  Solver *S;
+}
+
 using namespace souper;
 
 unsigned DebugLevel;
@@ -648,7 +653,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       ", errors = " << Error << "\n";
   return Ret;
 }
-Solver *S;
+
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
   KVStore *KV = 0;
