@@ -35,12 +35,14 @@ static cl::opt<std::string>
 InputFilename(cl::Positional, cl::desc("<input souper optimization>"),
               cl::init("-"));
 
+Solver *S;
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
   KVStore *KV = 0;
 
-  std::unique_ptr<Solver> S = 0;
-  S = GetSolver(KV);
+  std::unique_ptr<Solver> S_ = 0;
+  S_ = GetSolver(KV);
+  S = S_.get();
 
   auto MB = MemoryBuffer::getFileOrSTDIN(InputFilename);
   if (!MB) {
@@ -63,7 +65,7 @@ int main(int argc, char **argv) {
   // TODO: Write default action which chooses what to do based on input structure
 
   for (auto &&Input: Inputs) {
-    if (auto Result = GeneralizeRep(Input, IC, S.get())) {
+    if (auto Result = GeneralizeRep(Input)) {
       PrintInputAndResult(Input, Result.value());
     }
   }

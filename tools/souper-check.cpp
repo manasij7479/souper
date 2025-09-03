@@ -535,7 +535,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         llvm::outs() << "Pruning failed.\n";
       }
     } else if (FixIt) {
-      if (Verify(Rep, IC, S)) {
+      if (Verify(Rep)) {
         Rep.print(llvm::outs(), true);
       } else {
         // Find RHS-fresh constants
@@ -561,8 +561,8 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
           InstCache[C] = IC.createSynthesisConstant(C->Width, ConstID++);
           ConstSet.insert(InstCache[C]);
         }
-        auto Clone = Replace(Rep, IC, InstCache);
-        if (auto Fixed = Verify(Clone, IC, S)) {
+        auto Clone = Replace(Rep, InstCache);
+        if (auto Fixed = Verify(Clone)) {
           ReplacementContext RC;
           Fixed->printLHS(llvm::outs(), RC, true);
           Fixed->printRHS(llvm::outs(), RC, true);
@@ -595,7 +595,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         llvm::outs() << souper::profit(Rep) << '\n';
       }
     } else if (VerifyInv) {
-      if (VerifyInvariant(Rep, IC, S)) {
+      if (VerifyInvariant(Rep)) {
         llvm::outs() << "; LGTM\n";
       } else {
         llvm::outs() << "; Failed to verify invariant\n";
@@ -648,19 +648,21 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       ", errors = " << Error << "\n";
   return Ret;
 }
-
+Solver *S;
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
   KVStore *KV = 0;
 
-  std::unique_ptr<Solver> S = 0;
+  std::unique_ptr<Solver> S_ = 0;
   if (!ParseOnly && !ParseLHSOnly)
-    S = GetSolver(KV);
+    S_ = GetSolver(KV);
+
+  S = S_.get();
 
   auto MB = MemoryBuffer::getFileOrSTDIN(InputFilename);
   if (!MB) {
     llvm::errs() << MB.getError().message() << '\n';
     return 1;
   }
-  return SolveInst((*MB)->getMemBufferRef(), S.get());
+  return SolveInst((*MB)->getMemBufferRef(), S);
 }

@@ -418,10 +418,10 @@ bool Parser::typeCheckOpsMatchingWidths(llvm::MutableArrayRef<Inst *> Ops,
   for (auto Op : Ops) {
     if (Width == 0)
       Width = Op->Width;
-    if (Width != 0 && Op->Width != 0 && Width != Op->Width) {
-      ErrStr = "operands have different widths";
-      return false;
-    }
+    // if (Width != 0 && Op->Width != 0 && Width != Op->Width) {
+    //   ErrStr = "operands have different widths";
+    //   return false;
+    // }
   }
 
   if (Width == 0) {
@@ -602,6 +602,14 @@ bool Parser::typeCheckInst(Inst::Kind IK, unsigned &Width,
   case Inst::FShr:
   case Inst::RangeP:
     MaxOps = MinOps = 3;
+    break;
+
+  case Inst::Lop3:
+    MaxOps = MinOps = 4;
+    if (Ops[3]->Width != 8 || Ops[3]->K != Inst::Const) {
+      ErrStr = "last operand of lop3 must be a constant of width 8";
+      return false;
+    }
     break;
 
   case Inst::Custom:

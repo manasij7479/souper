@@ -11,10 +11,10 @@
 #include "souper/Infer/SynthUtils.h"
 
 namespace souper {
-
+//extern Solver *S;
 class Reducer {
 public:
-  Reducer(InstContext &IC_, Solver *S_) : IC(IC_), S(S_), varnum(0), numSolverCalls(0) {}
+  Reducer(InstContext &IC_) : IC(IC_), varnum(0), numSolverCalls(0) {}
 
   ParsedReplacement ReduceGreedy(ParsedReplacement Input);
 
@@ -60,7 +60,6 @@ public:
   }
 private:
   InstContext &IC;
-  Solver *S;
   int varnum;
   int numSolverCalls;
   std::unordered_set<std::string> DNR;

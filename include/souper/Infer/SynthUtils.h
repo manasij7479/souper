@@ -10,17 +10,13 @@
 #include "llvm/ADT/StringExtras.h"
 namespace souper {
 
-// TODO: Lazy construction instead of eager.
-// eg: Instead of Builder(I, IC).Add(1)()
-// we could do Builder(I).Add(1)(IC)
 class Builder {
 public:
-  Builder(Inst *I_, InstContext &IC_) : I(I_), IC(IC_) {}
-  Builder(InstContext &IC_, Inst *I_) : I(I_), IC(IC_) {}
-  Builder(InstContext &IC_, llvm::APInt Value) : IC(IC_) {
+  Builder(Inst *I_) : I(I_), IC(*I_->IC) {}
+  Builder(Inst *I_, llvm::APInt Value) : IC(*I_->IC) {
     I = IC.getConst(Value);
   }
-  Builder(Inst *I_, InstContext &IC_, uint64_t Value) : IC(IC_) {
+  Builder(Inst *I_, uint64_t Value) : IC(*I_->IC) {
     I = IC.getConst(llvm::APInt(I_->Width, Value));
   }
 
@@ -32,13 +28,13 @@ public:
   template<typename T, typename F> Builder Select(T t, F f) {
     auto left = i(t, *this);
     auto right = i(f, *this);
-    return Builder(IC.getInst(Inst::Select, 1, {I, left, right}), IC);
+    return Builder(IC.getInst(Inst::Select, 1, {I, left, right}));
   }
 
 #define BINOP(K)                                                 \
   template<typename T> Builder K(T t) {                          \
     auto L = I; auto R = i(t, *this);                            \
-    return Builder(IC.getInst(Inst::K, L->Width, {L, R}), IC);   \
+    return Builder(IC.getInst(Inst::K, L->Width, {L, R}));   \
   }
 
   BINOP(Add) BINOP(Sub) BINOP(Mul)
@@ -50,13 +46,13 @@ public:
 
   template<typename T> Builder Ugt(T t) {                        \
     auto L = I; auto R = i(t, *this);                            \
-    return Builder(IC.getInst(Inst::Ult, 1, {R, L}), IC); \
+    return Builder(IC.getInst(Inst::Ult, 1, {R, L})); \
   }
 
 #define BINOPW(K)                                                \
   template<typename T> Builder K(T t) {                          \
     auto L = I; auto R = i(t, *this);                            \
-    return Builder(IC.getInst(Inst::K, 1, {L, R}), IC);          \
+    return Builder(IC.getInst(Inst::K, 1, {L, R}));          \
   }
   BINOPW(Slt) BINOPW(Ult) BINOPW(Sle) BINOPW(Ule)
   BINOPW(Eq) BINOPW(Ne)
@@ -65,7 +61,7 @@ public:
 #define UNOP(K)                                                  \
   Builder K() {                                                  \
     auto L = I;                                                  \
-    return Builder(IC.getInst(Inst::K, L->Width, {L}), IC);      \
+    return Builder(IC.getInst(Inst::K, L->Width, {L}));      \
   }
   UNOP(LogB) UNOP(BitReverse) UNOP(BSwap) UNOP(Cttz) UNOP(Ctlz)
   UNOP(BitWidth) UNOP(CtPop)
@@ -74,19 +70,19 @@ public:
   Builder Flip() {
     auto L = I;
     // auto AllOnes = IC.getConst(llvm::APInt::getAllOnes(L->Width));
-    auto AllOnes = Builder(IC, llvm::APInt(1, 1)).SExt(L->Width)();
-    return Builder(IC.getInst(Inst::Xor, L->Width, {L, AllOnes}), IC);
+    auto AllOnes = Builder(IC.getConst(llvm::APInt(1, 1))).SExt(L->Width)();
+    return Builder(IC.getInst(Inst::Xor, L->Width, {L, AllOnes}));
   }
   Builder Negate() {
     auto L = I;
     auto Zero = IC.getConst(llvm::APInt(L->Width, 0));
-    return Builder(IC.getInst(Inst::Sub, L->Width, {Zero, L}), IC);
+    return Builder(IC.getInst(Inst::Sub, L->Width, {Zero, L}));
   }
 
 #define UNOPW(K)                                                 \
   Builder K(size_t W) {                                          \
     auto L = I;                                                  \
-    return Builder(IC.getInst(Inst::K, W, {L}), IC);             \
+    return Builder(IC.getInst(Inst::K, W, {L}));             \
   }
   UNOPW(ZExt) UNOPW(SExt) UNOPW(Trunc)
 #undef UNOPW
@@ -124,34 +120,40 @@ private:
   }
 };
 
-Inst *Replace(Inst *R, InstContext &IC, std::map<Inst *, Inst *> &M);
-ParsedReplacement Replace(ParsedReplacement I, InstContext &IC,
-                          std::map<Inst *, Inst *> &M);
+Inst *Replace(Inst *R, std::map<Inst *, Inst *> &M);
+ParsedReplacement Replace(ParsedReplacement I, std::map<Inst *, Inst *> &M);
 
-Inst *Replace(Inst *R, InstContext &IC, std::map<Inst *, llvm::APInt> &ConstMap);
-ParsedReplacement Replace(ParsedReplacement I, InstContext &IC,
-                          std::map<Inst *, llvm::APInt> &ConstMap);
+Inst *Replace(Inst *R, std::map<Inst *, llvm::APInt> &ConstMap);
+ParsedReplacement Replace(ParsedReplacement I, std::map<Inst *, llvm::APInt> &ConstMap);
 
-Inst *Clone(Inst *R, InstContext &IC);
+ParsedReplacement Make(Inst *LHS, Inst *RHS);
+ParsedReplacement Make(Inst *Precondition, Inst *LHS, Inst *RHS);
 
-InstMapping Clone(InstMapping In, InstContext &IC);
+ParsedReplacement AddPC(ParsedReplacement P, Inst *PC);
 
-ParsedReplacement Clone(ParsedReplacement In, InstContext &IC);
+
+ParsedReplacement ToSymConst(ParsedReplacement P, int64_t x);
+
+Inst *Clone(Inst *R);
+
+InstMapping Clone(InstMapping In);
+
+ParsedReplacement Clone(ParsedReplacement In);
 
 // Also Synthesizes given constants
 // Returns clone if verified, nullptrs if not
-std::optional<ParsedReplacement> Verify(ParsedReplacement Input, InstContext &IC, Solver *S);
-// bool IsValid(ParsedReplacement Input, InstContext &IC, Solver *S);
+std::optional<ParsedReplacement> Verify(ParsedReplacement Input);
+// bool IsValid(ParsedReplacement Input);
 
-bool VerifyInvariant(ParsedReplacement Input, InstContext &IC, Solver *S);
+bool VerifyInvariant(ParsedReplacement Input);
 
-std::map<Inst *, llvm::APInt> findOneConstSet(ParsedReplacement Input, const std::set<Inst *> &SymCS, InstContext &IC, Solver *S);
+std::map<Inst *, llvm::APInt> findOneConstSet(ParsedReplacement Input, const std::set<Inst *> &SymCS);
 
-std::vector<std::map<Inst *, llvm::APInt>> findValidConsts(ParsedReplacement Input, const std::set<Inst *> &Insts, InstContext &IC, Solver *S, size_t MaxCount);
+std::vector<std::map<Inst *, llvm::APInt>> findValidConsts(ParsedReplacement Input, const std::set<Inst *> &Insts, size_t MaxCount);
 
-ValueCache GetCEX(const ParsedReplacement &Input, InstContext &IC, Solver *S);
+ValueCache GetCEX(const ParsedReplacement &Input);
 
-std::vector<ValueCache> GetMultipleCEX(ParsedReplacement Input, InstContext &IC, Solver *S, size_t MaxCount);
+std::vector<ValueCache> GetMultipleCEX(ParsedReplacement Input, size_t MaxCount);
 
 int profit(const ParsedReplacement &P);
 
@@ -682,7 +684,19 @@ static const std::map<Inst::Kind, std::string> ArithDialectMap = {
   {Inst::Sub, "arith.subi"},
   {Inst::And, "arith.andi"},
   {Inst::Or, "arith.ori"},
+  {Inst::Mul, "arith.muli"},
+  {Inst::MulNSW, "arith.muli"},
+  {Inst::MulNUW, "arith.muli"},
+  {Inst::MulNW, "arith.muli"},
   {Inst::Xor, "arith.xori"},
+  {Inst::Shl, "arith.shli"},
+  {Inst::LShr, "arith.shrui"},
+  {Inst::AShr, "arith.shrsi"},
+  {Inst::UDiv, "arith.divui"},
+  {Inst::SDiv, "arith.divsi"},
+  {Inst::URem, "arith.remui"},
+  {Inst::SRem, "arith.remsi"},
+  {Inst::Select, "arith.select"},
 };
 
 struct PDLGenerator {

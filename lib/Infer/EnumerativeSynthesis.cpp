@@ -114,6 +114,12 @@ namespace {
   static cl::opt<bool> TryShrinkConsts("souper-shrink-consts",
     cl::desc("Try to shrink constants (defaults=false)"),
     cl::init(false));
+  static cl::opt<bool> SynthesizeLop3("souper-synthesize-lop3",
+    cl::desc("Generate Lop3 (default=false)"),
+    cl::init(false));
+  static cl::opt<bool> OnlySynthesizeLop3("souper-only-synthesize-lop3",
+    cl::desc("Only synthesize lop3(default=false)"),
+    cl::init(false));
 }
 
 // TODO
@@ -219,6 +225,42 @@ bool getGuesses(const std::set<Inst *> &Inputs,
 
   std::vector<Inst *> PartialGuesses;
   std::vector<Inst *> Comps(Inputs.begin(), Inputs.end());
+
+
+  // Lop3
+  if (SynthesizeLop3) {
+    auto CompsCopy = Comps;
+    
+    Inst *C1 = IC.createSynthesisConstant(Width, 1);
+    CompsCopy.push_back(C1);
+    Inst *C2 = IC.createSynthesisConstant(Width, 2);
+    CompsCopy.push_back(C2);
+
+    if (!OnlySynthesizeLop3) {
+      Inst *I1 = IC.getReservedInst();
+      CompsCopy.push_back(I1);
+    }
+
+    for (uint32_t i = 0; i < 256; i++) {
+      for (auto X : CompsCopy) {
+        for (auto Y : CompsCopy) {
+          for (auto Z : CompsCopy) {
+            auto N = IC.getInst(Inst::Lop3, Width, { X, Y, Z, IC.getConst(llvm::APInt(8, i)) });
+            addGuess(N, Width, IC, LHSCost, PartialGuesses, TooExpensive);
+          }
+        }
+      }
+    }
+
+    if (OnlySynthesizeLop3) {
+      for (auto Guess : PartialGuesses) {
+        if (!Generate(Guess)) {
+          break;
+        }
+      }
+      return true;
+    }
+  }
 
   // Conversion Operators
   for (auto Comp : Comps)

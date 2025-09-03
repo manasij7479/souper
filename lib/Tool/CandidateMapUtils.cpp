@@ -173,7 +173,7 @@ void souper::HarvestAndPrintPairOpts(InstContext &IC, llvm::Module *M, Solver *S
           // llvm::errs() << "HERE\n";
 
           Rep.print(llvm::errs(), true);
-          if (Verify(Rep, IC, S)) {
+          if (Verify(Rep)) {
             if (true || isProfitable(Rep)) {
               BlockPCs BPCs;
               std::vector<InstMapping> PCs;
@@ -295,7 +295,7 @@ void souper::HarvestAndPrintInstCombineOpts(InstContext &IC, llvm::Module *M, So
 
           // llvm::errs() << "HERE\n";
 
-          if (Verify(Rep, IC, S)) {
+          if (Verify(Rep)) {
             if (true || isProfitable(Rep)) {
               BlockPCs BPCs;
               std::vector<InstMapping> PCs;

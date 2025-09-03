@@ -2,6 +2,7 @@
 
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Interpreter/Interpreter.h"
+#include "clang/Interpreter/Value.h"
 
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/TargetSelect.h"
@@ -31,6 +32,7 @@ llvm::ExitOnError ExitOnErr;
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/YAMLTraits.h"
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -42,6 +44,11 @@ llvm::ExitOnError ExitOnErr;
 
 
 using namespace llvm;
+
+namespace souper {
+  Solver *S;
+}
+
 using namespace souper;
 
 unsigned DebugLevel;
@@ -56,19 +63,22 @@ DebugFlagParser("souper-debug-level",
 static cl::opt<std::string>
 InputFilename(cl::Positional, cl::desc("<input file>"),
               cl::init("-"));
+static cl::opt<std::string>
+InputKind("kind", cl::desc("Input kind"), cl::init("replacement"));
 
 static cl::opt<std::string>
 ConfigFile("config", cl::desc("YAML config file"), cl::init(""));
 
 
 struct ClangReplEnv {
-    std::string name;
+    std::string name = "hydra-repl";
     std::vector<std::string> deps;
     std::vector<std::string> options;
     int persistent;
     int execute;
     int runtime_args;
     std::string prelude;
+    std::string interlude;
 };
 
 template<>
@@ -81,6 +91,7 @@ struct llvm::yaml::MappingTraits<ClangReplEnv> {
       io.mapRequired("execute", env.execute);
       io.mapOptional("runtime_args", env.runtime_args);
       io.mapOptional("prelude", env.prelude);
+      io.mapOptional("interlude", env.interlude);
   }
 };
 LLVM_YAML_IS_SEQUENCE_VECTOR(ClangReplEnv)
@@ -148,20 +159,26 @@ struct StoredObject {
     return std::nullopt;
   }*/
 
-  // template <>
   std::optional<std::string> getString(SymbolTable *S) {
     if (Data.size() != 1) return std::nullopt;
     return Data[0];
   }
 
-  // template <>
-  std::optional<ParsedReplacement> getPR(SymbolTable *S) {
+
+  std::optional<ParsedReplacement> getPR(SymbolTable *S, bool JustLHS = false) {
+    ReplacementContext RC;
     // parse from string
     if (Attributes[Attr::Type] == "string") {
       llvm::MemoryBufferRef MB(Data[0], "temp");
       std::string ErrStr;
-      auto Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
+      ParsedReplacement Rep;  
+      if (JustLHS) {
+        Rep = ParseReplacementLHS(S->IC, MB.getBufferIdentifier(),
+                                  MB.getBuffer(), RC, ErrStr);
+      } else {
+        Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
                                   MB.getBuffer(), ErrStr);
+      }
       if (!ErrStr.empty()) {
         llvm::errs() << ErrStr << '\n';
         return std::nullopt;
@@ -178,8 +195,14 @@ struct StoredObject {
     llvm::MemoryBufferRef MB(Data[0], "temp");
 
     if (Attributes[Attr::Type] == "replacement") {
-      auto Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
+      ParsedReplacement Rep;
+      if (JustLHS) {
+        Rep = ParseReplacementLHS(S->IC, MB.getBufferIdentifier(),
+                                  MB.getBuffer(), RC, ErrStr);
+      } else {
+        Rep = ParseReplacement(S->IC, MB.getBufferIdentifier(),
                                   MB.getBuffer(), ErrStr);
+      }
       if (!ErrStr.empty()) {
         llvm::errs() << ErrStr << '\n';
         return std::nullopt;
@@ -187,9 +210,15 @@ struct StoredObject {
       return Rep;
     }
     if (Attributes[Attr::Type] == "lhs") {
+      ParsedReplacement Rep;
       ReplacementContext RC;
-      auto Rep = ParseReplacementLHS(S->IC, MB.getBufferIdentifier(),
+      if (JustLHS) {
+        Rep = ParseReplacementLHS(S->IC, MB.getBufferIdentifier(),
                                   MB.getBuffer(), RC, ErrStr);
+      } else {
+        llvm::errs() << "Expected replacement, got " << Attributes[Attr::Type] << '\n';
+        return std::nullopt;
+      }
       if (!ErrStr.empty()) {
         llvm::errs() << ErrStr << '\n';
         return std::nullopt;
@@ -199,7 +228,6 @@ struct StoredObject {
     return std::nullopt;
   }
 
-  //template <>
   std::optional<std::unique_ptr<llvm::Module>> getModule(SymbolTable *S) {
     if (Data.size() != 1) return std::nullopt;
     std::string ErrStr;
@@ -429,8 +457,8 @@ struct REPL {
   Configuration Config;
   std::map<std::string, ClangReplEnv> ClangReplEnvs;
 
-  REPL(InstContext &IC, Solver *S, Configuration Config_)
-      : IC(IC), S(S), Tab(IC), Config(Config_) {
+  REPL(InstContext &IC, Configuration Config_)
+      : IC(IC), Tab(IC), Config(Config_) {
     // for (size_t i = 0 ; i < Inputs.size(); ++i) {
     //   auto Name = "_" + std::to_string(i);
     //   Tab.put(Name, Inputs[i]);
@@ -467,7 +495,7 @@ struct REPL {
   clang::Interpreter *CreateOrGetClangRepl(ClangReplEnv Env,
     const std::string &Data,
     const std::vector<std::string> &Argv) {
-    std::string DataStr = "_ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
+    std::string DataStr = "__ = R\"CHIM_STR(" + Data + ")CHIM_STR\";";
 
     if (ClangRepls.find(Env.name) != ClangRepls.end() && Env.persistent) {
       auto I = ClangRepls[Env.name].get();
@@ -511,7 +539,6 @@ struct REPL {
 
   InstContext &IC;
   ExprBuilderContext EBC;
-  Solver *S;
 
   SymbolTable Tab;
 
@@ -582,8 +609,7 @@ struct REPL {
     // verify
     if (match(Cmds[0], {"v", "verify"})) {
       if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
-
-        if (Verify(In->getPR(&Tab).value(), IC, S)) {
+        if (Verify(In->getPR(&Tab).value())) {
           llvm::outs() << "Valid\n";
           Tab.current(Cmds[1]);
           return true;
@@ -596,11 +622,11 @@ struct REPL {
     }
 
     // generalize
-    if (match(Cmds[0], {"g", "gen", "generalize"})) {
+    if (match(Cmds[0], {"g", "gen", "generalize", "hydra"})) {
       if (auto In = Tab.warn_get(Cmds[1], "")) {
 
         ParsedReplacement Rep = In->getPR(&Tab).value();
-        if (auto Gen = GeneralizeRep(Rep, IC, S)) {
+        if (auto Gen = GeneralizeRep(Rep)) {
           InfixPrinter IP(Gen.value(), false);
           IP(llvm::outs());
           Tab.current(Gen.value(), true);
@@ -617,7 +643,7 @@ struct REPL {
     if (match(Cmds[0], {"r", "reduce"})) {
       if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
         ParsedReplacement Rep = In->getPR(&Tab).value();
-        auto Red = ReduceBasic(IC, S, Rep);
+        auto Red = ReduceBasic(Rep);
         InfixPrinter IP(Red);
         IP(llvm::outs());
         bool WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
@@ -631,7 +657,7 @@ struct REPL {
     if (match(Cmds[0], {"rp", "reduce-poison"})) {
       if (auto In = Tab.warn_get(Cmds[1], "replacement")) {
         ParsedReplacement Rep = In->getPR(&Tab).value();
-        auto Red = ReducePoison(IC, S, Rep);
+        auto Red = ReducePoison(Rep);
         InfixPrinter IP(Red);
         IP(llvm::outs());
         bool WIFlag = In->Attributes[SymbolTable::StoredObject::Attr::WidthIndependent] == "true";
@@ -689,7 +715,7 @@ struct REPL {
           Target = std::stoi(Cmds[2]);
         }
 
-        if (auto Shr = ShrinkRep(Rep, IC, S, Target)) {
+        if (auto Shr = ShrinkRep(Rep, Target)) {
           InfixPrinter IP(Shr.value());
           IP(llvm::outs());
           Tab.current(Shr.value());
@@ -724,7 +750,7 @@ struct REPL {
     if (match(Cmds[0], {"i", "infer"})) {
       if (auto In = Tab.warn_get(Cmds[1])) {
         std::vector<Inst *> RHSs;
-        auto Rep = In->getPR(&Tab).value();
+        auto Rep = In->getPR(&Tab, true).value();
 
         if (std::error_code EC = S->infer(Rep.BPCs, Rep.PCs, Rep.Mapping.LHS,
                                         RHSs, false, IC)) {
@@ -894,11 +920,48 @@ struct REPL {
         return "text";
     }
   }
+
+  void injectIntoScope(Inst *I, clang::Interpreter *Interp, std::string Name) {
+    if (Name.starts_with("symconst_")) { // souper symbolic constants
+      Name = "C" + Name.substr(9);
+    }
+
+    std::string CursedLineOfCode = Name + " = (Inst *)" + std::to_string(size_t(I)) + ";";
+    auto &&Addr = Interp->getSymbolAddress(Name);
+    if (auto &&Err = Addr.takeError()) {
+      // llvm::errs() << "Symbol " << Name << " does not exist\n";
+
+      std::string BH;
+      llvm::raw_string_ostream BlackHole(BH);
+      llvm::logAllUnhandledErrors(std::move(Err), BlackHole, "error: ");
+      // crashes if do not 'handle' the error
+      CursedLineOfCode = "Inst *" + CursedLineOfCode;
+    } else {
+      // Wut
+    }
+    if (auto &&Err = Interp->ParseAndExecute(CursedLineOfCode, nullptr)) {
+      llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+    }
+  }
+
+  void handleParsedReplacement(const ParsedReplacement &PR, clang::Interpreter *Interp) {
+    InfixPrinter IP(PR, false);
+    IP(llvm::outs());
+    injectIntoScope(PR.Mapping.LHS, Interp, "lhs");
+    injectIntoScope(PR.Mapping.RHS, Interp, "rhs");
+    std::vector<Inst *> Vars;
+    findVars(PR.Mapping.LHS, Vars);
+    findVars(PR.Mapping.RHS, Vars);
+    for (auto I : Vars) {
+      injectIntoScope(I, Interp, I->Name);
+    }
+  }
+
   bool operator()() {
     std::string Line;
     std::string ExtLine;
     Mode CurrentMode = Mode::command;
-    std::string CurrentEnv = "default";
+    std::string CurrentEnv = "hydra-repl";
     bool ImmFlag = false;
     do {
       if (CurrentMode == Mode::command || CurrentMode == Mode::text) {
@@ -922,14 +985,14 @@ struct REPL {
         if (Cmds[0] == ":text" || Cmds[0] == ":t") {
           CurrentMode = Mode::text;
           continue;
-        } else if (Cmds[0] == ":c" || Cmds[0] == ":clang" || Cmds[0] == ":interpreter") {
+        } else if (Cmds[0] == ":c" || Cmds[0] == ":clang" || Cmds[0] == ":interpreter" || Cmds[0] == ":repl") {
           CurrentMode = Mode::clang;
           if (Cmds.size() >= 2) {
             CurrentEnv = Cmds[1];
           } else {
-            CurrentEnv = "default";
+            CurrentEnv = "hydra-repl";
           }
-          CreateOrGetClangRepl(ClangReplEnvs[CurrentEnv], Tab.get("_").value().Data[0], Cmds);
+          auto Interp = CreateOrGetClangRepl(ClangReplEnvs[CurrentEnv], Tab.get("_").value().Data[0], Cmds);
           continue;
         } else if (Cmds[0] == ":s" || Cmds[0] == ":shell" || Cmds[0] == ":command") {
           CurrentMode = Mode::command;
@@ -937,7 +1000,7 @@ struct REPL {
         } else if (Cmds[0] == ":i") { // example :i int x = 5;
           Line = Line.substr(3);
           ImmFlag = true;
-          CreateOrGetClangRepl(ClangReplEnvs["default"], "", {});
+          CreateOrGetClangRepl(ClangReplEnvs["hydra-repl"], "", {});
         } else {
           llvm::errs() << "Unknown mode.\n";
           continue;
@@ -947,12 +1010,52 @@ struct REPL {
       if (CurrentMode == Mode::clang || ImmFlag) {
         auto OldEnv = CurrentEnv;
         if (ImmFlag) {
-          CurrentEnv = "default";
+          CurrentEnv = "hydra-repl";
         }
         auto &&Interp = ClangRepls[CurrentEnv];
         if (ClangReplEnvs[CurrentEnv].execute) {
-          if (auto &&Err = Interp->ParseAndExecute(Line)) {
+          clang::Value V;
+          if (auto &&Err = Interp->ParseAndExecute(Line, &V)) {
             llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+          }
+          if (V.isValid()) {
+            auto Type = V.getType().getDesugaredType(Interp->getASTContext()).getLocalUnqualifiedType();
+            auto Str = Type.getAsString();
+
+            if (Str.starts_with("ParsedReplacement") || Str.starts_with("struct souper::ParsedReplacement")
+              || Str.starts_with("class souper::ParsedReplacement") || Str.starts_with("struct ParsedReplacement")
+              || Str.starts_with("class ParsedReplacement")
+              || Str.starts_with("value_type")) { // TODO: this is a hack, use clang APIs to desugar properly.
+              ParsedReplacement *PR = V.convertTo<ParsedReplacement *>();
+              handleParsedReplacement(*PR, Interp.get());
+            } else if (Str.starts_with("std::optional<ParsedReplacement>") || Str.starts_with("class std::optional<struct souper::ParsedReplacement>")) {
+              auto OptPR = V.convertTo<std::optional<ParsedReplacement> *>();
+              if (OptPR && OptPR->has_value()) {
+                handleParsedReplacement(OptPR->value(), Interp.get());
+              } else {
+                llvm::outs() << "std::nullopt\n";
+              }
+            } else if (Str.starts_with("Inst *") || Str.starts_with("struct souper::Inst *")) {
+              Inst *I = V.convertTo<Inst *>();
+              ParsedReplacement PR;
+              PR.Mapping.LHS = I;
+              InfixPrinter IP(PR, false);
+              llvm::outs() << IP.printInst(I, llvm::outs(), true) << "\n";
+              injectIntoScope(I, Interp.get(), "I");
+              std::vector<Inst *> Vars;
+              findVars(I, Vars);
+              for (auto I : Vars) {
+                injectIntoScope(I, Interp.get(), I->Name);
+              }
+            } else {
+              llvm::errs() << "Got " << Str << ". Printing skipped.\n";
+            }
+          }
+          if (ClangReplEnvs[CurrentEnv].interlude != "") {
+            auto &&Interp = ClangRepls[CurrentEnv];
+            if (auto &&Err = Interp->ParseAndExecute(ClangReplEnvs[CurrentEnv].interlude, &V)) {
+              llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+            }
           }
         } else {
           auto &&PTU =Interp->Parse(Line);
@@ -1026,8 +1129,9 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
   KVStore *KV = 0;
 
-  std::unique_ptr<Solver> S = 0;
-  S = GetSolver(KV);
+  std::unique_ptr<Solver> S_ = 0;
+  S_ = GetSolver(KV);
+  S = S_.get();
 
   auto MB = MemoryBuffer::getFileOrSTDIN(InputFilename);
   if (!MB) {
@@ -1058,7 +1162,29 @@ int main(int argc, char **argv) {
   std::string ErrStr;
 
   auto &&Data = (*MB)->getMemBufferRef();
-  REPL SouperRepl(IC, S.get(), Config);
-  SouperRepl.Tab.put("_", SymbolTable::StoredObject(Data.getBuffer().data(), "string"));
+  REPL SouperRepl(IC, Config);
+
+  if (InputKind == "replacement") {
+    // Parse directly into ParsedReplacement object
+    auto PR = ParseReplacement(IC, Data.getBufferIdentifier(), Data.getBuffer(), ErrStr);
+    if (!ErrStr.empty()) {
+      llvm::errs() << "Error parsing replacement: " << ErrStr << '\n';
+      return 1;
+    }
+    SouperRepl.Tab.put("_", SymbolTable::StoredObject(PR));
+  } else if (InputKind == "lhs") {
+    // Parse directly into ParsedReplacement object (LHS only)
+    ReplacementContext RC;
+    auto PR = ParseReplacementLHS(IC, Data.getBufferIdentifier(), Data.getBuffer(), RC, ErrStr);
+    if (!ErrStr.empty()) {
+      llvm::errs() << "Error parsing LHS: " << ErrStr << '\n';
+      return 1;
+    }
+    SouperRepl.Tab.put("_", SymbolTable::StoredObject(PR));
+  } else {
+    // Keep as string for other input types
+    SouperRepl.Tab.put("_", SymbolTable::StoredObject(Data.getBuffer().data(), "string"));
+  }
+  // TODO: llvm ir input
   return SouperRepl();
 }

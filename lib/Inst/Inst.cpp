@@ -476,6 +476,8 @@ const char *Inst::getKindName(Kind K) {
     return "o";
   case Freeze:
     return "freeze";
+  case Lop3:
+    return "lop";
   default:
     llvm_unreachable("all cases covered");
   }
@@ -552,6 +554,7 @@ Inst::Kind Inst::getKind(std::string Name) {
                    .Case("hole", Inst::Hole)
                    .Case("reservedconst", Inst::ReservedConst)
                    .Case("freeze", Inst::Freeze)
+                   .Case("lop", Inst::Lop3)
                    .StartsWith("custom.", Inst::Kind::Custom)
                    .Default(Inst::None);
 }
@@ -605,6 +608,7 @@ Inst *InstContext::getConst(const llvm::APInt &Val) {
   N->K = Inst::Const;
   N->Width = Val.getBitWidth();
   N->Val = Val;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
@@ -625,6 +629,7 @@ Inst *InstContext::getUntypedConst(const llvm::APInt &Val) {
   N->K = Inst::UntypedConst;
   N->Width = 0;
   N->Val = Val;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
@@ -635,6 +640,7 @@ Inst *InstContext::getReservedConst() {
   N->K = Inst::ReservedConst;
   N->SynthesisConstID = ++ReservedConstCounter;
   N->Width = 0;
+  N->IC = this;
   return N;
 }
 
@@ -643,6 +649,7 @@ Inst *InstContext::getReservedInst() {
   Insts.emplace_back(N);
   N->K = Inst::ReservedInst;
   N->Width = 0;
+  N->IC = this;
   return N;
 }
 
@@ -651,6 +658,7 @@ Inst *InstContext::createHole(unsigned Width) {
   Insts.emplace_back(N);
   N->K = Inst::Hole;
   N->Width = Width;
+  N->IC = this;
   return N;
 }
 
@@ -681,6 +689,7 @@ Inst *InstContext::createVar(unsigned Width, llvm::StringRef Name,
   I->NumSignBits = NumSignBits;
   I->DemandedBits = DemandedBits;
   I->SynthesisConstID = SynthesisConstID;
+  I->IC = this;
   return I;
 }
 
@@ -736,6 +745,7 @@ Inst *InstContext::getPhi(Block *B, const std::vector<Inst *> &Ops, llvm::APInt 
   N->B = B;
   N->Ops = Ops;
   N->DemandedBits = DemandedBits;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
@@ -784,6 +794,7 @@ Inst *InstContext::getInst(Inst::Kind K, unsigned Width,
   N->Available = Available;
   N->HarvestKind = HarvestType::HarvestedFromDef;
   N->HarvestFrom = nullptr;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }

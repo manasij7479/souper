@@ -134,7 +134,7 @@ size_t InferWidth(Inst::Kind K, const std::vector<Inst *> &Ops) {
 using ConstMapT = std::vector<std::pair<Inst *, llvm::APInt>>;
 std::pair<ConstMapT, ParsedReplacement>
 AugmentForSymKBDB(ParsedReplacement Original, InstContext &IC) {
-  auto Input = Clone(Original, IC);
+  auto Input = Clone(Original);
   std::vector<std::pair<Inst *, llvm::APInt>> ConstMap;
   if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
     !Input.Mapping.LHS->DemandedBits.isAllOnes()) {
@@ -275,11 +275,10 @@ bool typeCheck(ParsedReplacement &R) {
 }
 
 struct ShrinkWrap {
-  ShrinkWrap(InstContext &IC, Solver *S, ParsedReplacement Input,
-             size_t TargetWidth = 8) : IC(IC), S(S), Input(Input),
-                                       TargetWidth(TargetWidth) {}
+  ShrinkWrap(ParsedReplacement Input, size_t TargetWidth = 8) 
+    : IC(*Input.Mapping.LHS->IC), Input(Input), TargetWidth(TargetWidth) {
+  }
   InstContext &IC;
-  Solver *S;
   ParsedReplacement Input;
   size_t TargetWidth;
 
@@ -488,7 +487,7 @@ struct ShrinkWrap {
 
     // Verify
     do {
-      Result = Verify(New, IC, S);
+      Result = Verify(New);
       if (Result) {
         break;
       } else {
@@ -628,30 +627,30 @@ std::vector<Inst *> FilterRelationsByValue(const std::vector<Inst *> &Relations,
 //         Width = Builder(Width, IC).ZExt(XI->Width)();
 //       }
 
-//       Results.push_back(Builder(XI, IC).Ult(Width)());
-//       Results.push_back(Builder(XI, IC).Ule(Width)());
+//       Results.push_back(Builder(XI).Ult(Width)());
+//       Results.push_back(Builder(XI).Ule(Width)());
 
 //       // x ule UMAX
 //       if (V->Width < XI->Width) {
 //         auto UMax = Builder(IC, llvm::APInt(XI->Width, 1)).Shl(Width).Sub(1);
-//         Results.push_back(Builder(XI, IC).Ule(UMax)());
+//         Results.push_back(Builder(XI).Ule(UMax)());
 //       }
 
 //       // X ule SMAX
 //       auto WM1 = Builder(Width, IC).Sub(1);
 //       auto SMax = Builder(IC, llvm::APInt(XI->Width, 1)).Shl(WM1).Sub(1)();
-//       Results.push_back(Builder(XI, IC).Ule(SMax)());
+//       Results.push_back(Builder(XI).Ule(SMax)());
 
-//       auto gZ = Builder(XI, IC).Ugt(0)();
-//       Results.push_back(Builder(XI, IC).Ult(Width).And(gZ)());
-//       Results.push_back(Builder(XI, IC).Ule(Width).And(gZ)());
+//       auto gZ = Builder(XI).Ugt(0)();
+//       Results.push_back(Builder(XI).Ult(Width).And(gZ)());
+//       Results.push_back(Builder(XI).Ule(Width).And(gZ)());
 
 //       // 2 * X < C, 2 * X >= C
 //       for (auto C : ConcreteConsts) {
 //         if (C->Width != XI->Width) {
 //           continue;
 //         }
-//         auto Sum = Builder(XI, IC).Add(XI)();
+//         auto Sum = Builder(XI).Add(XI)();
 //         Results.push_back(Builder(Sum, IC).Ult(C->Val)());
 //         Results.push_back(Builder(Sum, IC).Ugt(C->Val)());
 //       }
@@ -667,7 +666,7 @@ std::vector<Inst *> FilterRelationsByValue(const std::vector<Inst *> &Relations,
 //       if (XI->Width != YI->Width) {
 //         continue;
 //       }
-//       auto Sum = Builder(XI, IC).Add(YI)();
+//       auto Sum = Builder(XI).Add(YI)();
 //       // // Sum related to width
 //       // auto Width = Builder(Sum, IC).BitWidth();
 //       // Results.push_back(Builder(Sum, IC).Ult(Width)());
@@ -700,9 +699,9 @@ bool comm(Inst *A, Inst *B) {
 
 std::vector<Inst *> BitFuncs(Inst *I, InstContext &IC) {
   std::vector<Inst *> Results;
-  Results.push_back(Builder(I, IC).CtPop()());
-  Results.push_back(Builder(I, IC).Ctlz()());
-  Results.push_back(Builder(I, IC).Cttz()());
+  Results.push_back(Builder(I).CtPop()());
+  Results.push_back(Builder(I).Ctlz()());
+  Results.push_back(Builder(I).Cttz()());
 
   auto Copy = Results;
   for (auto &&C : Copy) {
@@ -710,7 +709,7 @@ std::vector<Inst *> BitFuncs(Inst *I, InstContext &IC) {
       continue;
     }
     if (C->Width != 1 && C->K == Inst::Var) {
-      Results.push_back(Builder(C, IC).BitWidth().Sub(C)());
+      Results.push_back(Builder(C).BitWidth().Sub(C)());
     }
   }
 
@@ -727,7 +726,7 @@ std::vector<Inst *> InferConstantLimits(
 
   std::vector<Inst *> Widths;
   for (auto V : Vars) {
-    Widths.push_back(Builder(V, IC).BitWidth()());
+    Widths.push_back(Builder(V).BitWidth()());
   }
 
   // inequalities TODO
@@ -740,19 +739,19 @@ std::vector<Inst *> InferConstantLimits(
     for (auto Wx : Widths) {
       // C <= W_x
       if (XC.getLimitedValue() <= Wx->Ops[0]->Width)
-        Results.push_back(Builder(XI, IC).Ule(Wx)());
+        Results.push_back(Builder(XI).Ule(Wx)());
 
       // C < W_x
       if (XC.getLimitedValue() < Wx->Ops[0]->Width)
-        Results.push_back(Builder(XI, IC).Ult(Wx)());
+        Results.push_back(Builder(XI).Ult(Wx)());
 
       // C <= log2(W_x)
       if (XC.getLimitedValue() < Log2_64(Wx->Ops[0]->Width))
-        Results.push_back(Builder(XI, IC).Ule(Builder(Wx, IC).LogB())());
+        Results.push_back(Builder(XI).Ule(Builder(Wx).LogB())());
 
       // C < log2(W_x)
       if (XC.getLimitedValue() < Log2_64(Wx->Ops[0]->Width))
-        Results.push_back(Builder(XI, IC).Ult(Builder(Wx, IC).LogB())());
+        Results.push_back(Builder(XI).Ult(Builder(Wx).LogB())());
     }
   }
 
@@ -765,15 +764,15 @@ std::vector<Inst *> InferConstantLimits(
     for (auto Wx : Widths) {
       // C == W_x
       if (XC.getLimitedValue() <= Wx->Ops[0]->Width)
-        Results.push_back(Builder(XI, IC).Ule(Wx)());
+        Results.push_back(Builder(XI).Ule(Wx)());
 
       // C < W_x
       if (XC.getLimitedValue() < Wx->Ops[0]->Width)
-        Results.push_back(Builder(XI, IC).Ult(Wx)());
+        Results.push_back(Builder(XI).Ult(Wx)());
 
       // C <= log2(W_x)
       if (XC.getLimitedValue() < Log2_64(Wx->Ops[0]->Width))
-        Results.push_back(Builder(XI, IC).Ule(Builder(Wx, IC).LogB())());
+        Results.push_back(Builder(XI).Ule(Builder(Wx).LogB())());
 
     }
   }
@@ -814,51 +813,51 @@ std::vector<Inst *> InferPotentialRelations(
           }
 
           if (C3 && (XC | YC | ZC).isAllOnes()) {
-            Results.push_back(Builder(XI, IC).Or(YI).Or(ZI)
+            Results.push_back(Builder(XI).Or(YI).Or(ZI)
               .Eq(llvm::APInt::getAllOnes(XI->Width))());
           }
 
           if (C3 && (XC & YC & ZC) == 0) {
-            Results.push_back(Builder(XI, IC).And(YI).And(ZI)
+            Results.push_back(Builder(XI).And(YI).And(ZI)
               .Eq(llvm::APInt(XI->Width, 0))());
           }
 
           // TODO Make width independent by using bitwidth insts
           if (C2 && (XC | YC | ~ZC).isAllOnes()) {
-            Results.push_back(Builder(XI, IC).Or(YI).Or(Builder(ZI, IC).Flip())
+            Results.push_back(Builder(XI).Or(YI).Or(Builder(ZI).Flip())
               .Eq(llvm::APInt::getAllOnes(XI->Width))());
           }
 
           if (XC << YC == ZC) {
-            Results.push_back(Builder(XI, IC).Shl(YI).Eq(ZI)());
+            Results.push_back(Builder(XI).Shl(YI).Eq(ZI)());
           }
 
           if (XC.lshr(YC) == ZC) {
-            Results.push_back(Builder(XI, IC).LShr(YI).Eq(ZI)());
+            Results.push_back(Builder(XI).LShr(YI).Eq(ZI)());
           }
 
           if (C2 && XC * YC == ZC) {
-            Results.push_back(Builder(XI, IC).Mul(YI).Eq(ZI)());
+            Results.push_back(Builder(XI).Mul(YI).Eq(ZI)());
           }
 
           if (C2 && XC + YC == ZC) {
-            Results.push_back(Builder(XI, IC).Add(YI).Eq(ZI)());
+            Results.push_back(Builder(XI).Add(YI).Eq(ZI)());
           }
 
           // if (C2 && (XC & YC).eq(ZC)) {
-          //   Results.push_back(Builder(XI, IC).And(YI).Eq(ZI)());
+          //   Results.push_back(Builder(XI).And(YI).Eq(ZI)());
           // }
 
           // if (C2 && (XC | YC).eq(ZC)) {
-          //   Results.push_back(Builder(XI, IC).Or(YI).Eq(ZI)());
+          //   Results.push_back(Builder(XI).Or(YI).Eq(ZI)());
           // }
 
           // if (C2 && (XC ^ YC).eq(ZC)) {
-          //   Results.push_back(Builder(XI, IC).Xor(YI).Eq(ZI)());
+          //   Results.push_back(Builder(XI).Xor(YI).Eq(ZI)());
           // }
 
           // if (C2 && (XC != 0 && YC != 0) && (XC + YC).eq(ZC)) {
-          //   Results.push_back(Builder(XI, IC).Add(YI).Eq(ZI)());
+          //   Results.push_back(Builder(XI).Add(YI).Eq(ZI)());
           // }
 
         }
@@ -875,109 +874,109 @@ std::vector<Inst *> InferPotentialRelations(
       }
 
       if (~XC == YC) {
-        Results.push_back(Builder(XI, IC).Flip().Eq(YI)());
+        Results.push_back(Builder(XI).Flip().Eq(YI)());
       }
 
       // no common bits set
       if ((XC & YC) == 0) {
-        Results.push_back(Builder(XI, IC).And(YI).Eq(llvm::APInt(XI->Width, 0))());
+        Results.push_back(Builder(XI).And(YI).Eq(llvm::APInt(XI->Width, 0))());
       }
 
       if ((XC & YC) == XC) {
-        Results.push_back(Builder(XI, IC).And(YI).Eq(XI)());
+        Results.push_back(Builder(XI).And(YI).Eq(XI)());
       }
 
       if ((XC | ~YC) == ~YC) {
-        auto YFlip = Builder(YI, IC).Flip();
-        Results.push_back(Builder(XI, IC).Or(YFlip).Eq(YFlip)());
+        auto YFlip = Builder(YI).Flip();
+        Results.push_back(Builder(XI).Or(YFlip).Eq(YFlip)());
       }
 
       if ((XC | ~YC) == ~XC) {
-        auto YFlip = Builder(YI, IC).Flip();
-        auto XFlip = Builder(XI, IC).Flip();
-        Results.push_back(Builder(XI, IC).Or(YFlip).Eq(XFlip)());
+        auto YFlip = Builder(YI).Flip();
+        auto XFlip = Builder(XI).Flip();
+        Results.push_back(Builder(XI).Or(YFlip).Eq(XFlip)());
       }
 
       if ((XC & YC) == YC) {
-        Results.push_back(Builder(XI, IC).And(YI).Eq(YI)());
+        Results.push_back(Builder(XI).And(YI).Eq(YI)());
       }
 
       if ((XC | YC) == XC) {
-        Results.push_back(Builder(XI, IC).Or(YI).Eq(XI)());
+        Results.push_back(Builder(XI).Or(YI).Eq(XI)());
       }
       if ((XC | YC) == YC) {
-        Results.push_back(Builder(XI, IC).Or(YI).Eq(YI)());
+        Results.push_back(Builder(XI).Or(YI).Eq(YI)());
       }
 
       if (XC == (XC.lshr(YC).shl(YC))) {
-        Results.push_back(Builder(XI, IC).LShr(YI).Shl(YI).Eq(XI)());
+        Results.push_back(Builder(XI).LShr(YI).Shl(YI).Eq(XI)());
       }
 
       if (XC == (XC.ashr(YC).shl(YC))) {
-        Results.push_back(Builder(XI, IC).AShr(YI).Shl(YI).Eq(XI)());
+        Results.push_back(Builder(XI).AShr(YI).Shl(YI).Eq(XI)());
       }
 
       if (XC == (XC.shl(YC).lshr(YC))) {
-        Results.push_back(Builder(XI, IC).Shl(YI).LShr(YI).Eq(XI)());
+        Results.push_back(Builder(XI).Shl(YI).LShr(YI).Eq(XI)());
       }
 
       if (XC == (XC.shl(YC).ashr(YC))) {
-        Results.push_back(Builder(XI, IC).Shl(YI).AShr(YI).Eq(XI)());
+        Results.push_back(Builder(XI).Shl(YI).AShr(YI).Eq(XI)());
       }
 
       // Mul C
       if (C2 && YC!= 0 && XC.urem(YC) == 0) {
         auto Fact = XC.udiv(YC);
         if (Fact != 1 && Fact != 0) {
-          Results.push_back(Builder(YI, IC).Mul(Fact).Eq(XI)());
+          Results.push_back(Builder(YI).Mul(Fact).Eq(XI)());
         }
       }
 
       // log C
       if (XC == YC.logBase2()) {
-        Results.push_back(Builder(XI, IC).Eq(Builder(YI, IC).LogB())());
+        Results.push_back(Builder(XI).Eq(Builder(YI).LogB())());
       }
 
       // Add C
       // auto Diff = XC - YC;
       // if (Diff != 0) {
-      //   Results.push_back(Builder(XI, IC).Sub(Diff).Eq(YI)());
+      //   Results.push_back(Builder(XI).Sub(Diff).Eq(YI)());
       // }
 
       if (C2 && XC != 0 && YC.urem(XC) == 0) {
         auto Fact = YC.udiv(XC);
         if (Fact != 1 && Fact != 0) {
-          Results.push_back(Builder(XI, IC).Mul(Fact).Eq(YI)());
+          Results.push_back(Builder(XI).Mul(Fact).Eq(YI)());
         }
       }
 
       auto One = llvm::APInt(XC.getBitWidth(), 1);
 
       if (XI->Width != 1 && XC - YC == 1) {
-        Results.push_back(Builder(XI, IC).Sub(YI).Eq(One)());
+        Results.push_back(Builder(XI).Sub(YI).Eq(One)());
       }
 
       auto GENComps = [&] (Inst *A, llvm::APInt AVal, Inst *B, llvm::APInt BVal) {
-        if (AVal.ne(BVal)) Results.push_back(Builder(A, IC).Ne(B)());
+        if (AVal.ne(BVal)) Results.push_back(Builder(A).Ne(B)());
         // For width == 1, there is exactly one model, hence it isn't a generalization
-        if (AVal.sle(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Sle(B)());
-        if (AVal.ule(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Ule(B)());
-        if (AVal.slt(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Slt(B)());
-        if (AVal.ult(BVal)  && A->Width != 1) Results.push_back(Builder(A, IC).Ult(B)());
+        if (AVal.sle(BVal)  && A->Width != 1) Results.push_back(Builder(A).Sle(B)());
+        if (AVal.ule(BVal)  && A->Width != 1) Results.push_back(Builder(A).Ule(B)());
+        if (AVal.slt(BVal)  && A->Width != 1) Results.push_back(Builder(A).Slt(B)());
+        if (AVal.ult(BVal)  && A->Width != 1) Results.push_back(Builder(A).Ult(B)());
       };
 
       GENComps(XI, XC, YI, YC);
 
       // C1 << C2 == -1 << C2
       if (XC.shl(YC) == llvm::APInt::getAllOnes(XC.getBitWidth()).shl(YC)) {
-        auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(XC.getBitWidth());
-        Results.push_back(Builder(XI, IC).Shl(YI).Eq(MinusOne.Shl(YI))());
+        auto MinusOne = Builder(IC.getConst(llvm::APInt(1, 1))).SExt(XC.getBitWidth());
+        Results.push_back(Builder(XI).Shl(YI).Eq(MinusOne.Shl(YI))());
       }
 
       // C1 >> C2 == -1 >> C2
       if (XC.lshr(YC) == llvm::APInt::getAllOnes(XC.getBitWidth()).lshr(YC)) {
-        auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(XC.getBitWidth());
-        Results.push_back(Builder(XI, IC).LShr(YI).Eq(MinusOne.LShr(YI))());
+        auto MinusOne = Builder(IC.getConst(llvm::APInt(1, 1))).SExt(XC.getBitWidth());
+        Results.push_back(Builder(XI).LShr(YI).Eq(MinusOne.LShr(YI))());
       }
 
       // GENComps(Builder(IC, One).Shl(XI)() , One.shl(XC), YI, YC);
@@ -990,8 +989,8 @@ std::vector<Inst *> InferPotentialRelations(
       for (auto &&XBit : XBits) {
         for (auto &&YBit : YBits) {
           if (XBit->Width == YBit->Width) {
-            Results.push_back(Builder(XBit, IC).Ule(YBit)());
-            Results.push_back(Builder(XBit, IC).Ult(YBit)());
+            Results.push_back(Builder(XBit).Ule(YBit)());
+            Results.push_back(Builder(XBit).Ult(YBit)());
           }
         }
       }
@@ -1006,9 +1005,9 @@ std::vector<Inst *> InferPotentialRelations(
 
     }
     if (XI->Width != 1) {
-      Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth().Sub(1))());
-      // Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth().UDiv(2))());
-      // Results.push_back(Builder(XI, IC).Eq(Builder(XI, IC).BitWidth())());
+      Results.push_back(Builder(XI).Eq(Builder(XI).BitWidth().Sub(1))());
+      // Results.push_back(Builder(XI).Eq(Builder(XI).BitWidth().UDiv(2))());
+      // Results.push_back(Builder(XI).Eq(Builder(XI).BitWidth())());
     }
   }
 
@@ -1020,29 +1019,29 @@ std::vector<Inst *> InferPotentialRelations(
 
       if (XC.getLimitedValue() == YC.getLimitedValue()) {
         if (XI->Width > YI->Width) {
-          Results.push_back(Builder(YI, IC).ZExt(XI->Width).Eq(XI)());
+          Results.push_back(Builder(YI).ZExt(XI->Width).Eq(XI)());
         } else if (XI->Width < YI->Width) {
-          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Eq(YI)());
+          Results.push_back(Builder(XI).ZExt(YI->Width).Eq(YI)());
         }
       } else {
         if (XI->Width > YI->Width) {
-          Results.push_back(Builder(YI, IC).ZExt(XI->Width).Ne(XI)());
+          Results.push_back(Builder(YI).ZExt(XI->Width).Ne(XI)());
         } else if (XI->Width < YI->Width) {
-          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Ne(YI)());
+          Results.push_back(Builder(XI).ZExt(YI->Width).Ne(YI)());
         }
       }
 
       if (XC.getLimitedValue() < YC.getLimitedValue()) {
         if (XI->Width > YI->Width) {
-          Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).ZExt(XI->Width))());
-          Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).ZExt(XI->Width))());
-          Results.push_back(Builder(XI, IC).Ult(Builder(YI, IC).SExt(XI->Width))());
-          Results.push_back(Builder(XI, IC).Slt(Builder(YI, IC).SExt(XI->Width))());
+          Results.push_back(Builder(XI).Ult(Builder(YI).ZExt(XI->Width))());
+          Results.push_back(Builder(XI).Slt(Builder(YI).ZExt(XI->Width))());
+          Results.push_back(Builder(XI).Ult(Builder(YI).SExt(XI->Width))());
+          Results.push_back(Builder(XI).Slt(Builder(YI).SExt(XI->Width))());
         } else if (XI->Width < YI->Width) {
-          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Ult(YI)());
-          Results.push_back(Builder(XI, IC).ZExt(YI->Width).Slt(YI)());
-          Results.push_back(Builder(XI, IC).SExt(YI->Width).Ult(YI)());
-          Results.push_back(Builder(XI, IC).SExt(YI->Width).Slt(YI)());
+          Results.push_back(Builder(XI).ZExt(YI->Width).Ult(YI)());
+          Results.push_back(Builder(XI).ZExt(YI->Width).Slt(YI)());
+          Results.push_back(Builder(XI).SExt(YI->Width).Ult(YI)());
+          Results.push_back(Builder(XI).SExt(YI->Width).Slt(YI)());
         }
       }
 
@@ -1133,8 +1132,9 @@ std::set<Inst *, Cmp> findConcreteConsts(Inst *I) {
 }
 
 std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
-  ParsedReplacement Input, InstContext &IC, Solver *S,
+  ParsedReplacement Input,
   std::map<Inst *, llvm::APInt> SymCS) {
+  auto &IC = *Input.Mapping.LHS->IC;
 
   // return {};
 
@@ -1156,7 +1156,7 @@ std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
 
   std::optional<ParsedReplacement> Ret;
   auto SOLVE = [&]() -> bool {
-    Ret = Verify(Input, IC, S);
+            Ret = Verify(Input);
     if (Ret) {
       return true;
     } else {
@@ -1207,13 +1207,13 @@ std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
     // llvm::errs() << "\n<-Clone\n";
     return {};
   } else {
-    return souper::Replace(Input, IC, RevertMap);
+    return souper::Replace(Input, RevertMap);
   }
 }
 
 std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
-        ParsedReplacement Input, InstContext &IC,
-        Solver *S, std::map<Inst *, llvm::APInt> SymCS) {
+        ParsedReplacement Input, std::map<Inst *, llvm::APInt> SymCS) {
+  auto &IC = *Input.Mapping.LHS->IC;
   // Assume Input is not valid
   std::map<Inst *, llvm::APInt> NonBools;
   for (auto &&C : SymCS) {
@@ -1226,7 +1226,7 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
   std::optional<ParsedReplacement> Clone = std::nullopt;
 
   auto SOLVE = [&]() -> bool {
-    Clone = Verify(Input, IC, S);
+          Clone = Verify(Input);
     if (Clone) {
       return true;
     } else {
@@ -1362,10 +1362,11 @@ void SortPredsByModelCount(std::vector<Inst *> &Preds) {
   });
 }
 
-std::optional<ParsedReplacement> VerifyWithRels(InstContext &IC, Solver *S,
+std::optional<ParsedReplacement> VerifyWithRels(
                                  ParsedReplacement Input,
                                  std::vector<Inst *> &Rels,
                                  std::map<Inst *, llvm::APInt> SymCS = {}) {
+  auto &IC = *Input.Mapping.LHS->IC;
   std::vector<Inst *> ValidRels;
 
   ParsedReplacement FirstValidResult = Input;
@@ -1376,10 +1377,10 @@ std::optional<ParsedReplacement> VerifyWithRels(InstContext &IC, Solver *S,
     // InfixPrinter IP(Input);
     // IP(llvm::errs());
 
-    auto Clone = Verify(Input, IC, S);
+    auto Clone = Verify(Input);
 
     if (!Clone && !SymCS.empty()) {
-      Clone = SimplePreconditionsAndVerifyGreedy(Input, IC, S, SymCS);
+      Clone = SimplePreconditionsAndVerifyGreedy(Input, SymCS);
     }
 
     // InfixPrinter IP(Input);
@@ -1433,7 +1434,7 @@ FirstValidCombination(ParsedReplacement Input,
                       const std::vector<Inst *> &Targets,
                       const std::vector<std::vector<Inst *>> &Candidates,
                       std::map<Inst *, Inst *> InstCache,
-                      InstContext &IC, Solver *S,
+                      InstContext &IC,
                       std::map<Inst *, llvm::APInt> SymCS,
                       bool GEN,
                       bool SDF,
@@ -1501,7 +1502,7 @@ FirstValidCombination(ParsedReplacement Input,
 
     for (auto &&[C, Val] : SymCS) {
       if (SymsInCurrent.find(C) == SymsInCurrent.end()) {
-        ReverseMap[C] = Builder(IC, Val)();
+        ReverseMap[C] = Builder(IC.getConst(Val))();
       }
     }
 
@@ -1513,14 +1514,14 @@ FirstValidCombination(ParsedReplacement Input,
       // llvm::errs() << "\n";
 
       if (GEN) {
-        Clone = Verify(P, IC, S);
+        Clone = Verify(P);
         if (Clone) {
           return true;
         }
       }
 
       if (!Rels.empty()) {
-        auto Result = VerifyWithRels(IC, S, P, Rels);
+        auto Result = VerifyWithRels(P, Rels);
         if (Result) {
           Clone = *Result;
           return true;
@@ -1528,7 +1529,7 @@ FirstValidCombination(ParsedReplacement Input,
       }
 
       if (SDF) {
-        Clone = SimplePreconditionsAndVerifyGreedy(P, IC, S, SymCS);
+        Clone = SimplePreconditionsAndVerifyGreedy(P, SymCS);
 
         if (Clone) {
           return true;
@@ -1536,7 +1537,7 @@ FirstValidCombination(ParsedReplacement Input,
       }
 
       if (DFF) {
-        Clone = DFPreconditionsAndVerifyGreedy(P, IC, S, SymCS);
+        Clone = DFPreconditionsAndVerifyGreedy(P, SymCS);
         if (Clone) {
           return true;
         }
@@ -1546,8 +1547,8 @@ FirstValidCombination(ParsedReplacement Input,
     };
 
     auto Copy = Input;
-    Copy.Mapping.LHS = Replace(Input.Mapping.LHS, IC, InstCacheRHS);
-    Copy.Mapping.RHS = Replace(Input.Mapping.RHS, IC, InstCacheRHS);
+    Copy.Mapping.LHS = Replace(Input.Mapping.LHS, InstCacheRHS);
+    Copy.Mapping.RHS = Replace(Input.Mapping.RHS, InstCacheRHS);
 
 
 
@@ -1557,8 +1558,8 @@ FirstValidCombination(ParsedReplacement Input,
     }
 
     if (!ReverseMap.empty()) {
-      Copy.Mapping.LHS = Replace(Copy.Mapping.LHS, IC, ReverseMap);
-      Copy.Mapping.RHS = Replace(Copy.Mapping.RHS, IC, ReverseMap);
+      Copy.Mapping.LHS = Replace(Copy.Mapping.LHS, ReverseMap);
+      Copy.Mapping.RHS = Replace(Copy.Mapping.RHS, ReverseMap);
 
       if (SOLVE(Copy)) {
         return Clone;
@@ -1600,10 +1601,10 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
       // ReplacementContext RC;
       // RC.printInst(X, llvm::errs(), true);
       if (NewTarget.getBitWidth() < Target.getBitWidth()) {
-        Results.push_back(Builder(IC, X).ZExt(Target.getBitWidth())());
-        Results.push_back(Builder(IC, X).SExt(Target.getBitWidth())());
+        Results.push_back(Builder(X).ZExt(Target.getBitWidth())());
+        Results.push_back(Builder(X).SExt(Target.getBitWidth())());
       } else if (NewTarget.getBitWidth() > Target.getBitWidth()) {
-        Results.push_back(Builder(IC, X).Trunc(Target.getBitWidth())());
+        Results.push_back(Builder(X).Trunc(Target.getBitWidth())());
       }
     }
   }
@@ -1619,9 +1620,9 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
       if (Val == Target) {
         Results.push_back(I);
       } else if (Val == 0 - Target) {
-        Results.push_back(Builder(IC, I).Negate()());
+        Results.push_back(Builder(I).Negate()());
       } else if (Val == ~Target) {
-        Results.push_back(Builder(IC, I).Flip()());
+        Results.push_back(Builder(I).Flip()());
       }
 
       // llvm::errs() << "Trying to synthesize " << Target << " from " << Val << "\n";
@@ -1629,24 +1630,24 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
       auto One = llvm::APInt(I->Width, 1);
       // llvm::errs() << "1: " << One.shl(Val) << "\n";
       if (One.shl(Val) == Target) {
-        Results.push_back(Builder(IC, One).Shl(I)());
+        Results.push_back(Builder(IC.getConst(One)).Shl(I)());
       }
       auto MinusOneVal = llvm::APInt::getAllOnes(I->Width);
 
       auto OneBitOne = llvm::APInt(1, 1);
-      auto MinusOne = Builder(IC, OneBitOne).SExt(I->Width)();
+      auto MinusOne = Builder(IC.getConst(OneBitOne)).SExt(I->Width)();
 
       // llvm::errs() << "2: " << MinusOne.shl(Val) << "\n";
       if (MinusOneVal.shl(Val) == Target) {
-        Results.push_back(Builder(IC, MinusOne).Shl(I)());
+        Results.push_back(Builder(MinusOne).Shl(I)());
       }
       // llvm::errs() << "3: " << MinusOne.lshr(Val) << "\n";
       if (MinusOneVal.lshr(Val) == Target) {
-        Results.push_back(Builder(IC, MinusOne).LShr(I)());
+        Results.push_back(Builder(MinusOne).LShr(I)());
       }
     } else {
       if (ParentConst) {
-        Results.push_back(Builder(IC, Target)());
+        Results.push_back(Builder(IC.getConst(Target))());
       }
     }
   }
@@ -1675,30 +1676,30 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
 
     // C + X == Target
     for_no_nop(X, Target - Val) {
-      Results.push_back(Builder(I, IC).Add(X)());
+      Results.push_back(Builder(I).Add(X)());
     }
 
     // C - X == Target
     for_no_nop(X, Val - Target) {
-      Results.push_back(Builder(I, IC).Sub(X)());
+      Results.push_back(Builder(I).Sub(X)());
     }
 
     // X - C == Target
     for_no_nop(X, Target + Val) {
-      Results.push_back(Builder(X, IC).Sub(I)());
+      Results.push_back(Builder(X).Sub(I)());
     }
 
     // C * X == Target
     if (Val.isNegative() || Target.isNegative()) {
       if (Val != 0 && Target.srem(Val) == 0) {
         for_no_nop(X, Target.sdiv(Val)) {
-          Results.push_back(Builder(X, IC).Mul(I)());
+          Results.push_back(Builder(X).Mul(I)());
         }
       }
     } else {
       if (Val != 0 && Target.urem(Val) == 0) {
         for_no_nop(X, Target.udiv(Val)) {
-          Results.push_back(Builder(X, IC).Mul(I)());
+          Results.push_back(Builder(X).Mul(I)());
         }
       }
     }
@@ -1707,13 +1708,13 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
     if (Val.isNegative() || Target.isNegative()) {
       if (Target != 0 && Val.srem(Target) == 0) {
         for_no_nop(X, Val.sdiv(Target)) {
-          Results.push_back(Builder(I, IC).SDiv(X)());
+          Results.push_back(Builder(I).SDiv(X)());
         }
       }
     } else {
       if (Target != 0 && Val.urem(Target) == 0) {
         for_no_nop(X, Val.udiv(Target)) {
-          Results.push_back(Builder(I, IC).UDiv(X)());
+          Results.push_back(Builder(I).UDiv(X)());
         }
       }
     }
@@ -1723,13 +1724,13 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
     if (Val.isNegative() || Target.isNegative()) {
       if (Val != 0 && Target.srem(Val) == 0) {
         for_no_nop(X, Val * Target) {
-          Results.push_back(Builder(X, IC).SDiv(I)());
+          Results.push_back(Builder(X).SDiv(I)());
         }
       }
     } else {
       if (Val != 0 && Target.urem(Val) == 0) {
         for_no_nop(X, Val * Target) {
-          Results.push_back(Builder(X, IC).UDiv(I)());
+          Results.push_back(Builder(X).UDiv(I)());
         }
       }
     }
@@ -1738,11 +1739,11 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
 
     // Unary operators (no recursion required)
     if (Target == Val.logBase2()) {
-      Results.push_back(Builder(I, IC).LogB()());
+      Results.push_back(Builder(I).LogB()());
     }
 
     if (Target == Val.reverseBits()) {
-      Results.push_back(Builder(I, IC).BitReverse()());
+      Results.push_back(Builder(I).BitReverse()());
     }
     // TODO Add others
 
@@ -1750,18 +1751,18 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
     llvm::APInt D = Val;
     D.flipAllBits();
     if (Target == D) {
-      Results.push_back(Builder(I, IC).Xor(llvm::APInt::getAllOnes(I->Width))());
+      Results.push_back(Builder(I).Xor(llvm::APInt::getAllOnes(I->Width))());
     }
 
     if (Target == D + 1) {
-      Results.push_back(Builder(I, IC).Xor(llvm::APInt::getAllOnes(I->Width)).Add(1)());
+      Results.push_back(Builder(I).Xor(llvm::APInt::getAllOnes(I->Width)).Add(1)());
     }
 
     // neg
     D = Val;
     D.negate();
     if (Target == D && D != Val) {
-      Results.push_back(Builder(IC, llvm::APInt::getAllOnes(I->Width)).Sub(I)());
+      Results.push_back(Builder(IC.getConst(llvm::APInt::getAllOnes(I->Width))).Sub(I)());
     }
 
     for (const auto &[I2, Val2] : ConstMap) {
@@ -1769,13 +1770,13 @@ InstContext &IC, size_t Threshold, bool ConstMode, Inst *ParentConst = nullptr) 
         continue;
       }
       if ((Val & Val2) == Target && !Val.isAllOnes() && !Val2.isAllOnes()) {
-        Results.push_back(Builder(I, IC).And(I2)());
+        Results.push_back(Builder(I).And(I2)());
       }
       if ((Val | Val2) == Target && Val != 0 && Val2 != 0) {
-        Results.push_back(Builder(I, IC).Or(I2)());
+        Results.push_back(Builder(I).Or(I2)());
       }
       if ((Val ^ Val2) == Target && Val != Target && Val2 != Target) {
-        Results.push_back(Builder(I, IC).Xor(I2)());
+        Results.push_back(Builder(I).Xor(I2)());
       }
     }
   }
@@ -1916,7 +1917,7 @@ std::vector<Inst *> ExtractSketchesSimple(InstContext &IC, ParsedReplacement Inp
   auto BoolOne = IC.getConst(llvm::APInt(1, 1));
   std::vector<Inst *> ConstList = {IC.getConst(llvm::APInt(Inputs[0]->Width, 0)),
                                    IC.getConst(llvm::APInt(Inputs[0]->Width, 1)),
-                                   Builder(BoolOne, IC).SExt(Inputs[0]->Width)()};
+                                   Builder(BoolOne).SExt(Inputs[0]->Width)()};
 
   for (auto &&C : ConstList) {
     auto MapCopy = SymConstMap;
@@ -1926,7 +1927,7 @@ std::vector<Inst *> ExtractSketchesSimple(InstContext &IC, ParsedReplacement Inp
       continue;
     }
 
-    auto Root = Replace(Input.Mapping.LHS, IC, MapCopy);
+    auto Root = Replace(Input.Mapping.LHS, MapCopy);
 
     for (auto I : AllSubExprs(Root, Width)) {
       Sketches.push_back(I);
@@ -2094,41 +2095,41 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
       //   continue;
       // }
 
-      auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
+      auto MinusOne = Builder(IC.getConst(llvm::APInt(1, 1))).SExt(C->Width)();
 
-      // auto MinusOne = Builder(IC, llvm::APInt(C->Width, 1)).AShr(Builder(IC, C).BitWidth())();
+      // auto MinusOne = Builder(IC.getConst(llvm::APInt(C->Width, 1))).AShr(Builder(C).BitWidth())();
       // auto MinusOne = Builder(IC, llvm::APInt::getAllOnes(C->Width))();
       Components.push_back(C);
-      Components.push_back(Builder(C, IC).BSwap()());
-      Components.push_back(Builder(C, IC).LogB()());
+      Components.push_back(Builder(C).BSwap()());
+      Components.push_back(Builder(C).LogB()());
 
       if (C->Width != 1 && NumInsts < 2) {
-        Components.push_back(Builder(C, IC).Sub(1)());
-        Components.push_back(Builder(C, IC).Add(1)());
+        Components.push_back(Builder(C).Sub(1)());
+        Components.push_back(Builder(C).Add(1)());
 
-        auto TwoC = Builder(C, IC).Add(C);
+        auto TwoC = Builder(C).Add(C);
         Components.push_back(TwoC.Flip()());
       }
 
-      Components.push_back(Builder(C, IC).Xor(MinusOne)());
+      Components.push_back(Builder(C).Xor(MinusOne)());
 
-      Components.push_back(Builder(IC, MinusOne).Shl(C)());
-      Components.push_back(Builder(IC, llvm::APInt(C->Width, 1)).Shl(C)());
+      Components.push_back(Builder(MinusOne).Shl(C)());
+      Components.push_back(Builder(IC.getConst(llvm::APInt(C->Width, 1))).Shl(C)());
 
       if (C->Width != 1 && C->K == Inst::Var) {
-        Components.push_back(Builder(IC, C).BitWidth().Sub(1)());
-        Components.push_back(Builder(IC, C).BitWidth().Sub(C)());
-        auto CModWidth = Builder(IC, C).URem(Builder(IC, C).BitWidth());
+        Components.push_back(Builder(C).BitWidth().Sub(1)());
+        Components.push_back(Builder(C).BitWidth().Sub(C)());
+        auto CModWidth = Builder(C).URem(Builder(C).BitWidth());
         Components.push_back(CModWidth());
-        Components.push_back(Builder(IC, C).BitWidth().Sub(CModWidth)());
+        Components.push_back(Builder(C).BitWidth().Sub(CModWidth)());
       }
 
       for (auto &&C2 : AtomicComps) {
         if (C == C2) {
           continue;
         }
-        auto UL = Builder(IC, C).Ult(C2);
-        auto SL = Builder(IC, C).Slt(C2);
+        auto UL = Builder(C).Ult(C2);
+        auto SL = Builder(C).Slt(C2);
 
         Components.push_back(UL.Select(C, C2)());
         Components.push_back(SL.Select(C, C2)());
@@ -2142,12 +2143,12 @@ std::vector<std::vector<Inst *>> Enumerate(std::vector<Inst *> RHSConsts,
     for (auto &&C : AtomicComps) {
       if (VisitedWidths.find(C->Width) == VisitedWidths.end()) {
         VisitedWidths.insert(C->Width);
-        auto MinusOne = Builder(IC, llvm::APInt(1, 1)).SExt(C->Width)();
+        auto MinusOne = Builder(IC.getConst(llvm::APInt(1, 1))).SExt(C->Width)();
         // Components.push_back(MinusOne);
-        Components.push_back(Builder(IC, MinusOne).LShr(1)());
-        Components.push_back(Builder(IC, MinusOne).Shl(1)());
+        Components.push_back(Builder(MinusOne).LShr(1)());
+        Components.push_back(Builder(MinusOne).Shl(1)());
         // Components.push_back(Builder(IC, MinusOne).Add(1)()); // zero
-        Components.push_back(Builder(IC, MinusOne).Sub(1)());
+        Components.push_back(Builder(MinusOne).Sub(1)());
       }
     }
 
@@ -2233,37 +2234,65 @@ bool hasMultiArgumentPhi(Inst *I) {
   return false;
 }
 
-ParsedReplacement ReducePoison(InstContext &IC,
-  Solver *S, ParsedReplacement Input) {
-  Reducer R(IC, S);
+ParsedReplacement ReducePoison(ParsedReplacement Input) {
+  auto &IC = *Input.Mapping.LHS->IC;
+  Reducer R(IC);
   return R.ReducePoison(Input);
 }
 
-ParsedReplacement ReduceBasic(InstContext &IC,
-                              Solver *S, ParsedReplacement Input) {
-  static Reducer R(IC, S);
+ParsedReplacement ReduceBasic(ParsedReplacement Input) {
+  auto &IC = *Input.Mapping.LHS->IC;
+  static Reducer R(IC);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReducePCs\n";
   Input = R.ReducePCs(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReduceRedundantPhis\n";
   Input = R.ReduceRedundantPhis(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReduceGreedy\n";
   Input = R.ReduceGreedy(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReduceBackwards\n";
   Input = R.ReduceBackwards(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReducePairsGreedy\n";
   Input = R.ReducePairsGreedy(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReduceTriplesGreedy\n";
   Input = R.ReduceTriplesGreedy(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting WeakenKB\n";
   Input = R.WeakenKB(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting WeakenCR\n";
   Input = R.WeakenCR(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting WeakenDB\n";
   Input = R.WeakenDB(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting WeakenOther\n";
   Input = R.WeakenOther(Input);
+  
   if (ReduceKBIFY) {
+    if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReduceGreedyKBIFY\n";
     Input = R.ReduceGreedyKBIFY(Input);
   }
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting second ReducePCs\n";
   Input = R.ReducePCs(Input);
+  
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Starting ReducePCsToDF\n";
   Input = R.ReducePCsToDF(Input);
+  
   // Input = R.ReducePoison(Input);
+  if (DebugLevel > 4) llvm::errs() << "ReduceBasic: Completed all reduction steps\n";
   return Input;
 }
 
-ParsedReplacement DeAugment(InstContext &IC,
-                            Solver *S, ParsedReplacement Augmented) {
-  auto Result = ReduceBasic(IC, S, Augmented);
+ParsedReplacement DeAugment(ParsedReplacement Augmented) {
+  auto &IC = *Augmented.Mapping.LHS->IC;
+  auto Result = ReduceBasic(Augmented);
   Inst *SymDBVar = nullptr;
   if (Result.Mapping.LHS->K == Inst::DemandedMask) {
     SymDBVar = Result.Mapping.LHS->Ops[1];
@@ -2299,9 +2328,9 @@ ParsedReplacement DeAugment(InstContext &IC,
 }
 
 // Assuming the input has leaves pruned and preconditions weakened
-std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
-                            Solver *S, ParsedReplacement Input, bool &Changed,
+std::optional<ParsedReplacement> SuccessiveSymbolize(ParsedReplacement Input, bool &Changed,
                             std::vector<std::pair<Inst *, llvm::APInt>> ConstMap = {}) {
+  auto &IC = *Input.Mapping.LHS->IC;
 
   // Print first successful result and exit, no result sorting.
   // Prelude
@@ -2391,18 +2420,18 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   }
   if (!CommonConsts.empty()) {
-    Result = Replace(Result, IC, CommonConsts);
-    auto Clone = Verify(Result, IC, S);
+    Result = Replace(Result, CommonConsts);
+    auto Clone = Verify(Result);
     if (Clone) {
       return Clone;
     }
 
-    Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
+    Clone = SimplePreconditionsAndVerifyGreedy(Result, SymCS);
     if (Clone) {
       return Clone;
     }
 
-//    Clone = DFPreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
+//    Clone = DFPreconditionsAndVerifyGreedy(Result, IC, SymCS);
 //    if (Clone.Mapping.LHS && Clone.Mapping.RHS) {
 //      return Clone;
 //    }
@@ -2431,7 +2460,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     //   llvm::errs() << RHSFresh.size() << "\n";
     // }
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                       InstCache, IC, S, SymCS,
+                                       InstCache, IC, SymCS,
                                        true, false, false);
     if (Clone) {
       return Clone;
@@ -2443,15 +2472,15 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
     std::map<Inst *, Inst *> TargetConstMap;
     TargetConstMap[C] = SymConstMap[C];
-    auto Rep = Replace(Input, IC, TargetConstMap);
+    auto Rep = Replace(Input, TargetConstMap);
 
-    auto Clone = Verify(Rep, IC, S);
+    auto Clone = Verify(Rep);
     if (!Clone) {
-      Clone = SimplePreconditionsAndVerifyGreedy(Result, IC, S, SymCS);
+      Clone = SimplePreconditionsAndVerifyGreedy(Result, SymCS);
     }
     if (Clone) {
       bool changed = false;
-      auto Gen = SuccessiveSymbolize(IC, S, Clone.value(), changed);
+      auto Gen = SuccessiveSymbolize(Clone.value(), changed);
       return changed ? Gen : Clone;
     }
   }
@@ -2468,9 +2497,9 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         TargetConstMap[C1] = SymConstMap[C1];
         TargetConstMap[C2] = SymConstMap[C2];
 
-        auto Rep = Replace(Input, IC, TargetConstMap);
+        auto Rep = Replace(Input, TargetConstMap);
 
-        auto Clone = Verify(Rep, IC, S);
+        auto Clone = Verify(Rep);
 
         if (Clone) {
           return Clone;
@@ -2488,7 +2517,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         //   llvm::errs() << "\n";
         // }
 
-        Clone = VerifyWithRels(IC, S, Rep, Relations, SymCS);
+        Clone = VerifyWithRels(Rep, Relations, SymCS);
 
         if (Clone) {
           return Clone;
@@ -2501,7 +2530,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   // Step 1.5 : Direct symbolize, simple rel constraints on LHS
 
-  auto CounterExamples = GetMultipleCEX(Result, IC, S, 3);
+  auto CounterExamples = GetMultipleCEX(Result, 3);
   if (Nested) {
     CounterExamples = {};
     // FIXME : Figure out how to get CEX for symbolic dataflow
@@ -2522,7 +2551,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     JustLHSSymConstMap[C] = SymConstMap[C];
   }
 
-  auto Copy = Replace(Input, IC, JustLHSSymConstMap);
+  auto Copy = Replace(Input, JustLHSSymConstMap);
   // for (auto &&R : Relations) {
   //   Copy.PCs.push_back({R, IC.getConst(llvm::APInt(1, 1))});
   //   // Copy.print(llvm::errs(), true);
@@ -2535,7 +2564,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   // llvm::errs() << "Relations : " << Relations.size() << "\n";
 
-  if (auto RelV = VerifyWithRels(IC, S, Copy, Relations)) {
+  if (auto RelV = VerifyWithRels(Copy, Relations)) {
     return RelV;
   }
 
@@ -2543,9 +2572,9 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   // Step 2 : Symbolize LHS Consts with SimpleDF constrains
   if (RHSFresh.empty()) {
-    Copy = Replace(Input, IC, JustLHSSymConstMap);
+    Copy = Replace(Input, JustLHSSymConstMap);
 
-    auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+    auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, SymCS);
     if (Clone) {
       return Clone;
     }
@@ -2559,7 +2588,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
         // Copy.print(llvm::errs(), true);
 
-        auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+        auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, SymCS);
         if (Clone) {
           return Clone;
         }
@@ -2594,7 +2623,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     //   llvm::errs() << "\n";
     // }
     auto Clone = FirstValidCombination(Input, RHSFresh, UnitaryCandidates,
-                                  InstCache, IC, S, SymCS, true, false, false, Relations);
+                                  InstCache, IC, SymCS, true, false, false, Relations);
     if (Clone) {
       return Clone;
     }
@@ -2628,7 +2657,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!EnumeratedCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                  InstCache, IC, S, SymCS, true, false, false);
+                                  InstCache, IC, SymCS, true, false, false);
     if (Clone) {
       return Clone;
     }
@@ -2643,7 +2672,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     // llvm::errs() << "Guesses: " << EnumeratedCandidatesTwoInsts[0].size() << "\n";
 
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidatesTwoInsts,
-                                  InstCache, IC, S, SymCS, true, false, false);
+                                  InstCache, IC, SymCS, true, false, false);
     if (Clone) {
       return Clone;
     }
@@ -2652,7 +2681,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!SimpleCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                       InstCache, IC, S, SymCS,
+                                       InstCache, IC, SymCS,
                                        false, true, false);
     if (Clone) {
       return Clone;
@@ -2662,7 +2691,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!EnumeratedCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                  InstCache, IC, S, SymCS, false, true, false);
+                                  InstCache, IC, SymCS, false, true, false);
     if (Clone) {
       return Clone;
     }
@@ -2673,7 +2702,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       // llvm::errs() << "Guesses: " << EnumeratedCandidates[0].size() << "\n";
 
       auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                          InstCache, IC, S, SymCS, true, false, false, Relations);
+                                          InstCache, IC, SymCS, true, false, false, Relations);
       if (Clone) {
         return Clone;
       }
@@ -2700,7 +2729,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
       // }
 
       auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidatesTwoInsts,
-                                          InstCache, IC, S, SymCS, true, false, false, Relations);
+                                          InstCache, IC, SymCS, true, false, false, Relations);
       if (Clone) {
         return Clone;
       }
@@ -2729,7 +2758,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!EnumeratedCandidates.empty() && !Nested) {
     auto Clone = FirstValidCombination(Input, RHSFresh, EnumeratedCandidates,
-                                        InstCache, IC, S, SymCS, true, true, false, Relations);
+                                        InstCache, IC, SymCS, true, true, false, Relations);
     if (Clone) {
       return Clone;
     }
@@ -2748,14 +2777,14 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
     // }
 
     auto Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                       InstCache, IC, S, SymCS, false, true, false);
+                                       InstCache, IC, SymCS, false, true, false);
     if (Clone) {
       return Clone;
     }
     Refresh("Simple cands with constraints");
 
     Clone = FirstValidCombination(Input, RHSFresh, SimpleCandidates,
-                                        InstCache, IC, S, SymCS, true, false, false, Relations);
+                                        InstCache, IC, SymCS, true, false, false, Relations);
     if (Clone) {
       return Clone;
     }
@@ -2804,7 +2833,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!SketchyCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
-                                       InstCache, IC, S, SymCS,
+                                       InstCache, IC, SymCS,
                                        true, false, false);
     if (Clone) {
       return Clone;
@@ -2814,7 +2843,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   if (!SketchyCandidates.empty()) {
     auto Clone = FirstValidCombination(Input, RHSFresh, SketchyCandidates,
-                                        InstCache, IC, S, SymCS, true, false, false, Relations);
+                                        InstCache, IC, SymCS, true, false, false, Relations);
     if (Clone) {
       return Clone;
     }
@@ -2822,9 +2851,9 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
   }
 
   {
-    Copy = Replace(Input, IC, JustLHSSymConstMap);
+    Copy = Replace(Input, JustLHSSymConstMap);
 
-    auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+    auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, SymCS);
     if (Clone) {
       return Clone;
     }
@@ -2838,7 +2867,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
         // Copy.print(llvm::errs(), true);
 
-        auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, IC, S, SymCS);
+        auto Clone = SimplePreconditionsAndVerifyGreedy(Copy, SymCS);
         if (Clone) {
           return Clone;
         }
@@ -2860,9 +2889,9 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         TargetConstMap[C1] = SymConstMap[C1];
         TargetConstMap[C2] = SymConstMap[C2];
 
-        auto Rep = Replace(Input, IC, TargetConstMap);
+        auto Rep = Replace(Input, TargetConstMap);
 
-        auto Clone = Verify(Rep, IC, S);
+        auto Clone = Verify(Rep);
 
         if (Clone) {
           return Clone;
@@ -2880,7 +2909,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
         //   llvm::errs() << "\n";
         // }
 
-        Clone = VerifyWithRels(IC, S, Rep, Relations, SymCS);
+        Clone = VerifyWithRels(Rep, Relations, SymCS);
 
         if (Clone) {
           return Clone;
@@ -2922,7 +2951,7 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
   // {
   //   auto ConstantLimits = InferConstantLimits(ConstMap, IC, Input, CounterExamples);
-  //   auto Copy = Replace(Input, IC, JustLHSSymConstMap);
+  //   auto Copy = Replace(Input, JustLHSSymConstMap);
   //   if (auto VRel = VerifyWithRels(IC, S, Copy, ConstantLimits)) {
   //     return VRel.value();
   //   }
@@ -2936,17 +2965,17 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(InstContext &IC,
 
 
 InstMapping GetEqWidthConstraint(Inst *I, size_t Width, InstContext &IC) {
-  return {Builder(I, IC).BitWidth().Eq(Width)(), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(I).BitWidth().Eq(Width)(), IC.getConst(llvm::APInt(1, 1))};
 }
 
 InstMapping GetLessThanWidthConstraint(Inst *I, size_t Width, InstContext &IC) {
   // Don't need to check for >0.
-  return {Builder(I, IC).BitWidth().Ule(Width)(), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(I).BitWidth().Ule(Width)(), IC.getConst(llvm::APInt(1, 1))};
 }
 
 InstMapping GetWidthRangeConstraint(Inst *I, size_t Min, size_t Max, InstContext &IC) {
-  auto Right = Builder(I, IC).BitWidth().Ule(Max);
-  auto Left = Builder(IC, llvm::APInt(I->Width, Min)).BitWidth().Ule(Builder(I, IC).BitWidth());
+  auto Right = Builder(I).BitWidth().Ule(Max);
+  auto Left = Builder(IC.getConst(llvm::APInt(I->Width, Min))).BitWidth().Ule(Builder(I).BitWidth());
   return {Left.And(Right)(), IC.getConst(llvm::APInt(1, 1))};
 }
 
@@ -3038,20 +3067,20 @@ ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement In
   std::map<Inst *, Inst *> Map;
   for (size_t i = 2; i <= 64; ++i) {
     Map[IC.getConst(llvm::APInt::getAllOnes(i))] =
-      Builder(IC, llvm::APInt(1, 1)).SExt(i)();
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i)();
     Map[IC.getConst(llvm::APInt::getAllOnes(i) - 1)] =
-      Builder(IC, llvm::APInt(1, 1)).SExt(i).Sub(1)();
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).Sub(1)();
     Map[IC.getConst(llvm::APInt::getSignedMaxValue(i))] =
-      Builder(IC, llvm::APInt(1, 1)).SExt(i).LShr(1)();
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).LShr(1)();
     Map[IC.getConst(llvm::APInt::getSignedMinValue(i))] =
-      Builder(IC, llvm::APInt(1, 1)).SExt(i).LShr(1).Flip()();
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).LShr(1).Flip()();
   }
-  return Replace(Input, IC, Map);
+  return Replace(Input, Map);
 }
 
 std::pair<ParsedReplacement, bool>
 InstantiateWidthChecks(InstContext &IC,
-  Solver *S, ParsedReplacement Input) {
+  ParsedReplacement Input) {
 
   // llvm::errs() << "A\n";
   // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
@@ -3170,27 +3199,28 @@ InstantiateWidthChecks(InstContext &IC,
   return {Input, false};
 }
 
-std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement &Input,
-                                            InstContext &IC,
-                                            Solver *S, size_t Target) {
+std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement Input,
+                                            size_t Target) {
+  auto &IC = *Input.Mapping.LHS->IC;
   if (NoShrink) {
     return Input;
   }
   if (hasMultiArgumentPhi(Input.Mapping.LHS)) {
     return std::nullopt;
   }
-  ShrinkWrap Shrink(IC, S, Input, Target);
+  ShrinkWrap Shrink(Input, Target);
   return Shrink();
 }
 
 std::optional<ParsedReplacement> GeneralizeShrinked(
-  ParsedReplacement Input, InstContext &IC, Solver *S) {
+  ParsedReplacement Input) {
+  auto &IC = *Input.Mapping.LHS->IC;
 
   if (hasMultiArgumentPhi(Input.Mapping.LHS)) {
     return std::nullopt;
   }
 
-  ShrinkWrap Shrink(IC, S, Input, 8);
+  ShrinkWrap Shrink(Input, 8);
 
   std::optional<ParsedReplacement> Smol;
 
@@ -3222,7 +3252,7 @@ std::optional<ParsedReplacement> GeneralizeShrinked(
 
   bool Changed = false;
 
-  auto Gen = SuccessiveSymbolize(IC, S, Smol.value(), Changed);
+  auto Gen = SuccessiveSymbolize(Smol.value(), Changed);
 
   if (!Changed || !Gen) {
     if (DebugLevel > 2) {
@@ -3231,7 +3261,7 @@ std::optional<ParsedReplacement> GeneralizeShrinked(
     return std::nullopt; // Generalization failed.
   }
 
-  auto [GenWidth, WidthChanged] = InstantiateWidthChecks(IC, S, Gen.value());
+  auto [GenWidth, WidthChanged] = InstantiateWidthChecks(IC, Gen.value());
 
   if (!WidthChanged) {
     return std::nullopt; // Width independence check failed.
@@ -3263,7 +3293,8 @@ void PrintInputAndResult(ParsedReplacement Input, ParsedReplacement Result) {
   llvm::outs().flush();
 }
 
-std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input, InstContext &IC, Solver *S) {
+std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input) {
+  auto &IC = *Input.Mapping.LHS->IC;
   std::vector<Inst *> Vars;
   findVars(Input.Mapping.LHS, Vars);
 
@@ -3291,7 +3322,7 @@ std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input, Inst
 
   for (auto C : Consts) {
     if (WidthMap.find(C->Val.getLimitedValue()) != WidthMap.end()) {
-      RepMap[C] = Builder(IC, WidthMap[C->Val.getLimitedValue()]).BitWidth()();
+      RepMap[C] = Builder(WidthMap[C->Val.getLimitedValue()]).BitWidth()();
     }
   }
   
@@ -3299,11 +3330,11 @@ std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input, Inst
     return std::nullopt;
   }
 
-  return Replace(Input, IC, RepMap);
+  return Replace(Input, RepMap);
 }
 
-std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
-                                            InstContext &IC, Solver *S) {
+std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
+  auto &IC = *Input.Mapping.LHS->IC;
 
     if (Input.Mapping.LHS == Input.Mapping.RHS) {
     if (DebugLevel > 4)  llvm::errs() << "Input == Output\n";
@@ -3311,34 +3342,34 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
     } else if (profit(Input) < 0 && !IgnoreCost) {
       if (DebugLevel > 4) llvm::errs() << "Not an optimization\n";
       return std::nullopt;
-    } else if (!Verify(Input, IC, S)) {
+    } else if (!Verify(Input)) {
       if (DebugLevel > 4) llvm::errs() << "Invalid Input.\n";
       return std::nullopt;
     }
 
-  ParsedReplacement Result = ReduceBasic(IC, S, Input);
+  ParsedReplacement Result = ReduceBasic(Input);
 
   bool Changed = false;
   size_t MaxTries = 1; // Increase this if we ever run with 10/100x timeout.
   bool FirstTime = true;
   if (!OnlyWidth) {
     if (Changed) {
-      Result = ReduceBasic(IC, S, Result);
+      Result = ReduceBasic(Result);
     }
 
     std::optional<ParsedReplacement> Opt;
 
-    if (auto Rep = ReplaceWidthVars(Input, IC, S)) {
+    if (auto Rep = ReplaceWidthVars(Input)) {
       Result = *Rep;
     }
     // TODO: run both variants?
 
     if (!NoWidth) {
-      Opt = GeneralizeShrinked(Result, IC, S);
+      Opt = GeneralizeShrinked(Result);
     }
 
     if (!Opt) {
-      Opt = SuccessiveSymbolize(IC, S, Result, Changed);
+      Opt = SuccessiveSymbolize(Result, Changed);
     } else {
       Changed = true;
     }
@@ -3367,16 +3398,16 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
       if (!CM.empty()) {
         bool SymDFChanged = false;
 
-        auto Clone = Verify(Aug, IC, S);
+        auto Clone = Verify(Aug);
         if (Clone) {
-          Result = ReduceBasic(IC, S, Clone.value());
-          Result = DeAugment(IC, S, Result);
+          Result = ReduceBasic(Clone.value());
+          Result = DeAugment(Result);
           SymDFChanged = true;
           if (DebugLevel > 4) llvm::errs() << "MSG Unconstrained SYMDF\n";
         } else {
-          auto Generalized = SuccessiveSymbolize(IC, S, Aug, SymDFChanged, CM);
+          auto Generalized = SuccessiveSymbolize(Aug, SymDFChanged, CM);
           if (Generalized && SymDFChanged) {
-            Result = DeAugment(IC, S, Generalized.value());
+            Result = DeAugment(Generalized.value());
             Changed = true;
             if (DebugLevel > 4) llvm::errs() << "MSG Synth SYMDF\n";
           }
@@ -3388,7 +3419,7 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement &Input,
   }
   bool Indep = false;
   if (!NoWidth) {
-    std::tie(Result, Indep) = InstantiateWidthChecks(IC, S, Result);
+    std::tie(Result, Indep) = InstantiateWidthChecks(IC, Result);
   }
   return Result;
 }

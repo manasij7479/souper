@@ -31,7 +31,7 @@ std::vector<Inst *> GenerateInvariantCandidates(InstContext &IC, ParsedReplaceme
 
 #define BIN(X, Y, OP)                       \
   {                                         \
-    auto I = Builder(X, IC).OP(Y)();        \
+    auto I = Builder(X).OP(Y)();        \
     if (RootSet.find(I) == RootSet.end()) { \
       RootSet.insert(I);                    \
       Guesses.push_back(I);                 \
@@ -84,7 +84,7 @@ void sortGuesses(std::vector<Inst *> &Guesses) {
     });
 }
 
-std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input, Solver *S) {
+std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input) {
   std::vector<Inst *> Results;
 
   std::vector<Inst *> Guesses = GenerateInvariantCandidates(IC, Input);
@@ -94,7 +94,7 @@ std::vector<Inst *> InferInvariants(InstContext &IC, ParsedReplacement Input, So
   for (Inst *Guess : Guesses) {
     ParsedReplacement Inv = Input;
     Inv.Mapping.RHS = Guess;
-    if (VerifyInvariant(Inv, IC, S)) {
+    if (VerifyInvariant(Inv)) {
       Results.push_back(Guess);
     }
   }

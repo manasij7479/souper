@@ -6,7 +6,7 @@
 #define _LIBCPP_DISABLE_DEPRECATION_WARNINGS
 
 namespace souper {
-
+extern Solver *S;
 bool hasCommonVars(const std::vector<Inst *> &Ops) {
   if (Ops.size() < 2) {
     return false;
@@ -185,6 +185,10 @@ ParsedReplacement Reducer::ReduceGreedy(ParsedReplacement Input) {
   // TODO: topological sort, to reduce number of solver calls
   // Try to remove one instruction at a time
   int failcount = 0;
+  // FIXME: This is a hack to prevent infinite loops.
+  // In rare situations, ReduceGreedy can get stuck in an infinite loop.
+  // I suspect this happens when the solver times out for one or two of the calls.
+  int LoopBound = 200;
   std::set<Inst *> Visited;
   do {
     auto It = Insts.begin();
@@ -219,7 +223,7 @@ ParsedReplacement Reducer::ReduceGreedy(ParsedReplacement Input) {
     }
     Insts.clear();
     collectInsts(Input.Mapping.LHS, Insts);
-  } while (!Insts.empty());
+  } while (!Insts.empty() && LoopBound--);
   return Input;
 }
 
@@ -318,7 +322,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
   if (Input.Mapping.LHS->Ops[0] == Input.Mapping.RHS->Ops[0]) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
-    if (auto Clone = Verify(Stub, IC, S)) {
+    if (auto Clone = Verify(Stub)) {
       return ReduceBackwards(Clone.value());
     }
   }
@@ -326,7 +330,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
   if (Input.Mapping.LHS->Ops[1] == Input.Mapping.RHS->Ops[1]) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[0];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[0];
-    if (auto Clone = Verify(Stub, IC, S)) {
+    if (auto Clone = Verify(Stub)) {
       return ReduceBackwards(Clone.value());
     }
   }
@@ -338,7 +342,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
   if (Input.Mapping.LHS->Ops[0] == Input.Mapping.RHS->Ops[1]) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[1];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[0];
-    if (auto Clone = Verify(Stub, IC, S)) {
+    if (auto Clone = Verify(Stub)) {
       return ReduceBackwards(Clone.value());
     }
   }
@@ -346,7 +350,7 @@ ParsedReplacement Reducer::ReduceBackwards(ParsedReplacement Input) {
   if (Input.Mapping.LHS->Ops[1] == Input.Mapping.RHS->Ops[0]) {
     Stub.Mapping.LHS = Input.Mapping.LHS->Ops[0];
     Stub.Mapping.RHS = Input.Mapping.RHS->Ops[1];
-    if (auto Clone = Verify(Stub, IC, S)) {
+    if (auto Clone = Verify(Stub)) {
       return ReduceBackwards(Clone.value());
     }
   }
@@ -502,11 +506,11 @@ ParsedReplacement Reducer::ReduceRedundantPhis(ParsedReplacement Input) {
       break;
     }
 
-    Input.Mapping.LHS = Replace(Input.Mapping.LHS, IC, ICache);
-    Input.Mapping.RHS = Replace(Input.Mapping.RHS, IC, ICache);
+    Input.Mapping.LHS = Replace(Input.Mapping.LHS, ICache);
+    Input.Mapping.RHS = Replace(Input.Mapping.RHS, ICache);
     for (auto &PC : Input.PCs) {
-      PC.LHS = Replace(PC.LHS, IC, ICache);
-      PC.RHS = Replace(PC.RHS, IC, ICache);
+      PC.LHS = Replace(PC.LHS, ICache);
+      PC.RHS = Replace(PC.RHS, ICache);
     }
     if (NumPhis) {
       Collect();
@@ -514,8 +518,9 @@ ParsedReplacement Reducer::ReduceRedundantPhis(ParsedReplacement Input) {
   }
   return Input;
 }
-size_t WeakenSingleCR(ParsedReplacement Input, InstContext &IC, Solver *S,
+size_t WeakenSingleCR(ParsedReplacement Input,
                       Inst *Target, std::optional<llvm::APInt> Val) {
+  auto &IC = *Input.Mapping.LHS->IC;
   if (Target->Width <= 8) return 0; // hack
   if (!Val.has_value()) {
     // Synthesize a value
@@ -525,7 +530,7 @@ size_t WeakenSingleCR(ParsedReplacement Input, InstContext &IC, Solver *S,
 
     auto Copy = Input;
 
-    auto Rep = Replace(Input, IC, InstCache);
+    auto Rep = Replace(Input, InstCache);
 
     std::set<Inst *> ConstSet{C};
 
@@ -571,7 +576,7 @@ size_t WeakenSingleCR(ParsedReplacement Input, InstContext &IC, Solver *S,
       Attempt = Full.getLower();
     }
     Target->Range = llvm::ConstantRange(L, Attempt);
-    if (Verify(Input, IC, S)) {
+    if (Verify(Input)) {
       U = Attempt;
 //      llvm::errs() << "U " << Attempt << '\n';
       inc *= 2;
@@ -590,7 +595,7 @@ size_t WeakenSingleCR(ParsedReplacement Input, InstContext &IC, Solver *S,
       Attempt = Full.getLower();
     }
     Target->Range = llvm::ConstantRange(Attempt, U);
-    if (Verify(Input, IC, S)) {
+    if (Verify(Input)) {
       L = Attempt;
 //      llvm::errs() << "L " << Attempt << '\n';
       dec *= 2;
@@ -611,8 +616,9 @@ size_t WeakenSingleCR(ParsedReplacement Input, InstContext &IC, Solver *S,
 
 }
 
-size_t WeakenSingleKB(ParsedReplacement Input, InstContext &IC, Solver *S,
+size_t WeakenSingleKB(ParsedReplacement Input,
                 Inst *Target, std::optional<llvm::APInt> Val) {
+  auto &IC = *Input.Mapping.LHS->IC;
   size_t BitsWeakened = 0;
 
   if (Target->Width < 8) return 0; // hack
@@ -625,7 +631,7 @@ size_t WeakenSingleKB(ParsedReplacement Input, InstContext &IC, Solver *S,
 
     auto Copy = Input;
 
-    auto Rep = Replace(Input, IC, InstCache);
+    auto Rep = Replace(Input, InstCache);
 
     std::set<Inst *> ConstSet{C};
 
@@ -665,7 +671,7 @@ size_t WeakenSingleKB(ParsedReplacement Input, InstContext &IC, Solver *S,
     if (OriO[i] == 1) Target->KnownOnes.clearBit(i);
     if (OriZ[i] == 1) Target->KnownZeros.clearBit(i);
 
-    if (!Verify(Input, IC, S)) {
+    if (!Verify(Input)) {
       Target->KnownZeros = OriZ;
       Target->KnownOnes = OriO;
     } else {
@@ -721,13 +727,13 @@ ParsedReplacement Reducer::ReducePCsToDF(ParsedReplacement Input) {
   bool Succ = false;
 
   for (auto &&V : Vars) {
-    auto RangeSize = WeakenSingleCR(Input, IC, S, V, {});
+    auto RangeSize = WeakenSingleCR(Input, V, {});
     Succ |= (RangeSize > 0);
   }
 
   if (!Succ) {
     for (auto &&V : Vars) {
-      auto BitsWeakened = WeakenSingleKB(Input, IC, S, V, {});
+      auto BitsWeakened = WeakenSingleKB(Input, V, {});
       Succ |= (BitsWeakened != 0);
     }
   }
@@ -751,7 +757,7 @@ ParsedReplacement Reducer::ReducePCs(ParsedReplacement Input) {
       }
     }
 
-    auto Clone = Verify(Result, IC, S);
+    auto Clone = Verify(Result);
     if (Clone) {
       return ReducePCs(Result);
     }
@@ -1002,7 +1008,7 @@ void Reducer::ReduceRec(ParsedReplacement Input_, std::vector<ParsedReplacement>
   for (auto PC : Input_.PCs ) {
     // Inst *Eq = IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
     // Ante = IC.getInst(Inst::And, 1, {Ante, Eq});
-    Ante = Builder(PC.LHS, IC).Eq(PC.RHS).And(Ante)();
+    Ante = Builder(PC.LHS).Eq(PC.RHS).And(Ante)();
   }
 
   RC.printInst(Ante, SStr, false);
@@ -1133,7 +1139,7 @@ ParsedReplacement Reducer::ReducePoison(ParsedReplacement Input) {
     }
     std::map<Inst *, Inst *> Cache = {{I, NonPoisonReplacement(I, IC)}};
 
-    auto Cand = Replace(Input, IC, Cache);
+    auto Cand = Replace(Input, Cache);
 
     if (VerifyInput(Cand)) {
       Input = Cand;

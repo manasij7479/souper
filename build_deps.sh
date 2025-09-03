@@ -23,9 +23,9 @@ ncpus=$(command nproc 2>/dev/null || command sysctl -n hw.ncpu 2>/dev/null || ec
 
 # hiredis latest as of May 30 2024
 hiredis_commit=19cfd60d92da1fdb958568cdd7d36264ab14e666
-llvm_repo=https://github.com/regehr/llvm-project.git
+llvm_repo=https://github.com/llvm/llvm-project.git
 # llvm_commit specifies the git branch or hash to checkout to
-llvm_commit=disable-peepholes-llvmorg-18.1.6
+llvm_commit=llvmorg-21.1.0-rc2
 klee_repo=https://github.com/regehr/klee
 klee_branch=klee-for-souper-17-2
 alive_commit=v7
