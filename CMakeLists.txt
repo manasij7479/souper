@@ -105,7 +105,7 @@ set(KLEE_EXPR_FILES
   third_party/klee/lib/Expr/Lexer.cpp
   third_party/klee/lib/Expr/Parser.cpp
   third_party/klee/lib/Expr/Updates.cpp
-  third_party/klee/lib/Solver/SolverCmdLine.cpp
+  lib/KleeSolverStub.cpp
 )
 
 add_library(kleeExpr STATIC
