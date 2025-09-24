@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "klee/Expr.h"
-#include "klee/util/ExprPPrinter.h"
-#include "klee/util/ExprSMTLIBPrinter.h"
+#include "klee/Expr/Expr.h"
+#include "klee/Expr/ExprPPrinter.h"
+#include "klee/Expr/ExprSMTLIBPrinter.h"
+#include "klee/Expr/Constraints.h"
+#include "klee/Expr/ArrayCache.h"
 #include "souper/Extractor/ExprBuilder.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -30,9 +32,1297 @@ static llvm::cl::opt<bool> DumpKLEEExprs(
     llvm::cl::desc("Dump KLEE expressions after SMTLIB queries"),
     llvm::cl::init(false));
 
+    
+    // This vector contains 256 std::function objects, each representing
+    // a unique 3-input logical operation as defined by the PTX lop3 instruction,
+    // but adapted for KLEE's symbolic execution engine.
+    // The index of the vector corresponds to the immLut value (0-255).
+    const std::vector<std::function<klee::ref<klee::Expr>(klee::ref<klee::Expr>, klee::ref<klee::Expr>, klee::ref<klee::Expr>)>> LUT = {
+        // n = 0 (0x00)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::ConstantExpr::create(0, a->getWidth());
+        },
+    
+        // n = 1 (0x01)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)));
+        },
+    
+        // n = 2 (0x02)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c));
+        },
+    
+        // n = 3 (0x03)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)));
+        },
+    
+        // n = 4 (0x04)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c)));
+        },
+    
+        // n = 5 (0x05)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 6 (0x06)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 7 (0x07)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 8 (0x08)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c));
+        },
+    
+        // n = 9 (0x09)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 10 (0x0A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 11 (0x0B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 12 (0x0C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 13 (0x0D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 14 (0x0E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 15 (0x0F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 16 (0x10)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)));
+        },
+    
+        // n = 17 (0x11)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))));
+        },
+    
+        // n = 18 (0x12)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))));
+        },
+    
+        // n = 19 (0x13)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))));
+        },
+    
+        // n = 20 (0x14)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))));
+        },
+    
+        // n = 21 (0x15)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))));
+        },
+    
+        // n = 22 (0x16)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))));
+        },
+    
+        // n = 23 (0x17)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))))));
+        },
+    
+        // n = 24 (0x18)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))));
+        },
+    
+        // n = 25 (0x19)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))));
+        },
+    
+        // n = 26 (0x1A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))));
+        },
+    
+        // n = 27 (0x1B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))))));
+        },
+    
+        // n = 28 (0x1C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))));
+        },
+    
+        // n = 29 (0x1D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))))));
+        },
+    
+        // n = 30 (0x1E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))))));
+        },
+    
+        // n = 31 (0x1F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 32 (0x20)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c));
+        },
+    
+        // n = 33 (0x21)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)));
+        },
+    
+        // n = 34 (0x22)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)));
+        },
+    
+        // n = 35 (0x23)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 36 (0x24)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)));
+        },
+    
+        // n = 37 (0x25)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 38 (0x26)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 39 (0x27)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 40 (0x28)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)));
+        },
+    
+        // n = 41 (0x29)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 42 (0x2A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 43 (0x2B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 44 (0x2C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 45 (0x2D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 46 (0x2E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 47 (0x2F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))))));
+        },
+    
+        // n = 48 (0x30)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)));
+        },
+    
+        // n = 49 (0x31)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 50 (0x32)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 51 (0x33)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 52 (0x34)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 53 (0x35)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 54 (0x36)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 55 (0x37)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))))));
+        },
+    
+        // n = 56 (0x38)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))));
+        },
+    
+        // n = 57 (0x39)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 58 (0x3A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 59 (0x3B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))))));
+        },
+    
+        // n = 60 (0x3C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))));
+        },
+    
+        // n = 61 (0x3D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))))));
+        },
+    
+        // n = 62 (0x3E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c))))));
+        },
+    
+        // n = 63 (0x3F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)))))));
+        },
+    
+        // n = 64 (0x40)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)));
+        },
+    
+        // n = 65 (0x41)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 66 (0x42)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 67 (0x43)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 68 (0x44)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 69 (0x45)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 70 (0x46)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 71 (0x47)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 72 (0x48)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 73 (0x49)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 74 (0x4A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 75 (0x4B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 76 (0x4C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 77 (0x4D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 78 (0x4E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 79 (0x4F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 80 (0x50)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 81 (0x51)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 82 (0x52)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 83 (0x53)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 84 (0x54)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 85 (0x55)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 86 (0x56)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 87 (0x57)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 88 (0x58)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 89 (0x59)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 90 (0x5A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 91 (0x5B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 92 (0x5C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 93 (0x5D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 94 (0x5E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 95 (0x5F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))))));
+        },
+    
+        // n = 96 (0x60)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))));
+        },
+    
+        // n = 97 (0x61)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 98 (0x62)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 99 (0x63)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 100 (0x64)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 101 (0x65)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 102 (0x66)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 103 (0x67)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 104 (0x68)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 105 (0x69)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 106 (0x6A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 107 (0x6B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 108 (0x6C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 109 (0x6D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 110 (0x6E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 111 (0x6F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))))));
+        },
+    
+        // n = 112 (0x70)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))));
+        },
+    
+        // n = 113 (0x71)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 114 (0x72)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 115 (0x73)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 116 (0x74)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 117 (0x75)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 118 (0x76)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 119 (0x77)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))))));
+        },
+    
+        // n = 120 (0x78)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))));
+        },
+    
+        // n = 121 (0x79)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 122 (0x7A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 123 (0x7B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))))));
+        },
+    
+        // n = 124 (0x7C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))));
+        },
+    
+        // n = 125 (0x7D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))))));
+        },
+    
+        // n = 126 (0x7E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))))))));
+        },
+    
+        // n = 127 (0x7F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c)))))))));
+        },
+    
+        // n = 128 (0x80)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::AndExpr::create(a, klee::AndExpr::create(b, c));
+        },
+    
+        // n = 129 (0x81)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 130 (0x82)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 131 (0x83)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 132 (0x84)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 133 (0x85)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 134 (0x86)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 135 (0x87)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 136 (0x88)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 137 (0x89)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 138 (0x8A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 139 (0x8B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 140 (0x8C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 141 (0x8D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 142 (0x8E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 143 (0x8F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 144 (0x90)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 145 (0x91)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 146 (0x92)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 147 (0x93)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 148 (0x94)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 149 (0x95)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 150 (0x96)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 151 (0x97)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 152 (0x98)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 153 (0x99)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 154 (0x9A)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 155 (0x9B)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 156 (0x9C)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 157 (0x9D)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 158 (0x9E)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 159 (0x9F)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 160 (0xA0)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 161 (0xA1)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 162 (0xA2)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 163 (0xA3)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 164 (0xA4)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 165 (0xA5)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 166 (0xA6)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 167 (0xA7)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 168 (0xA8)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 169 (0xA9)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 170 (0xAA)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 171 (0xAB)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 172 (0xAC)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 173 (0xAD)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 174 (0xAE)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 175 (0xAF)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 176 (0xB0)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 177 (0xB1)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 178 (0xB2)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 179 (0xB3)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 180 (0xB4)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 181 (0xB5)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 182 (0xB6)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 183 (0xB7)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 184 (0xB8)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 185 (0xB9)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 186 (0xBA)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 187 (0xBB)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 188 (0xBC)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 189 (0xBD)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 190 (0xBE)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 191 (0xBF)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 192 (0xC0)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)));
+        },
+    
+        // n = 193 (0xC1)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 194 (0xC2)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 195 (0xC3)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 196 (0xC4)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 197 (0xC5)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 198 (0xC6)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 199 (0xC7)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 200 (0xC8)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 201 (0xC9)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 202 (0xCA)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 203 (0xCB)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 204 (0xCC)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 205 (0xCD)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 206 (0xCE)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 207 (0xCF)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 208 (0xD0)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 209 (0xD1)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 210 (0xD2)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 211 (0xD3)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 212 (0xD4)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 213 (0xD5)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 214 (0xD6)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 215 (0xD7)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 216 (0xD8)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 217 (0xD9)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 218 (0xDA)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 219 (0xDB)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 220 (0xDC)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 221 (0xDD)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 222 (0xDE)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 223 (0xDF)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 224 (0xE0)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))));
+        },
+    
+        // n = 225 (0xE1)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 226 (0xE2)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 227 (0xE3)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 228 (0xE4)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 229 (0xE5)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 230 (0xE6)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 231 (0xE7)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 232 (0xE8)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 233 (0xE9)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 234 (0xEA)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 235 (0xEB)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 236 (0xEC)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 237 (0xED)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 238 (0xEE)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 239 (0xEF)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 240 (0xF0)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))));
+        },
+    
+        // n = 241 (0xF1)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 242 (0xF2)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 243 (0xF3)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 244 (0xF4)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 245 (0xF5)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 246 (0xF6)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 247 (0xF7)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 248 (0xF8)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))));
+        },
+    
+        // n = 249 (0xF9)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 250 (0xFA)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 251 (0xFB)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 252 (0xFC)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))));
+        },
+    
+        // n = 253 (0xFD)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 254 (0xFE)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c))))))));
+        },
+    
+        // n = 255 (0xFF)
+        [](klee::ref<klee::Expr> a, klee::ref<klee::Expr> b, klee::ref<klee::Expr> c) {
+            return klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(klee::NotExpr::create(a), klee::AndExpr::create(b, c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), klee::NotExpr::create(c))), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(klee::NotExpr::create(b), c)), klee::OrExpr::create(klee::AndExpr::create(a, klee::AndExpr::create(b, klee::NotExpr::create(c))), klee::AndExpr::create(a, klee::AndExpr::create(b, c)))))))));
+        }
+    };
+
 class KLEEBuilder : public ExprBuilder {
   UniqueNameSet ArrayNames;
-  std::vector<std::unique_ptr<Array>> Arrays;
+  ArrayCache Cache;
+  std::vector<const Array *> Arrays;
   std::map<Inst *, ref<Expr>> ExprMap;
   std::vector<Inst *> Vars;
 
@@ -66,13 +1356,13 @@ public:
                          Inst *Precondition, bool Negate, bool DropUB) override {
     std::string SMTStr;
     llvm::raw_string_ostream SMTSS(SMTStr);
-    ConstraintManager Manager;
+    ConstraintSet constraints;
     Inst *Cand = GetCandidateExprForReplacement(BPCs, PCs, Mapping, Precondition, Negate, DropUB);
     if (!Cand)
       return std::string();
     prepopulateExprMap(Cand);
     ref<Expr> E = get(Cand);
-    Query KQuery(Manager, E);
+    Query KQuery(constraints, E);
     ExprSMTLIBPrinter Printer;
     Printer.setOutput(SMTSS);
     Printer.setQuery(KQuery);
@@ -80,7 +1370,7 @@ public:
     if (ModelVars) {
       for (unsigned I = 0; I != Vars.size(); ++I) {
         if (Vars[I]) {
-          Arr.push_back(Arrays[I].get());
+          Arr.push_back(Arrays[I]);
           ModelVars->push_back(Vars[I]);
         }
       }
@@ -340,6 +1630,61 @@ private:
       return SubExpr::create(klee::ConstantExpr::create(Width, Width),
                              countOnes(Val));
     }
+    case Inst::LogB: {
+      ref<Expr> L = get(Ops[0]);
+      unsigned Width = L->getWidth();
+      ref<Expr> Val = L;
+      for (unsigned i=0, j=0; j<Width/2; i++) {
+        j = 1<<i;
+        Val = OrExpr::create(Val, LShrExpr::create(Val,
+                             klee::ConstantExpr::create(j, Width)));
+      }
+      auto W = klee::ConstantExpr::create(Width, Width);
+      auto One = klee::ConstantExpr::create(1, Width);
+      auto Ctlz = SubExpr::create(W, countOnes(Val));
+      return SubExpr::create(SubExpr::create(W, Ctlz), One);
+    }
+    case Inst::BitWidth: {
+      ref<Expr> L = get(Ops[0]);
+      unsigned Width = L->getWidth();
+      return klee::ConstantExpr::create(Width, Width);
+    }
+
+    case Inst::KnownOnesP: {
+      auto VarAndOnes = klee::AndExpr::create(get(Ops[0]), get(Ops[1]));
+      return klee::EqExpr::create(VarAndOnes, get(Ops[1]));
+    }
+    case Inst::KnownZerosP: {
+      auto NotZeros = klee::NotExpr::create(get(Ops[1]));
+      auto VarNotZero = klee::OrExpr::create(get(Ops[0]), NotZeros);
+      return klee::EqExpr::create(VarNotZero, NotZeros);
+    }
+    case Inst::RangeP: {
+      auto Var = get(Ops[0]);
+      auto Lower = get(Ops[1]);
+      auto Upper = get(Ops[2]);
+      auto GELower = klee::SgeExpr::create(Var, Lower);
+      auto LTUpper = klee::SltExpr::create(Var, Upper);
+      auto Ordinary = klee::AndExpr::create(GELower, LTUpper);
+
+      auto GEUpper = klee::SgeExpr::create(Var, Upper);
+      auto LTLower = klee::SltExpr::create(Var, Lower);
+      auto Wrapped = klee::OrExpr::create(GEUpper, LTLower);
+
+      auto Cond = klee::SgtExpr::create(Upper, Lower);
+
+      return klee::SelectExpr::create(Cond, Ordinary, Wrapped);
+    }
+
+    case Inst::DemandedMask: {
+      return klee::AndExpr::create(get(Ops[0]), get(Ops[1]));
+    }
+
+    case Inst::Lop3: {
+      uint8_t immlut = Ops[3]->Val.getZExtValue();
+      return LUT[immlut](get(Ops[0]), get(Ops[1]), get(Ops[2]));
+    }
+
     case Inst::FShl:
     case Inst::FShr: {
       unsigned IWidth = I->Width;
@@ -420,6 +1765,11 @@ private:
     case Inst::USubWithOverflow:
     case Inst::SMulWithOverflow:
     case Inst::UMulWithOverflow:
+
+    case Inst::Custom: {
+      return get(CustomInstructionMap[I->Name](LIC, I->Ops));
+    }
+
     default:
       break;
     }
@@ -487,11 +1837,11 @@ private:
       NameStr = ("a" + Name).str();
     else
       NameStr = Name;
-    Arrays.emplace_back(
-     new Array(ArrayNames.makeName(NameStr), 1, 0, 0, Expr::Int32, Width));
+    const Array *array = Cache.CreateArray(ArrayNames.makeName(NameStr), 1, 0, 0, Expr::Int32, Width);
+    Arrays.push_back(array);
     Vars.push_back(Origin);
 
-    UpdateList UL(Arrays.back().get(), 0);
+    UpdateList UL(Arrays.back(), 0);
     return ReadExpr::create(UL, klee::ConstantExpr::alloc(0, Expr::Int32));
   }
 

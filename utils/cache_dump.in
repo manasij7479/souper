@@ -57,6 +57,7 @@ Options:
   -weaken       Weaken dataflow facts
   -verbose
   -verify       Verify each optimization
+  -dump-lhs     Dump LHS
 END
     exit -1;
 }
@@ -80,6 +81,7 @@ my $WEAKEN = 0;
 my $VERBOSE = 0;
 my $VERIFY = 0;
 my $UNIX = 0;
+my $DUMP_LHS = 0;
 
 GetOptions(
     "merge" => \$MERGE,
@@ -101,6 +103,7 @@ GetOptions(
     "weaken" => \$WEAKEN,
     "verbose" => \$VERBOSE,
     "verify" => \$VERIFY,
+    "dump-lhs" => \$DUMP_LHS,
     ) or usage();
 usage() unless ($SORT eq "size" || $SORT eq "sprofile" || $SORT eq "dprofile" ||
     $SORT eq "combined");
@@ -339,6 +342,9 @@ foreach my $opt (@all_keys) {
     if (defined($result)) {
         parse($opt, $result) if $PARSE;
     } else {
+        if ($DUMP_LHS) {
+            print "$opt\n";
+        }
         next;
     }
     my $sprofile = 0;

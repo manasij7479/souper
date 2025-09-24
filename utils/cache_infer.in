@@ -24,7 +24,7 @@ use BSD::Resource;
 
 eval { require Sys::CPU; Sys::CPU->import(); };
 
-my $NPROCS = 4;
+my $NPROCS = 32;
 $NPROCS = Sys::CPU::cpu_count() if defined(&Sys::CPU::cpu_count);
 
 my $CPU_LIMIT = 15 * 60;
@@ -52,7 +52,7 @@ my $SAVE_TEMPS;
 my $SOUPER_DEBUG = -1;
 my $MAX_INSNS = 1;
 my $TEST_PRUNING = 0;
-my $PRUNE = 0;
+my $PRUNE = 1;
 my $UNIX = 0;
 
 GetOptions(
@@ -78,7 +78,7 @@ if ($TEST_PRUNING) {
 } else {
     $OPTS .= "-souper-external-cache ";
 }
-$OPTS .= "-souper-double-check ";
+#$OPTS .= "-souper-double-check ";
 if ($PRUNE) {
     $OPTS .= "-souper-dataflow-pruning ";
 }
@@ -90,7 +90,7 @@ if ($SOUPER_DEBUG != -1) {
     $OPTS .= "-souper-debug-level=${SOUPER_DEBUG} ";
 }
 
-my $SOUPER_CHECK = "@CMAKE_BINARY_DIR@/souper-check -solver-timeout=15";
+my $SOUPER_CHECK = "timeout 300 @CMAKE_BINARY_DIR@/souper-check -solver-timeout=15";
 
 my $r;
 if ($UNIX) {

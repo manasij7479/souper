@@ -28,6 +28,7 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 namespace souper {
@@ -40,6 +41,14 @@ extern const std::string ReservedInstPrefix;
 extern const std::string BlockPred;
 
 struct Inst;
+struct InstContext;
+
+using CustomInstructionCreator =
+  std::function<Inst *(
+    InstContext *IC,
+    const std::vector<Inst *> &Ops)>;
+extern std::unordered_map<std::string, CustomInstructionCreator> CustomInstructionMap;
+
 
 struct Block {
   std::string Name;
@@ -100,6 +109,8 @@ struct Inst : llvm::FoldingSetNode {
     BSwap,
     Cttz,
     Ctlz,
+    LogB,
+    BitWidth,
     BitReverse,
     FShl,
     FShr,
@@ -122,9 +133,17 @@ struct Inst : llvm::FoldingSetNode {
     USubSat,
     Freeze,
 
+    Lop3,
+
     ReservedConst,
     ReservedInst,
 
+    KnownOnesP,
+    KnownZerosP,
+    RangeP,
+    DemandedMask,
+
+    Custom,
     None,
 } Kind;
 
@@ -139,6 +158,7 @@ struct Inst : llvm::FoldingSetNode {
   std::vector<Inst *> Ops;
   mutable std::vector<Inst *> OrderedOps;
   std::vector<llvm::Value *> Origins;
+  Inst *Aux;
 
   bool operator<(const Inst &I) const;
   const std::vector<Inst *> &orderedOps() const;
@@ -185,6 +205,7 @@ struct Inst : llvm::FoldingSetNode {
   std::vector<llvm::ConstantRange> RangeRefinement;
   int nReservedConsts = -1;
   int nHoles = -1;
+  InstContext *IC;
 };
 
 /// A mapping from an Inst to a replacement. This may either represent a
@@ -283,11 +304,11 @@ struct SynthesisContext {
   unsigned Timeout;
 };
 
-int cost(Inst *I, bool IgnoreDepsWithExternalUses = false);
+int cost(Inst *I, bool IgnoreDepsWithExternalUses = false, std::set<Inst *> Ignore = {});
 int backendCost(Inst *I, bool IgnoreDepsWithExternalUses = false);
 int countHelper(Inst *I, std::set<Inst *> &Visited);
 int instCount(Inst *I);
-int benefit(Inst *LHS, Inst *RHS);
+int benefit(Inst *LHS, Inst *RHS, bool IgnoreDepsWithExternalUses = true);
 
 void PrintReplacement(llvm::raw_ostream &Out, const BlockPCs &BPCs,
                       const std::vector<InstMapping> &PCs, InstMapping Mapping,
@@ -347,6 +368,8 @@ void separatePCs(const std::vector<InstMapping> &PCs,
                  bool CloneVars);
 
 std::vector<Block *> getBlocksFromPhis(Inst *I);
+
+Inst *lowerCustomInst(InstContext &IC, Inst *I);
 
 }
 

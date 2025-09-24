@@ -38,7 +38,7 @@ namespace {
 
   static llvm::cl::opt<bool> EnableFB("souper-dataflow-pruning-fb",
     llvm::cl::desc("Prune with forced-bits analysis (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
 
   static llvm::cl::opt<bool> EnableRB("souper-dataflow-pruning-rb",
     llvm::cl::desc("Prune with required-bits analysis (default=true)"),
@@ -46,7 +46,7 @@ namespace {
 
   static llvm::cl::opt<bool> EnableBB("souper-dataflow-pruning-bb",
     llvm::cl::desc("Prune with bivalent-bits analysis (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
 }
 
 namespace souper {
@@ -302,7 +302,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
       if (C.hasValue()) {
         auto Val = C.getValue();
         if (StatsLevel > 2)
-          llvm::errs() << "  LHS value = " << Val << "\n";
+          llvm::errs() << "  LHS value = " << Val <<" - " <<RHSIsConcrete<< "\n";
         if (!RHSIsConcrete) {
           auto CR = ConstantRangeAnalysis().findConstantRange(RHS, ConcreteInterpreters[I]);
           if (StatsLevel > 2)
@@ -423,7 +423,7 @@ bool PruningManager::isInfeasible(souper::Inst *RHS,
             }
           }
         } else {
-          auto RHSV = ConcreteInterpreters[I].evaluateInst(RHS);
+          auto RHSV = ConcreteInterpreters[I].evaluateInst(lowerCustomInst(SC.IC, RHS));
           if (RHSV.hasValue()) {
             auto RVal = RHSV.getValue();
             if (SC.LHS->DemandedBits != 0) {
@@ -616,7 +616,8 @@ void PruningManager::init() {
     };
   }
 
-  ConcreteInterpreter BlankCI;
+  ValueCache C;
+  ConcreteInterpreter BlankCI(C);
   LHSKnownBitsNoSpec =  KnownBitsAnalysis().findKnownBits(SC.LHS, BlankCI, false);
   LHSMustDemandedBits = MustDemandedBitsAnalysis().findMustDemandedBits(SC.LHS);
   improveMustDemandedBits(LHSMustDemandedBits);
@@ -738,7 +739,7 @@ namespace {
   llvm::APInt getSpecialAPInt(char C, unsigned Width) {
     switch (C) {
     case 'a':
-      return llvm::APInt(Width, -1);
+      return llvm::APInt::getAllOnes(Width);
     case 'b':
       return llvm::APInt(Width, 1);
     case 'c':
@@ -795,7 +796,7 @@ std::vector<ValueCache> PruningManager::generateInputSets(
 
   for (auto &&I : Inputs) {
     if (I->K == souper::Inst::Var)
-      Cache[I] = {llvm::APInt(I->Width, -1)};
+      Cache[I] = {llvm::APInt::getAllOnes(I->Width)};
   }
   if (isInputValid(Cache))
     InputSets.push_back(Cache);
@@ -821,7 +822,7 @@ std::vector<ValueCache> PruningManager::generateInputSets(
   for (i = 0, m = 0; i < NumLargeInputs && m < MaxTries; ++m ) {
     for (auto &&I : Inputs) {
       if (I->K == souper::Inst::Var)
-        Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt(I->Width, -1).getLimitedValue())};
+        Cache[I] = {llvm::APInt(I->Width, std::rand() % llvm::APInt::getAllOnes(I->Width).getLimitedValue())};
     }
     if (isInputValid(Cache)) {
       i++;

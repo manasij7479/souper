@@ -20,6 +20,7 @@
 
 #include <queue>
 #include <set>
+#include <iostream>
 
 using namespace souper;
 
@@ -115,10 +116,8 @@ std::string ReplacementContext::printInst(Inst *I, llvm::raw_ostream &Out,
 
 std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
                                               bool printNames, Inst *OrigI) {
-
   std::string Str;
   llvm::raw_string_ostream SS(Str);
-
   auto PNI = InstNames.find(I);
   if (PNI != InstNames.end()) {
     SS << "%" << PNI->second;
@@ -167,8 +166,13 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
         break;
     }
   }
-
-  std::string InstName = std::to_string(InstNames.size() + BlockNames.size());
+  std::string InstName;
+  std::string CustomNameSave = I->Name;
+  if (printNames && !I->Name.empty() && I->K != Inst::Custom) {
+    InstName = I->Name;
+  } else {
+    InstName = std::to_string(InstNames.size() + BlockNames.size());
+  }
   assert(InstNames.find(I) == InstNames.end());
   assert(NameToBlock.find(InstName) == NameToBlock.end());
   setInst(InstName, I);
@@ -184,11 +188,12 @@ std::string ReplacementContext::printInstImpl(Inst *I, llvm::raw_ostream &Out,
       break;
     default: {
       Out << "%" << InstName << ":i" << I->Width << " = "
-          << Inst::getKindName(I->K);
+          << ((I->K == Inst::Custom) ? CustomNameSave : Inst::getKindName(I->K));
       if (I->K == Inst::Var) {
         if (I->KnownZeros.getBoolValue() || I->KnownOnes.getBoolValue())
           Out << " (knownBits=" << Inst::getKnownBitsString(I->KnownZeros, I->KnownOnes)
               << ")";
+
         if (I->NonNegative)
           Out << " (nonNegative)";
         if (I->Negative)
@@ -418,6 +423,18 @@ const char *Inst::getKindName(Kind K) {
     return "cttz";
   case Ctlz:
     return "ctlz";
+  case LogB:
+    return "logb";
+  case BitWidth:
+    return "width";
+  case KnownOnesP:
+    return "knownones";
+  case KnownZerosP:
+    return "knownzeros";
+  case RangeP:
+    return "range";
+  case DemandedMask:
+    return "demandedmask";
   case FShl:
     return "fshl";
   case FShr:
@@ -459,6 +476,8 @@ const char *Inst::getKindName(Kind K) {
     return "o";
   case Freeze:
     return "freeze";
+  case Lop3:
+    return "lop";
   default:
     llvm_unreachable("all cases covered");
   }
@@ -512,6 +531,12 @@ Inst::Kind Inst::getKind(std::string Name) {
                    .Case("bitreverse", Inst::BitReverse)
                    .Case("cttz", Inst::Cttz)
                    .Case("ctlz", Inst::Ctlz)
+                   .Case("logb", Inst::LogB)
+                   .Case("width", Inst::BitWidth)
+                   .Case("knownones", Inst::KnownOnesP)
+                   .Case("knownzeros", Inst::KnownZerosP)
+                   .Case("range", Inst::RangeP)
+                   .Case("demandedmask", Inst::DemandedMask)
                    .Case("fshl", Inst::FShl)
                    .Case("fshr", Inst::FShr)
                    .Case("sadd.with.overflow", Inst::SAddWithOverflow)
@@ -529,6 +554,8 @@ Inst::Kind Inst::getKind(std::string Name) {
                    .Case("hole", Inst::Hole)
                    .Case("reservedconst", Inst::ReservedConst)
                    .Case("freeze", Inst::Freeze)
+                   .Case("lop", Inst::Lop3)
+                   .StartsWith("custom.", Inst::Kind::Custom)
                    .Default(Inst::None);
 }
 
@@ -581,9 +608,11 @@ Inst *InstContext::getConst(const llvm::APInt &Val) {
   N->K = Inst::Const;
   N->Width = Val.getBitWidth();
   N->Val = Val;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
+
 
 Inst *InstContext::getUntypedConst(const llvm::APInt &Val) {
   llvm::FoldingSetNodeID ID;
@@ -600,6 +629,7 @@ Inst *InstContext::getUntypedConst(const llvm::APInt &Val) {
   N->K = Inst::UntypedConst;
   N->Width = 0;
   N->Val = Val;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
@@ -610,6 +640,7 @@ Inst *InstContext::getReservedConst() {
   N->K = Inst::ReservedConst;
   N->SynthesisConstID = ++ReservedConstCounter;
   N->Width = 0;
+  N->IC = this;
   return N;
 }
 
@@ -618,6 +649,7 @@ Inst *InstContext::getReservedInst() {
   Insts.emplace_back(N);
   N->K = Inst::ReservedInst;
   N->Width = 0;
+  N->IC = this;
   return N;
 }
 
@@ -626,6 +658,7 @@ Inst *InstContext::createHole(unsigned Width) {
   Insts.emplace_back(N);
   N->K = Inst::Hole;
   N->Width = Width;
+  N->IC = this;
   return N;
 }
 
@@ -656,6 +689,7 @@ Inst *InstContext::createVar(unsigned Width, llvm::StringRef Name,
   I->NumSignBits = NumSignBits;
   I->DemandedBits = DemandedBits;
   I->SynthesisConstID = SynthesisConstID;
+  I->IC = this;
   return I;
 }
 
@@ -711,6 +745,7 @@ Inst *InstContext::getPhi(Block *B, const std::vector<Inst *> &Ops, llvm::APInt 
   N->B = B;
   N->Ops = Ops;
   N->DemandedBits = DemandedBits;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
@@ -759,6 +794,7 @@ Inst *InstContext::getInst(Inst::Kind K, unsigned Width,
   N->Available = Available;
   N->HarvestKind = HarvestType::HarvestedFromDef;
   N->HarvestFrom = nullptr;
+  N->IC = this;
   InstSet.InsertNode(N, IP);
   return N;
 }
@@ -947,6 +983,18 @@ int Inst::getCost(Inst::Kind K) {
     case USubSat:
     case Select:
       return 3;
+    case Mul:
+    case MulNSW:
+    case MulNUW:
+    case MulNW:
+      return 2;
+    case SMulWithOverflow:
+    case UMulWithOverflow:
+    case SAddWithOverflow:
+    case UAddWithOverflow:
+    case SSubWithOverflow:
+    case USubWithOverflow:
+      return 2;
     default:
       return 1;
   }
@@ -966,8 +1014,8 @@ static int costHelper(Inst *I, Inst *Root, std::set<Inst *> &Visited,
   return Cost;
 }
 
-int souper::cost(Inst *I, bool IgnoreDepsWithExternalUses) {
-  std::set<Inst *> Visited;
+int souper::cost(Inst *I, bool IgnoreDepsWithExternalUses, std::set<Inst *> Ignore) {
+  std::set<Inst *> Visited = Ignore;
   return costHelper(I, I, Visited, IgnoreDepsWithExternalUses);
 }
 
@@ -995,8 +1043,8 @@ int souper::instCount(Inst *I) {
   return countHelper(I, Visited);
 }
 
-int souper::benefit(Inst *LHS, Inst *RHS) {
-  return cost(LHS, /*IgnoreDepsWithExternalUses=*/true) - cost(RHS);
+int souper::benefit(Inst *LHS, Inst *RHS, bool IgnoreDepsWithExternalUses) {
+  return cost(LHS, IgnoreDepsWithExternalUses) - cost(RHS);
 }
 
 void souper::PrintReplacement(llvm::raw_ostream &Out,
@@ -1061,7 +1109,7 @@ std::string souper::GetReplacementLHSString(const BlockPCs &BPCs,
     Inst *LHS, ReplacementContext &Context, bool printNames) {
   std::string Str;
   llvm::raw_string_ostream SS(Str);
-  PrintReplacementLHS(SS, BPCs, PCs, LHS, Context);
+  PrintReplacementLHS(SS, BPCs, PCs, LHS, Context, printNames);
   return SS.str();
 }
 
@@ -1141,7 +1189,7 @@ void souper::findInsts(Inst *Root, std::vector<Inst *> &Insts, std::function<boo
 
 void hasConstantHelper(Inst *I, std::set<Inst *> &Visited,
                        std::set<Inst *> &ConstSet) {
-  if (I->K == Inst::Var && I->SynthesisConstID != 0) {
+  if (I->K == Inst::Var && (I->SynthesisConstID != 0 || I->Name.starts_with("reserved"))) {
     ConstSet.insert(I);
   } else {
     if (Visited.insert(I).second)
@@ -1213,12 +1261,13 @@ Inst *souper::getInstCopy(Inst *I, InstContext &IC,
       }
     }
     if (!Copy) {
-      if (CloneVars && I->SynthesisConstID == 0)
+      if (CloneVars && I->SynthesisConstID == 0) {
         Copy = IC.createVar(I->Width, I->Name, I->Range, I->KnownZeros,
                             I->KnownOnes, I->NonZero, I->NonNegative,
                             I->PowOfTwo, I->Negative, I->NumSignBits,
                             I->DemandedBits,
                             I->SynthesisConstID);
+      }
       else {
         Copy = I;
       }
@@ -1242,6 +1291,7 @@ Inst *souper::getInstCopy(Inst *I, InstContext &IC,
   }
   assert(Copy);
   InstCache[I] = Copy;
+  Copy->Name = I->Name;
   return Copy;
 }
 
@@ -1335,4 +1385,28 @@ std::vector<Block *> souper::getBlocksFromPhis(Inst *I) {
   }
 
   return Result;
+}
+
+Inst *souper::lowerCustomInst(InstContext &IC, Inst *I) {
+  if (I->K == Inst::Custom) {
+    return CustomInstructionMap[I->Name](&IC, I->Ops);
+  } else {
+    for (auto &Op : I->Ops) {
+      Op = lowerCustomInst(IC, Op);
+    }
+    return I;
+  }
+}
+
+// Add custom instructions here.
+// Names have to start with "custom." for the parser to recognize them.
+namespace souper {
+std::unordered_map<std::string, CustomInstructionCreator>
+CustomInstructionMap = {
+  {"custom.identity", [](InstContext *IC, const std::vector<Inst *> &Ops) {
+    assert(Ops.size() == 1);
+    return Ops[0];
+  }},
+};
+
 }

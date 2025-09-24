@@ -58,7 +58,7 @@ static llvm::cl::opt<bool> HarvestUses(
 static llvm::cl::opt<bool> MarkExternalUses(
     "souper-mark-external-uses",
     llvm::cl::desc("Mark external uses in harvesting (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
 static llvm::cl::opt<bool> PrintNegAtReturn(
     "print-neg-at-return",
     llvm::cl::desc("Print negative dfa in each value returned from a function (default=false)"),
@@ -82,6 +82,10 @@ static llvm::cl::opt<bool> PrintNonZeroAtReturn(
 static llvm::cl::opt<bool> PrintSignBitsAtReturn(
     "print-sign-bits-at-return",
     llvm::cl::desc("Print sign bits dfa in each value returned from a function (default=false)"),
+    llvm::cl::init(false));
+static llvm::cl::opt<bool> NoExternalUses(
+    "no-external-uses",
+    llvm::cl::desc("Do not mark external uses. (default=false)"),
     llvm::cl::init(false));
 static llvm::cl::opt<bool> PrintRangeAtReturn(
     "print-range-at-return",
@@ -305,6 +309,9 @@ Inst *ExprBuilder::buildGEP(Inst *Ptr, gep_type_iterator begin,
 #endif
 
 void ExprBuilder::markExternalUses (Inst *I) {
+  if (NoExternalUses) {
+    return;
+  }
   std::map<Inst *, unsigned> UsesCount;
   std::unordered_set<Inst *> Visited;
   std::vector<Inst *> Stack;

@@ -18,12 +18,19 @@
 
 #include "souper/Infer/ConstantSynthesis.h"
 #include "souper/Infer/Pruning.h"
+#include "souper/Infer/SynthUtils.h"
+#include "souper/Infer/Invariants.h"
 #include "souper/Inst/InstGraph.h"
 #include "souper/Parser/Parser.h"
 #include "souper/Tool/GetSolver.h"
 #include "souper/Util/DfaUtils.h"
 
 using namespace llvm;
+
+namespace souper {
+  Solver *S;
+}
+
 using namespace souper;
 
 unsigned DebugLevel;
@@ -55,14 +62,20 @@ static cl::opt<bool> InferRHS("infer-rhs",
     cl::desc("Try to infer a RHS for a Souper LHS (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> SymInferRHS("sym-infer-rhs",
+    cl::desc("Try to infer RHS for a Souper Symbolic LHS (default=false)"),
+    cl::init(false));
+
 static cl::opt<bool> InferConst("infer-const",
     cl::desc("Try to infer constants for a Souper replacement (default=false)"),
     cl::init(false));
 
-static cl::opt<bool> InferAP("infer-abstract-precondition",
-    cl::desc("Try to infer an abstract precondition which makes the given"
-             "transformation valid. (default=false)"),
+static cl::opt<bool> InferConstOnlyPrintConsts("infer-const-only-print-consts",
+    cl::desc("Only print synthesized constants (default=false)"),
     cl::init(false));
+
+static cl::list<std::string> InferConstBlockList("infer-const-blocklist",
+    cl::desc("Constant synthesis blocklist"), cl::CommaSeparated);
 
 static cl::opt<bool> ReInferRHS("reinfer-rhs",
     cl::desc("Try to infer a new RHS and compare its cost with the existing RHS (default=false)"),
@@ -88,13 +101,101 @@ static cl::opt<bool> CheckAllGuesses("souper-check-all-guesses",
     cl::desc("Continue even after a valid RHS is found. (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> Hash("hash",
+    cl::desc("Hash a trasnformation. (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> FixIt("fixit",
+    cl::desc("Replace constants with ones that work. (default=false)"),
+    cl::init(false));
+
+// static cl::opt<bool> InferInv("infer-invariants",
+//     cl::desc("Infer invariants. (default=false)"),
+//     cl::init(false));
+
+static cl::opt<bool> VerifyInv("verify-invariants",
+    cl::desc("Verify invariants. (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> FilterRedundant("filter-redundant",
+    cl::desc("Filter redundant transformations based on static hashing (default=false)"),
+    cl::init(false));
+
+static cl::opt<std::string> PrettyPrint("pretty-print",
+    cl::desc("Pretty print (default=null)"),
+    cl::init(""));
+
+static cl::opt<bool> PrintProfit("print-profit",
+    cl::desc("Print profit (default=false)"),
+    cl::init(false));
+
+
+size_t HashInt(size_t x) {
+  x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+  x = (x ^ (x >> 27)) * UINT64_C(0x94d049bb133111eb);
+  x = x ^ (x >> 31);
+  return x;
+}
+
+size_t HashInst(Inst *I, std::map<Inst *, size_t> &M, std::set<Inst *> &SeenVars) {
+  if (M.find(I) != M.end()) {
+    return M[I];
+  }
+
+  size_t Result = 0;
+
+//  if (I->Name != "") {
+//    Result ^= std::hash<std::string>()(I->Name);
+//  }
+
+  Result ^= HashInt(I->K);
+
+  if (I->K == Inst::Var) {
+    SeenVars.insert(I);
+    Result ^= HashInt(SeenVars.size());
+    // TODO: DF attributes
+    M[I] = Result;
+  }
+
+  if (I->K == Inst::Const) {
+    Result ^= HashInt(I->Val.getLimitedValue());
+  }
+
+  for (size_t i = 0; i < I->Ops.size(); ++i) {
+    size_t Weight = Inst::isCommutative(I->K) ? 0 : HashInt(i);
+
+    Result ^= (Weight + HashInst(I->Ops[i], M, SeenVars));
+  }
+
+  M[I] = Result;
+  return Result;
+}
+
+size_t HashRep(ParsedReplacement Rep) {
+  std::map<Inst *, size_t> M;
+  std::set<Inst *> SeenVars;
+  auto Result = HashInst(Rep.Mapping.LHS, M, SeenVars);
+  Result ^= 7* HashInst(Rep.Mapping.RHS, M, SeenVars);
+  // Just ^ produces weird conflicts for very different trees
+
+  // Is this needed?
+  Result ^= HashInt(Rep.Mapping.LHS->Width);
+
+  for (auto PC : Rep.PCs)  {
+    Result ^= HashInst(PC.LHS, M, SeenVars);
+    Result ^= HashInst(PC.RHS, M, SeenVars);
+  }
+
+  return Result;
+}
+
 int SolveInst(const MemoryBufferRef &MB, Solver *S) {
   InstContext IC;
   std::string ErrStr;
 
   std::vector<ParsedReplacement> Reps;
   std::vector<ReplacementContext> Contexts;
-  if (InferRHS || ParseLHSOnly || isInferDFA()) {
+  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA()) {
     Reps = ParseReplacementLHSs(IC, MB.getBufferIdentifier(), MB.getBuffer(),
                                 Contexts, ErrStr);
   } else {
@@ -120,7 +221,57 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
   unsigned Index = 0;
   int Ret = 0;
   int Success = 0, Fail = 0, Error = 0;
+
+  std::unordered_set<size_t> Hashes;
+
   for (auto Rep : Reps) {
+    if (Hash) {
+      llvm::outs() << HashRep(Rep) << '\n';
+      continue;
+    }
+
+    if (FilterRedundant) {
+      auto Hash = HashRep(Rep);
+      if (Hashes.find(Hash) == Hashes.end()) {
+        Hashes.insert(Hash);
+
+        bool Valid;
+        std::vector<std::pair<Inst *, APInt>> Models;
+        if (std::error_code EC = S->isValid(IC, Rep.BPCs, Rep.PCs,
+                                            Rep.Mapping, Valid, &Models)) {
+          llvm::errs() << EC.message() << '\n';
+          Ret = 1;
+          ++Error;
+        }
+
+        if (Valid) {
+          ReplacementContext RC;
+          Rep.printLHS(llvm::outs(), RC, true);
+          Rep.printRHS(llvm::outs(), RC, true);
+        } else {
+          // TODO: Warn about invalid transformation.
+        }
+      } else {
+        llvm::outs() << "; Skipping redundant transformation.\n";
+        std::string S;
+        llvm::raw_string_ostream Str(S);
+        ReplacementContext RC;
+        Rep.printLHS(Str, RC, true);
+        Rep.printRHS(Str, RC, true);
+        Str.flush();
+        llvm::outs() << ';';
+        for (size_t i = 0; i < S.length(); ++i) {
+          auto c = S[i];
+          if ((c == '\n' || c == '\r') && i != S.length() - 1) {
+            llvm::outs() << c << ';';
+          } else {
+            llvm::outs() << c;
+          }
+        }
+      }
+      continue;
+    }
+
     if (isInferDFA()) {
       if (InferNeg) {
         bool Negative;
@@ -224,7 +375,7 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         }
         return 0;
       }
-    } else if (InferRHS || ReInferRHS) {
+    } else if (InferRHS || ReInferRHS || SymInferRHS) {
       int OldCost;
       std::vector<Inst *> RHSs;
       if (ReInferRHS) {
@@ -256,9 +407,17 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         if (CheckAllGuesses) {
           for (unsigned RI = 0 ; RI < RHSs.size(); RI++) {
             llvm::outs() << "; result " << (RI + 1) << ":\n";
-            ReplacementContext RC;
-            PrintReplacementRHS(llvm::outs(), RHSs[RI], RC);
-            llvm::outs() << "\n";
+            if (PrintRepl || PrintReplSplit) {
+              ReplacementContext RC;
+              PrintReplacementLHS(llvm::outs(), Rep.BPCs, Rep.PCs,
+                Rep.Mapping.LHS, RC, true);
+              PrintReplacementRHS(llvm::outs(), RHSs[RI], RC, true);
+              llvm::outs() << "\n";
+            } else {
+              ReplacementContext RC;
+              PrintReplacementRHS(llvm::outs(), RHSs[RI], RC);
+              llvm::outs() << "\n";
+            }
           }
         } else {
           if (PrintRepl) {
@@ -267,6 +426,11 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
             ReplacementContext Context;
             PrintReplacementLHS(llvm::outs(), Rep.BPCs, Rep.PCs,
                                 Rep.Mapping.LHS, Context);
+            PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, Context);
+          } else if (SymInferRHS) {
+            ReplacementContext Context;
+            PrintReplacementLHS(llvm::outs(), Rep.BPCs, Rep.PCs,
+                                Rep.Mapping.RHS->Aux, Context);
             PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, Context);
           } else {
             ReplacementContext Context;
@@ -289,6 +453,46 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
 
       std::set<Inst *> ConstSet;
       souper::getConstants(Rep.Mapping.RHS, ConstSet);
+      souper::getConstants(Rep.Mapping.LHS, ConstSet);
+
+      if (InferConstBlockList.size() > 1) {
+        std::map<std::string, Inst *> Consts;
+        for (auto C : ConstSet) {
+          Consts[C->Name] = C;
+        }
+
+        std::map<std::string, std::vector<int64_t>> BlockList;
+        std::string last;
+        for (auto S : InferConstBlockList) {
+          // if S can not be parsed as a number
+          if (S.find_first_not_of("-0123456789") != std::string::npos) {
+            last = S;
+          } else {
+            BlockList[last].push_back(std::stoll(S));
+          }
+        }
+
+        for (auto S : BlockList) {
+          if (DebugLevel > 2) {
+            llvm::outs() << "; BlockList: " << S.first << " : ";
+          }
+          for (auto I : S.second) {
+            if (DebugLevel > 2) {
+              llvm::outs() << I << " ";
+            }
+            Rep.PCs.push_back(InstMapping{
+              IC.getInst(Inst::Ne, 1,
+                          {Consts[S.first],
+                            IC.getConst(APInt(Consts[S.first]->Width, I, true))}),
+              IC.getConst(APInt(1, 1))
+            });
+          }
+          if (DebugLevel > 2) {
+            llvm::outs() << "\n";
+          }
+        }
+      }
+
       if (ConstSet.empty()) {
         llvm::outs() << "; No reservedconst found in RHS\n";
       } else {
@@ -301,13 +505,25 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         }
 
         if (!ResultConstMap.empty()) {
-          ReplacementContext Context;
-          llvm::outs() << "; RHS inferred successfully\n";
-          PrintReplacementRHS(llvm::outs(), Rep.Mapping.RHS, Context);
+          if (InferConstOnlyPrintConsts) {
+            for (auto &Const : ResultConstMap) {
+              llvm::outs() << Const.first->Name << "  ";
+              Const.second.print(llvm::outs(), false);
+              llvm::outs() << "\n";
+            }
+          } else {
+            std::map<Inst *, Inst *> InstCache;
+            std::map<Block *, Block *> BlockCache;
+            Rep.Mapping.LHS =
+                getInstCopy(Rep.Mapping.LHS, IC, InstCache, BlockCache, &ResultConstMap, false, false);
+            Rep.Mapping.RHS =
+                getInstCopy(Rep.Mapping.RHS, IC, InstCache, BlockCache, &ResultConstMap, false, false);
+            Rep.print(llvm::outs(), true);
+          }
           ++Success;
         } else {
           ++Fail;
-          llvm::outs() << "; Failed to infer RHS\n";
+          llvm::outs() << "; Failed to synthesize constant(s)\n";
         }
       }
     } else if (TryDataflowPruning) {
@@ -323,13 +539,72 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
       } else {
         llvm::outs() << "Pruning failed.\n";
       }
-    } else if (InferAP) {
-        bool FoundWeakest = false;
-        S->abstractPrecondition(Rep.BPCs, Rep.PCs, Rep.Mapping, IC, FoundWeakest);
-        if (!FoundWeakest) {
-          llvm::outs() << "Failed to find WP.\n";
+    } else if (FixIt) {
+      if (Verify(Rep)) {
+        Rep.print(llvm::outs(), true);
+      } else {
+        // Find RHS-fresh constants
+        std::vector<Inst *> LHSConsts, RHSConsts;
+        findInsts(Rep.Mapping.LHS, LHSConsts, [](Inst *I) {
+          return I->K == Inst::Const;
+        });
+        findInsts(Rep.Mapping.RHS, RHSConsts, [](Inst *I) {
+          return I->K == Inst::Const;
+        });
+        std::set<Inst *> LHSConstSet(LHSConsts.begin(), LHSConsts.end());
+        std::set<Inst *> RHSConstSet(RHSConsts.begin(), RHSConsts.end());
+        std::vector<Inst *> FreshConsts;
+        for (auto &&C : RHSConstSet) {
+          if (LHSConstSet.find(C) == LHSConstSet.end()) {
+            FreshConsts.push_back(C);
+          }
         }
-
+        std::map<Inst *, Inst *> InstCache;
+        std::set<Inst *> ConstSet;
+        unsigned ConstID = 1;
+        for (auto &&C : FreshConsts) {
+          InstCache[C] = IC.createSynthesisConstant(C->Width, ConstID++);
+          ConstSet.insert(InstCache[C]);
+        }
+        auto Clone = Replace(Rep, InstCache);
+        if (auto Fixed = Verify(Clone)) {
+          ReplacementContext RC;
+          Fixed->printLHS(llvm::outs(), RC, true);
+          Fixed->printRHS(llvm::outs(), RC, true);
+        } else {
+          llvm::errs() << "Failed to fix the replacement.\n";
+        }
+      }
+    } else if (PrettyPrint != "") {
+      if (PrettyPrint == "infix") {
+        InfixPrinter P(Rep);
+        P(llvm::outs());
+      } else if (PrettyPrint == "latex" || PrettyPrint == "tex") {
+        LatexPrinter P(Rep);
+        P(llvm::outs());
+      } else if (PrettyPrint == "go" || PrettyPrint == "s-expr") {
+        GoPrinter P(Rep);
+        P(llvm::outs());
+      } else if (PrettyPrint == "pdl") {
+        static size_t Counter = 0;
+        PDLGenerator P(Rep, "opt" + std::to_string(Counter++));
+        P(llvm::outs());
+      } else {
+        llvm_unreachable("unknown pretty-printer");
+      }
+    } else if (PrintProfit) {
+      if (Rep.Mapping.RHS == Rep.Mapping.LHS) {
+        llvm::outs() << "-1\n";
+        // extra penalty for LHS == RHS
+      } else {
+        llvm::outs() << souper::profit(Rep) << '\n';
+      }
+    } else if (VerifyInv) {
+      if (VerifyInvariant(Rep)) {
+        llvm::outs() << "; LGTM\n";
+      } else {
+        llvm::outs() << "; Failed to verify invariant\n";
+      }
     } else {
       bool Valid;
       std::vector<std::pair<Inst *, APInt>> Models;
@@ -383,14 +658,16 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv);
   KVStore *KV = 0;
 
-  std::unique_ptr<Solver> S = 0;
+  std::unique_ptr<Solver> S_ = 0;
   if (!ParseOnly && !ParseLHSOnly)
-    S = GetSolver(KV);
+    S_ = GetSolver(KV);
+
+  S = S_.get();
 
   auto MB = MemoryBuffer::getFileOrSTDIN(InputFilename);
   if (!MB) {
     llvm::errs() << MB.getError().message() << '\n';
     return 1;
   }
-  return SolveInst((*MB)->getMemBufferRef(), S.get());
+  return SolveInst((*MB)->getMemBufferRef(), S);
 }

@@ -53,6 +53,14 @@ OutputFilename("o", cl::desc("Override output filename"),
 static cl::opt<bool> StaticProfile("souper-static-profile", cl::init(false),
     cl::desc("Static profiling of Souper optimizations (default=false)"));
 
+static cl::opt<bool> HarvestInstCombineOpts("harvest-instcombine-opts", cl::init(false),
+    cl::desc("Harvest optimizations performed by InstCombine (default=false)"));
+
+static cl::opt<bool> HarvestSrcTgtOpts("harvest-pairwise-opts", cl::init(false),
+    cl::desc("Harvest transforms between to functions src and tgt (default=false)"));
+
+
+
 static cl::opt<bool>
 Check("check", cl::desc("Check input for expected results"),
     cl::init(false));
@@ -112,6 +120,21 @@ int main(int argc, char **argv) {
   InstContext IC;
   ExprBuilderContext EBC;
   CandidateMap CandMap;
+
+  if (HarvestInstCombineOpts) {
+    HarvestAndPrintInstCombineOpts(IC, M.get(), S.get());
+    return 0;
+  }
+
+  if (HarvestSrcTgtOpts) {
+    HarvestAndPrintPairOpts(IC, M.get(), S.get());
+    return 0;
+  }
+
+  if (HarvestSrcTgtOpts) {
+
+  }
+
   AddModuleToCandidateMap(IC, EBC, CandMap, *M.get());
 
   if (Check) {

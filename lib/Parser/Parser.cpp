@@ -418,10 +418,10 @@ bool Parser::typeCheckOpsMatchingWidths(llvm::MutableArrayRef<Inst *> Ops,
   for (auto Op : Ops) {
     if (Width == 0)
       Width = Op->Width;
-    if (Width != 0 && Op->Width != 0 && Width != Op->Width) {
-      ErrStr = "operands have different widths";
-      return false;
-    }
+    // if (Width != 0 && Op->Width != 0 && Width != Op->Width) {
+    //   ErrStr = "operands have different widths";
+    //   return false;
+    // }
   }
 
   if (Width == 0) {
@@ -544,6 +544,9 @@ bool Parser::typeCheckInst(Inst::Kind IK, unsigned &Width,
   case Inst::UAddSat:
   case Inst::SSubSat:
   case Inst::USubSat:
+  case Inst::KnownOnesP:
+  case Inst::KnownZerosP:
+  case Inst::DemandedMask:
     MinOps = MaxOps = 2;
     break;
 
@@ -590,12 +593,29 @@ bool Parser::typeCheckInst(Inst::Kind IK, unsigned &Width,
   case Inst::BitReverse:
   case Inst::Cttz:
   case Inst::Ctlz:
+  case Inst::LogB:
+  case Inst::BitWidth:
   case Inst::Freeze:
     MaxOps = MinOps = 1;
     break;
   case Inst::FShl:
   case Inst::FShr:
+  case Inst::RangeP:
     MaxOps = MinOps = 3;
+    break;
+
+  case Inst::Lop3:
+    MaxOps = MinOps = 4;
+    if (Ops[3]->Width != 8 || Ops[3]->K != Inst::Const) {
+      ErrStr = "last operand of lop3 must be a constant of width 8";
+      return false;
+    }
+    break;
+
+  case Inst::Custom:
+    MinOps = 1;
+    MaxOps = 3; // Maybe make this unlimited
+    // Actual typechecking is deferred
     break;
 
   default:
@@ -658,6 +678,9 @@ bool Parser::typeCheckInst(Inst::Kind IK, unsigned &Width,
   case Inst::Slt:
   case Inst::Ule:
   case Inst::Sle:
+  case Inst::KnownOnesP:
+  case Inst::KnownZerosP:
+  case Inst::RangeP:
     ExpectedWidth = 1;
     break;
 
@@ -763,7 +786,8 @@ InstMapping Parser::parseInstMapping(std::string &ErrStr) {
   if (!SrcRep[1])
     return InstMapping();
 
-  if (!typeCheckOpsMatchingWidths(SrcRep, ErrStr)) {
+  if (!(SrcRep[1]->Width == 1 && SrcRep[0]->Width != 1) && // represents an invariant
+      !typeCheckOpsMatchingWidths(SrcRep, ErrStr)) {
     ErrStr = makeErrStr(ErrStr);
     return InstMapping();
   }
@@ -925,7 +949,8 @@ bool Parser::parseLine(std::string &ErrStr) {
         Inst *RHS = parseInst(ErrStr);
         if (!RHS)
           return false;
-        if (LHS && (LHS->Width != RHS->Width)) {
+        if (LHS && (LHS->Width != RHS->Width) && RHS->Width != 1) {
+          // RHS can be a predicate for specifying invariants
           ErrStr = makeErrStr("width of result and infer operands mismatch");
           return false;
         }
@@ -1037,6 +1062,7 @@ bool Parser::parseLine(std::string &ErrStr) {
       }
 
       Inst::Kind IK = Inst::getKind(CurTok.str().str());
+      std::string InstNameStr = CurTok.str().str();
 
       if (IK == Inst::None) {
         if (CurTok.str() == "block") {
@@ -1360,6 +1386,11 @@ bool Parser::parseLine(std::string &ErrStr) {
             I = IC.getInst(IK, InstWidth, Ops);
             break;
         }
+      }
+
+      if (IK == Inst::Custom) {
+        I->Name = InstNameStr;
+
       }
 
       if (hasExternalUses)

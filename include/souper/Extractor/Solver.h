@@ -44,6 +44,14 @@ public:
           InstMapping Mapping, bool &IsValid,
           std::vector<std::pair<Inst *, llvm::APInt>> *Model) = 0;
 
+  virtual std::error_code
+  isSatisfiable(llvm::StringRef Query, bool &Result,
+                unsigned NumModels,
+                std::vector<llvm::APInt> *Models,
+                unsigned Timeout = 0) = 0;
+
+  virtual SMTLIBSolver *getSMTLIBSolver() = 0;
+
   virtual std::string getName() = 0;
 
   virtual
@@ -87,11 +95,6 @@ public:
                                    std::map<std::string, llvm::APInt> &DBitsVect,
                                    InstContext &IC) = 0;
 
-  virtual
-  std::error_code abstractPrecondition(const BlockPCs &BPCs,
-                  const std::vector<InstMapping> &PCs,
-                  InstMapping &Mapping, InstContext &IC,
-                  bool &FoundWeakest) = 0;
 };
 
 std::unique_ptr<Solver> createBaseSolver(

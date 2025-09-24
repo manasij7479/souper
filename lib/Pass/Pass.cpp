@@ -190,6 +190,29 @@ public:
         .getValue(I);
   }
 
+  bool hasNewPhi(InstMapping Cand) {
+    auto PhiCheck = [](Inst *I) {return I->K == Inst::Phi;};
+    std::vector<Inst *> Insts;
+
+    findInsts(Cand.LHS, Insts, PhiCheck);
+
+    std::set<Inst *> LHSPhis;
+    for (auto &I : Insts) {
+      LHSPhis.insert(I);
+    }
+    Insts.clear();
+
+    findInsts(Cand.RHS, Insts, PhiCheck);
+
+    for (auto &&I : Insts) {
+      if (LHSPhis.find(I) == LHSPhis.end()) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   bool runOnFunction(Function &F, FunctionAnalysisManager &FAM) {
     std::string FunctionName;
     if (F.hasLocalLinkage()) {
@@ -252,7 +275,6 @@ public:
         ReplacementContext Context;
         PrintReplacementLHS(errs(), Cand.BPCs, Cand.PCs, Cand.Mapping.LHS, Context);
       }
-      
       if (StaticProfile) {
         std::string Str;
         llvm::raw_string_ostream Loc(Str);
@@ -293,6 +315,10 @@ public:
       }
 
       Cand.Mapping.RHS = RHSs.front();
+
+      if (hasNewPhi(Cand.Mapping)) {
+        continue;
+      }
 
       Instruction *I = Cand.Origin;
       assert(Cand.Mapping.LHS->K == Inst::Const || Cand.Mapping.LHS->hasOrigin(I));
@@ -385,13 +411,13 @@ public:
 
       if (DebugLevel > 1)
         errs() << "done with LHS number " << LHSNum << " after doing a replacement\n";
-      
+
       return true;
     }
 
     return false;
   }
-  
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
     if (!S) {
       S = GetSolver(KV);
@@ -408,7 +434,7 @@ public:
       if (res && verifyFunction(F))
         llvm::report_fatal_error("function broken after Souper changed it");
     } while (res);
-    
+
     return PreservedAnalyses::none();
   }
 
