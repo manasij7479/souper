@@ -2,4 +2,7 @@ souperweb.tar.gz
 third_party
 build
 build-*
+dbuild
 *~
+.vscode/
+tools/pass-generator/src/gen.cpp.inc
