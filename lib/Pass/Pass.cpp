@@ -48,13 +48,17 @@
 STATISTIC(InstructionReplaced, "Number of instructions replaced by another instruction");
 STATISTIC(DominanceCheckFailed, "Number of failed replacement due to dominance check");
 
+namespace souper {
+Solver *S; // hack for now
+}
+
 using namespace souper;
 using namespace llvm;
 
 unsigned DebugLevel;
 
 namespace {
-std::unique_ptr<Solver> S;
+std::unique_ptr<Solver> S_; // hack for now
 unsigned ReplacementIdx, ReplacementsDone, LHSNum;
 KVStore *KV;
 
@@ -291,7 +295,7 @@ public:
       }
       std::vector<Inst *> RHSs;
       if (std::error_code EC =
-          S->infer(Cand.BPCs, Cand.PCs, Cand.Mapping.LHS,
+          S_->infer(Cand.BPCs, Cand.PCs, Cand.Mapping.LHS,
                    RHSs, /*AllowMultipleRHSs=*/false, IC)) {
         if (EC == std::errc::timed_out ||
             EC == std::errc::value_too_large) {
@@ -419,11 +423,12 @@ public:
   }
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-    if (!S) {
-      S = GetSolver(KV);
+    if (!S_) {
+      S_ = GetSolver(KV);
       if (StaticProfile && !KV)
         KV = new KVStore;
     }
+    S = S_.get();
 
     if (Verify && verifyFunction(F))
       llvm::report_fatal_error(("function " + F.getName() + " broken before Souper").str().c_str());

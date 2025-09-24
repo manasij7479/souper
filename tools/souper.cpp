@@ -30,6 +30,9 @@
 #include "souper/Tool/GetSolver.h"
 #include <iostream>
 
+namespace souper {
+  Solver *S;
+}
 using namespace llvm;
 using namespace souper;
 
@@ -115,34 +118,31 @@ int main(int argc, char **argv) {
   }
 
   KVStore *KV = 0;
-  std::unique_ptr<Solver> S = GetSolver(KV);
+  std::unique_ptr<Solver> S_ = GetSolver(KV);
+  S = S_.get();
 
   InstContext IC;
   ExprBuilderContext EBC;
   CandidateMap CandMap;
 
   if (HarvestInstCombineOpts) {
-    HarvestAndPrintInstCombineOpts(IC, M.get(), S.get());
+    HarvestAndPrintInstCombineOpts(IC, M.get(), S_.get());
     return 0;
   }
 
   if (HarvestSrcTgtOpts) {
-    HarvestAndPrintPairOpts(IC, M.get(), S.get());
+    HarvestAndPrintPairOpts(IC, M.get(), S_.get());
     return 0;
-  }
-
-  if (HarvestSrcTgtOpts) {
-
   }
 
   AddModuleToCandidateMap(IC, EBC, CandMap, *M.get());
 
   if (Check) {
-    return CheckCandidateMap(*M.get(), CandMap, S.get(), IC) ? 0 : 1;
+    return CheckCandidateMap(*M.get(), CandMap, S_.get(), IC) ? 0 : 1;
   } else {
     if (StaticProfile && !KV)
       KV = new KVStore;
-    return SolveCandidateMap(llvm::outs(), CandMap, S.get(), IC,
+    return SolveCandidateMap(llvm::outs(), CandMap, S_.get(), IC,
                              StaticProfile ? KV : 0) ? 0 : 1;
   }
 }
