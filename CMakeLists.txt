@@ -1,17 +1,18 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 project(Souper)
 
 set(CMAKE_MACOSX_RPATH NEW)
-
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING
       "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
 endif()
 
+find_package(zstd)
+
 if (NOT LLVM_BUILD_TYPE)
   set(LLVM_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 endif()
-set(LLVM_CONFIG_EXECUTABLE ${CMAKE_SOURCE_DIR}/third_party/llvm-${LLVM_BUILD_TYPE}-install/bin/llvm-config)
+set(LLVM_CONFIG_EXECUTABLE ${CMAKE_SOURCE_DIR}/third_party/llvm-Release-install/bin/llvm-config)
 if(NOT EXISTS ${LLVM_CONFIG_EXECUTABLE})
   message(FATAL_ERROR "llvm-config could not be found!")
 endif()
@@ -74,6 +75,8 @@ set(ALIVE_BUILDDIR "${CMAKE_SOURCE_DIR}/third_party/alive2-build")
 include_directories("${CMAKE_SOURCE_DIR}/third_party")
 include_directories("${ALIVE_SRCDIR}")
 
+set(CLANG_LIBS "-lclangBasic -lclangLex -lclangTooling -lclangInterpreter -lclangFrontend -lclangAST -lclangSerialization -lclangAPINotes -lclangEdit -lclangSema -lclangExtractAPI -lclangFormat -lclangStaticAnalyzerCheckers -lclangASTMatchers -lclangStaticAnalyzerCore -lclangAnalysis -lclangFrontendTool -lclangStaticAnalyzerFrontend -lclangAnalysisFlowSensitive -lclangHandleCXX -lclangSupport -lclangAnalysisFlowSensitiveModels -lclangHandleLLVM -lclangIndex -lclangToolingASTDiff -lclangCodeGen -lclangIndexSerialization -lclangToolingCore -lclangCrossTU -lclangToolingInclusions -lclangDependencyScanning -lclangToolingInclusionsStdlib -lclangDirectoryWatcher -lclangParse -lclangToolingRefactoring -lclangDriver -lclangRewrite -lclangToolingSyntax -lclangDynamicASTMatchers -lclangRewriteFrontend -lclangTransformer")
+
 set(GTEST_CXXFLAGS "-DGTEST_HAS_RTTI=0")
 set(GTEST_INCLUDEDIR "${LLVM_BINDIR}/../include/llvm-gtest/")
 set(GTEST_LIBS "-lllvm_gtest_main -lllvm_gtest")
@@ -102,11 +105,15 @@ set(KLEE_EXPR_FILES
   third_party/klee/lib/Expr/Lexer.cpp
   third_party/klee/lib/Expr/Parser.cpp
   third_party/klee/lib/Expr/Updates.cpp
+  third_party/klee/lib/Solver/SolverCmdLine.cpp
 )
 
 add_library(kleeExpr STATIC
   ${KLEE_EXPR_FILES}
 )
+
+# Configure Klee to use Z3 solver
+target_compile_definitions(kleeExpr PRIVATE ENABLE_Z3=1)
 
 find_path(HIREDIS_INCLUDE_DIR
   NAMES
@@ -163,7 +170,7 @@ else()
   message(SEND_ERROR "Z3 shared lib not found")
 endif()
 
-set(ALIVE_LIBRARY ${ALIVE_IR} ${ALIVE_SMT} ${ALIVE_TOOLS} ${ALIVE_UTIL} ${Z3_LIBRARY})
+set(ALIVE_LIBRARY ${ALIVE_IR} ${ALIVE_SMT} ${ALIVE_TOOLS} ${ALIVE_UTIL})
 
 set(SOUPER_EXTRACTOR_FILES
   lib/Extractor/Candidates.cpp
@@ -202,8 +209,10 @@ set(SOUPER_INFER_FILES
   lib/Infer/Interpreter.cpp
   lib/Infer/AbstractInterpreter.cpp
   include/souper/Infer/Interpreter.h
-  lib/Infer/Preconditions.cpp
-  include/souper/Infer/Preconditions.h
+  lib/Infer/SynthUtils.cpp
+  include/souper/Infer/SynthUtils.h
+  lib/Infer/Invariants.cpp
+  include/souper/Infer/Invariants.h
 )
 
 add_library(souperInfer STATIC
@@ -211,10 +220,10 @@ add_library(souperInfer STATIC
 )
 
 set(SOUPER_GENERALIZE_FILES
-  lib/Generalize/Generalize.cpp
   lib/Generalize/Reducer.cpp
-  include/souper/Generalize/Generalize.h
   include/souper/Generalize/Reducer.h
+  lib/Generalize/Generalize.cpp
+  include/souper/Generalize/Generalize.h
 )
 
 add_library(souperGeneralize STATIC
@@ -276,6 +285,7 @@ set(SOUPER_SOURCES
   ${SOUPER_SMTLIB2_FILES}
   ${SOUPER_TOOL_FILES}
   ${SOUPER_INFER_FILES}
+  ${SOUPER_GENERALIZE_FILES}
   ${SOUPER_CODEGEN_FILES})
 
 add_library(souperPass SHARED
@@ -314,6 +324,14 @@ add_executable(souper-check
 
 add_executable(hydra
   tools/hydra.cpp
+)
+
+add_executable(chimera
+  tools/chimera.cpp
+)
+
+add_executable(matcher-gen
+  tools/matcher-gen.cpp
 )
 
 add_executable(souper-interpret
@@ -387,7 +405,8 @@ configure_file(
 )
 
 foreach(target souper internal-solver-test lexer-test parser-test souper-check hydra count-insts
-               souper2llvm souper-interpret
+               souper2llvm souper-interpret chimera
+               matcher-gen
                souperExtractor souperInfer souperGeneralize souperInst souperKVStore souperParser
                souperSMTLIB2 souperTool souperPass souperPassProfileAll kleeExpr
                souperCodegen)
@@ -401,7 +420,7 @@ endforeach()
 
 # static
 target_link_libraries(kleeExpr ${LLVM_LIBS} ${LLVM_LDFLAGS})
-target_link_libraries(souperExtractor souperParser souperKVStore souperInfer souperInst kleeExpr souperCodegen)
+target_link_libraries(souperExtractor souperParser souperKVStore souperInst kleeExpr souperCodegen)
 target_link_libraries(souperInfer souperExtractor ${LLVM_LIBS} ${LLVM_LDFLAGS} ${Z3_LIBRARY})
 target_link_libraries(souperGeneralize souperInfer ${LLVM_LIBS} ${LLVM_LDFLAGS} ${Z3_LIBRARY})
 target_link_libraries(souperInst ${LLVM_LIBS} ${LLVM_LDFLAGS})
@@ -417,21 +436,23 @@ target_link_libraries(souperPass ${PASS_LDFLAGS} ${HIREDIS_LIBRARY} ${ALIVE_LIBR
 target_link_libraries(souperPassProfileAll ${PASS_LDFLAGS} ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
 
 # executables
-target_link_libraries(souper souperExtractor souperKVStore souperParser souperSMTLIB2 souperTool kleeExpr ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+target_link_libraries(souper souperInfer souperTool ${Z3_LIBRARY})
 target_link_libraries(internal-solver-test souperSMTLIB2)
 target_link_libraries(lexer-test souperParser)
 target_link_libraries(parser-test souperParser)
-target_link_libraries(souper-check souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
-target_link_libraries(hydra souperTool souperGeneralize souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
-target_link_libraries(souper-interpret souperTool souperExtractor souperKVStore souperSMTLIB2 souperParser ${HIREDIS_LIBRARY} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+target_link_libraries(souper-check souperInfer souperTool kleeExpr ${Z3_LIBRARY})
+target_link_libraries(hydra souperTool souperGeneralize ${Z3_LIBRARY})
+target_link_libraries(chimera  souperTool souperGeneralize ${CLANG_LIBS} ${Z3_LIBRARY})
+target_link_libraries(matcher-gen souperTool ${Z3_LIBRARY})
+target_link_libraries(souper-interpret souperTool ${Z3_LIBRARY})
 target_link_libraries(count-insts souperParser)
 target_link_libraries(souper2llvm souperParser souperCodegen)
-target_link_libraries(extractor_tests souperExtractor souperParser ${GTEST_LIBS} ${ALIVE_LIBRARY})
-target_link_libraries(inst_tests souperInfer souperPass souperInst souperExtractor ${GTEST_LIBS} ${ALIVE_LIBRARY})
-target_link_libraries(parser_tests souperParser ${GTEST_LIBS} ${ALIVE_LIBRARY})
-target_link_libraries(codegen_tests souperCodegen souperInst ${GTEST_LIBS} ${ALIVE_LIBRARY})
-target_link_libraries(interpreter_tests souperInfer souperInst ${GTEST_LIBS} ${ALIVE_LIBRARY})
-target_link_libraries(bulk_tests souperInfer souperInst ${GTEST_LIBS} ${ALIVE_LIBRARY} ${Z3_LIBRARY})
+target_link_libraries(extractor_tests souperExtractor ${GTEST_LIBS})
+target_link_libraries(inst_tests souperInfer souperPass ${GTEST_LIBS})
+target_link_libraries(parser_tests souperParser ${GTEST_LIBS})
+target_link_libraries(codegen_tests souperCodegen souperInst ${GTEST_LIBS})
+target_link_libraries(interpreter_tests souperInfer ${GTEST_LIBS})
+target_link_libraries(bulk_tests souperInfer ${GTEST_LIBS} ${Z3_LIBRARY})
 
 set(TEST_SYNTHESIS "ON" CACHE STRING "Enable additional, computationally intensive synthesis tests")
 set(TEST_LONG_DURATION_SYNTHESIS "" CACHE STRING "Enable long duration (> 10 min) synthesis tests")
@@ -471,6 +492,9 @@ configure_file(${CMAKE_SOURCE_DIR}/utils/cache_dump.in ${CMAKE_BINARY_DIR}/cache
 configure_file(${CMAKE_SOURCE_DIR}/utils/cache_dfa.in ${CMAKE_BINARY_DIR}/cache_dfa @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/utils/cache_import.in ${CMAKE_BINARY_DIR}/cache_import @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/utils/cache_infer.in ${CMAKE_BINARY_DIR}/cache_infer @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/cache_infer_llm.in ${CMAKE_BINARY_DIR}/cache_infer_llm @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/souper-infer-openai.py ${CMAKE_BINARY_DIR}/souper-infer-openai.py @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/souper-infer-ollama.py ${CMAKE_BINARY_DIR}/souper-infer-ollama.py @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/utils/py_souper2llvm.in ${CMAKE_BINARY_DIR}/py_souper2llvm @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/include/souper/Tool/GetSolver.h.in ${CMAKE_BINARY_DIR}/include/souper/Tool/GetSolver.h @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/include/souper/KVStore/KVSocket.h.in ${CMAKE_BINARY_DIR}/include/souper/KVStore/KVSocket.h @ONLY)
@@ -478,5 +502,7 @@ configure_file(${CMAKE_SOURCE_DIR}/utils/redis-unix-socket.conf.in ${CMAKE_BINAR
 
 configure_file(${CMAKE_SOURCE_DIR}/utils/sclang.in ${CMAKE_BINARY_DIR}/sclang @ONLY)
 configure_file(${CMAKE_SOURCE_DIR}/utils/sclang.in ${CMAKE_BINARY_DIR}/sclang++ @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang @ONLY)
+configure_file(${CMAKE_SOURCE_DIR}/utils/mclang.in ${CMAKE_BINARY_DIR}/mclang++ @ONLY)
 
 add_subdirectory(docs)
