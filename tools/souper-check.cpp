@@ -16,6 +16,10 @@
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/KnownBits.h"
 
+#include <chrono>
+#include <sstream>
+#include <iomanip>
+
 #include "souper/Infer/ConstantSynthesis.h"
 #include "souper/Infer/Pruning.h"
 #include "souper/Infer/SynthUtils.h"
@@ -382,12 +386,21 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         OldCost = cost(Rep.Mapping.RHS);
         Rep.Mapping.RHS = 0;
       }
+      
+      auto start_time = std::chrono::high_resolution_clock::now();
       if (std::error_code EC = S->infer(Rep.BPCs, Rep.PCs, Rep.Mapping.LHS,
                                         RHSs, CheckAllGuesses, IC)) {
         llvm::errs() << EC.message() << '\n';
         Ret = 1;
         ++Error;
       }
+      auto end_time = std::chrono::high_resolution_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+      double elapsed_seconds = duration.count() / 1000.0;
+      
+      std::stringstream ss;
+      ss << std::fixed << std::setprecision(2) << elapsed_seconds;
+      std::string time_str = ss.str();
       if (!RHSs.empty()) {
         Rep.Mapping.RHS = RHSs.front();
         ++Success;
@@ -399,9 +412,11 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
           else
             llvm::outs() << "; RHS inferred successfully, but cost regressed";
           llvm::outs() << " (Old= " << OldCost << ", New= " << NewCost <<
-            ", LHS= " << LHSCost << ")\n";
+            ", LHS= " << LHSCost << ")";
+          llvm::outs() << " time " << time_str << "s\n";
         } else {
-          llvm::outs() << "; RHS inferred successfully\n";
+          llvm::outs() << "; RHS inferred successfully";
+          llvm::outs() << " time " << time_str << "s\n";
         }
 
         if (CheckAllGuesses) {
@@ -440,7 +455,8 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         }
       } else {
         ++Fail;
-        llvm::outs() << "; Failed to infer RHS\n";
+        llvm::outs() << "; Failed to infer RHS";
+        llvm::outs() << " time " << elapsed_seconds << "s\n";
         if (PrintRepl || PrintReplSplit) {
           ReplacementContext Context;
           PrintReplacementLHS(llvm::outs(), Rep.BPCs, Rep.PCs,

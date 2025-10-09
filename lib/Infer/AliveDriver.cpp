@@ -379,6 +379,9 @@ souper::AliveDriver::synthesizeConstantsWithCegis(souper::Inst *RHS, InstContext
       if (verify(GWithC, PreCondition)) {
         break;
       } else {
+        if (DebugLevel >= 2) {
+          llvm::errs() << "Constant synthesis verification failed for attempt " << Tried << "\n";
+        }
         continue;
       }
     }
@@ -483,11 +486,10 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
     return false;
 
   if (auto errs = tv.verify()) {
-    if (DebugLevel >= 2) {
+    if (DebugLevel >= 1) {
       std::ostringstream os;
       os << errs << "\n";
-      llvm::errs() << os.str();
-      llvm::errs() << "RHS rejected by Alive2\n";
+      llvm::errs() << "RHS rejected by Alive2:\n" << os.str();
     }
     return false; // TODO: Encode errs into ErrorCode
   } else {
@@ -1042,8 +1044,12 @@ bool souper::isTransformationValid(souper::Inst *LHS, souper::Inst *RHS,
     std::vector<Inst *> Vars;
     findVars(Goal.RHS, Vars);
     AliveDriver Verifier(Goal.LHS, Goal.Pre, IC, Vars);
-    if (!Verifier.verify(Goal.RHS, Goal.Pre))
+    if (!Verifier.verify(Goal.RHS, Goal.Pre)) {
+      if (DebugLevel >= 1) {
+        llvm::errs() << "Verification failed for transformation goal\n";
+      }
       return false;
+    }
   }
   return true;
 }
@@ -1069,5 +1075,9 @@ bool souper::isCandidateInfeasible(souper::Inst* RHS, souper::ValueCache& C,
     }
   }
 
-  return !Pruner.verify(RHS, RHSAssume);
+  bool result = !Pruner.verify(RHS, RHSAssume);
+  if (result && DebugLevel >= 2) {
+    llvm::errs() << "Candidate is infeasible\n";
+  }
+  return result;
 }

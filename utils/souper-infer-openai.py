@@ -3,10 +3,14 @@ import os
 import subprocess
 import argparse
 import redis
-from openai import OpenAI
+import time
+import tempfile
+from openai import AzureOpenAI
 
-client = OpenAI(
+client = AzureOpenAI(
   api_key=os.environ.get("OPENAI_API_KEY"),
+  api_version="2024-02-15-preview",
+  azure_endpoint="https://llm-proxy.perflab.nvidia.com",
 )
 
 log=[{
@@ -164,6 +168,7 @@ infer %3
 %4:i1 = xor %1, %2
 result %4
 
+Do not include any extra text or markdown formatting. Only produce the output in the prescribed syntax.
 """
 }]
 
@@ -181,99 +186,202 @@ def splitOpt(opt):
       appendingToLHS = False
   return lhs.strip(), rhs.strip()
 
+def alpha_renaming(lhs, rhs):
+  """
+  Rename variables in RHS that conflict with variables already defined in LHS.
+  This prevents redefinition errors in Souper IR.
+  """
+  import re
+  
+  # Extract all variable names defined in LHS (left side of assignments)
+  lhs_vars = set()
+  for line in lhs.split('\n'):
+    line = line.strip()
+    if '=' in line and not line.startswith(';') and not line.startswith('//'):
+      # Match pattern like "%0:i32 = " or "%var:i8 = "
+      match = re.match(r'(%\w+):', line)
+      if match:
+        lhs_vars.add(match.group(1))
+  
+  # Extract all variable definitions in RHS that need renaming
+  rhs_lines = rhs.split('\n')
+  renamed_rhs_lines = []
+  rename_map = {}
+  next_var_num = 0
+  
+  # Find the highest numbered variable in LHS to avoid conflicts
+  max_var_num = -1
+  for var in lhs_vars:
+    if var.startswith('%') and var[1:].isdigit():
+      max_var_num = max(max_var_num, int(var[1:]))
+  
+  next_var_num = max_var_num + 1
+  
+  for line in rhs_lines:
+    line = line.strip()
+    if not line:
+      renamed_rhs_lines.append(line)
+      continue
+      
+    # Check if this line defines a variable that conflicts with LHS
+    if '=' in line and not line.startswith(';') and not line.startswith('//'):
+      match = re.match(r'(%\w+):', line)
+      if match:
+        var_name = match.group(1)
+        if var_name in lhs_vars:
+          # Need to rename this variable
+          if var_name not in rename_map:
+            new_var_name = f"%{next_var_num}"
+            rename_map[var_name] = new_var_name
+            next_var_num += 1
+          
+          # Replace the variable definition
+          line = line.replace(var_name + ':', rename_map[var_name] + ':', 1)
+    
+    # Apply any existing renamings to variable uses in this line
+    for old_var, new_var in rename_map.items():
+      # Replace variable uses (but be careful not to replace parts of other variables)
+      # Use word boundaries to ensure we only replace complete variable names
+      line = re.sub(r'\b' + re.escape(old_var) + r'\b', new_var, line)
+    
+    renamed_rhs_lines.append(line)
+  
+  return '\n'.join(renamed_rhs_lines)
+
 def fixit(lhs, rhs):
   opt = lhs + "\n" + rhs
-  filename = "/tmp/" + str(hash(opt)) + ".opt"
-  with open(filename, "w") as f:
+  with tempfile.NamedTemporaryFile(mode='w', suffix='.opt', prefix='souper_fixit_', delete=False) as f:
     f.write(opt)
-  result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-fixit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-  fixed = result.stdout.strip()
-  os.remove(filename)
+    filename = f.name
+  
+  try:
+    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-fixit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    fixed = result.stdout.strip()
+  finally:
+    os.remove(filename)
+  
   return fixed
 
 def verify(lhs, rhs):
   # concatenate lhs and rhs
   opt = lhs + "\n" + rhs
-  filename = "/tmp/" + str(hash(opt)) + ".opt"
-  # write the concatenated string to a file
-  with open(filename, "w") as f:
+  with tempfile.NamedTemporaryFile(mode='w', suffix='.opt', prefix='souper_verify_', delete=False) as f:
     f.write(opt)
-  # Execute the souper-check binary with the concatenated string
-  # and return the stdout of the command
-
-  result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-  os.remove(filename)
+    filename = f.name
+  
+  try:
+    # Execute the souper-check binary with the concatenated string
+    # and return the stdout of the command
+    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-souper-use-alive'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+  finally:
+    os.remove(filename)
+  
   return result
 
-def profit(lhs, rhs):
+def profit(lhs, rhs, archs=["nvptx64", "x86-64", "aarch64", "riscv64"]):
+  opt = lhs + "\n" + rhs
+  with tempfile.NamedTemporaryFile(mode='w', suffix='.opt', prefix='souper_ptx_profit_', delete=False) as f:
+    f.write(opt)
+    filename = f.name
+
+  try:
+    llvm_rhs = subprocess.run(['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-rhs'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    llvm_rhs_ir = llvm_rhs.stdout.strip()
+    
+    llvm_lhs = subprocess.run(['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-lhs'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    llvm_lhs_ir = llvm_lhs.stdout.strip()
+
+    llc_bin = "@CMAKE_BINARY_DIR@/../third_party/llvm-Release-install/bin/llc"
+    
+    profits = []
+    for arch in archs:
+      ptx_lhs = subprocess.run([llc_bin, '-march=' + arch], input=llvm_lhs_ir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+      ptx_rhs = subprocess.run([llc_bin, '-march=' + arch], input=llvm_rhs_ir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+      ptx_lhs_output = ptx_lhs.stdout.strip()
+      ptx_rhs_output = ptx_rhs.stdout.strip()
+
+      # Count non-empty, non-comment lines in PTX output
+      lhs_lines = len([line for line in ptx_lhs_output.split('\n') if line.strip() and not line.strip().startswith('//')])
+      rhs_lines = len([line for line in ptx_rhs_output.split('\n') if line.strip() and not line.strip().startswith('//')])
+      
+      profits.append(lhs_lines - rhs_lines)
+    
+    return profits
+  finally:
+    os.remove(filename)
+
+def old_profit(lhs, rhs):
   # concatenate lhs and rhs
   opt = lhs + "\n" + rhs
-  filename = "/tmp/" + str(hash(opt)) + ".opt"
-  # write the concatenated string to a file
-  with open(filename, "w") as f:
+  with tempfile.NamedTemporaryFile(mode='w', suffix='.opt', prefix='souper_profit_', delete=False) as f:
     f.write(opt)
-  # Execute the souper-check binary with the concatenated string
-  # and return the stdout of the command
-
-  result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-print-profit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-  os.remove(filename)
-  return int(result.stdout.strip())
-
-# # Needs to be more sophisticated?
-# def flip_model(m):
-#   if m == "gpt-4":
-#     return "gpt-3.5-turbo"
-#   elif m == "gpt-3.5-turbo":
-#     return "gpt-4"
-#   else:
-#     return "gpt-3.5-turbo"
+    filename = f.name
+  
+  try:
+    # Execute the souper-check binary with the concatenated string
+    # and return the stdout of the command
+    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-print-profit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return int(result.stdout.strip())
+  finally:
+    os.remove(filename)
 
 def sort_results(results):
-  return sorted(results, key=lambda x: x['profit'], reverse=True)
+  return sorted(results, key=lambda x: max(x['profits']) if isinstance(x['profits'], list) else x['profits'], reverse=True)
 
 def process_response(lhs, response, min_profit):
   result = dict()
   result['valid'] = list()
   result['invalid'] = list()
+  result['fixit_count'] = 0
   for choice in response.choices:
     rhs = choice.message.content
+    # Apply alpha renaming to avoid variable redefinition conflicts
+    rhs = alpha_renaming(lhs, rhs)
     oracle = verify(lhs, rhs)
     # print(rhs)
     if oracle.returncode == 0 and "LGTM" in oracle.stdout:
       # result['valid'].append(rhs)
-      p = profit(lhs, rhs)
-      if p >= min_profit:
+      profits = profit(lhs, rhs)
+      if any(p >= min_profit for p in profits):
         result['valid'].append({
           "rhs": rhs,
-          "profit": p,
+          "profits": profits,
+          "used_fixit": False,
         })
       else:
         result['invalid'].append({
           "role": "assistant",
           "content": rhs,
         })
+        archs = ["nvptx64", "x86-64", "aarch64", "riscv64"]
+        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(archs, profits))
         result['invalid'].append({
           "role": "user",
-          "content": "Not profitable enough: profit " + str(p) + " is less than the "
+          "content": "Not profitable enough: " + profit_str + " are all less than the "
           "minimum acceptable profit :" + str(min_profit),
         })
     elif (fixed:= fixit(lhs, rhs)) != "":
+      result['fixit_count'] += 1
       newlhs, newrhs = splitOpt(fixed)
-      p = profit(newlhs, newrhs)
+      profits = profit(newlhs, newrhs)
 
-      if p >= min_profit:
+      if any(p >= min_profit for p in profits):
         result['valid'].append({
           "rhs": newrhs,
-          "profit": p,
+          "profits": profits,
+          "used_fixit": True,
         })
       else:
         result['invalid'].append({
           "role": "assistant",
           "content": newrhs,
         })
+        archs = ["nvptx64", "x86-64", "aarch64", "riscv64"]
+        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(archs, profits))
         result['invalid'].append({
           "role": "user",
-          "content": "Not profitable enough: profit " + str(p) + " is less than the "
+          "content": "Not profitable enough: " + profit_str + " are all less than the "
           "minimum acceptable profit :" + str(min_profit),
         })
     else:
@@ -300,18 +408,25 @@ def process_response(lhs, response, min_profit):
 
   return result
 
-def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_profit = 1):
+def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1):
   global log
   log.append({
     "role": "user",
     "content": lhs,
     })
 
+  start_time = time.time()
   tries = 0
   invalid = set()
+  reasoning = "minimal"
+  reasoning_models = ["gpt-5-20250807", "qwen-qwen-235b"]
   while True:
-    chat_completion = client.chat.completions.create(
-      messages = log, model=model, n = 1, temperature=0.7, presence_penalty=0.5, frequency_penalty=0.5)
+    if (model in reasoning_models):
+      chat_completion = client.chat.completions.create(
+        messages = log, model=model, n = 1, reasoning_effort=reasoning)
+    else:
+      chat_completion = client.chat.completions.create(
+        messages = log, model=model, n = 1)
 
     tries += 1
     if debug:
@@ -322,7 +437,16 @@ def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_prof
     if results['valid']:
       if debug:
         print ("Valid results: ", results['valid'])
-      return sort_results(results['valid'])[0]['rhs'] + "\n" + "; tries " + str(tries) + "\n"
+      best_result = sort_results(results['valid'])[0]
+      elapsed_time = time.time() - start_time
+      comment = "; tries " + str(tries)
+      comment += " fixit " + ("1" if best_result['used_fixit'] else "0")
+      # Format profits as "arch1 p1 arch2 p2 ..."
+      archs = ["nvptx64", "x86-64", "aarch64", "riscv64"]
+      profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(archs, best_result['profits']))
+      comment += " " + profit_str
+      comment += " time {:.2f}s".format(elapsed_time)
+      return (True, best_result['rhs'] + "\n" + comment + "\n")
     else :
       if debug:
         print("Invalid results: ", results['invalid'])
@@ -338,7 +462,8 @@ def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_prof
     if not foundNewInvalid:
       if debug:
         print("No new invalid results are generated. Quitting.")
-      return "Failed to infer RHS."
+      elapsed_time = time.time() - start_time
+      return (False, "; Failed to infer RHS tries " + str(tries) + " fixit 0 time {:.2f}s\n".format(elapsed_time))
 
     if tries >= max_tries/2:
       log = log[0:2] # clear the log, take a fresh look at the problem
@@ -349,7 +474,16 @@ def infer(lhs, debug=False, model="gpt-4-turbo-preview", max_tries = 4, min_prof
     #   model = flip_model(model)
 
     if tries >= max_tries:
-      return "Failed to infer RHS."
+      elapsed_time = time.time() - start_time
+      return (False, "; Failed to infer RHS tries " + str(tries) + " fixit 0 time {:.2f}s\n".format(elapsed_time))
+
+
+# Usable models so far
+# claude-sonnet-4-20250514
+# gpt-4-turbo
+# qwen-qwen-235b
+# nvidia-llama-3.1-nemotron-ultra-253b-v1
+# gpt-5-20250807
 
 if __name__ == "__main__":
 
@@ -358,9 +492,11 @@ if __name__ == "__main__":
     description='souper-check -infer-rhs clone using OpenAI',)
 
   parser.add_argument('filename', nargs='?')
-  parser.add_argument('-d', '-souper-debug-level', default=0, help='Debug level')
+  parser.add_argument('-d', '-souper-debug-level', default=0, type=int, help='Debug level')
   parser.add_argument('-c', '-souper-external-cache',
                     action='store_true')
+  parser.add_argument('-i', '--improve-profit', default=1, help='Try to improve profit')
+  parser.add_argument('-m', '--model', help='Model to use', default="nvidia-llama-3.1-nemotron-ultra-253b-v1")
   args = parser.parse_args()
 
   lhs = ""
@@ -369,25 +505,34 @@ if __name__ == "__main__":
   else:
     lhs = sys.stdin.read()
 
-
   if not args.c:
-    rhs = infer(lhs, int(args.d) > 0)
+    success, rhs = infer(lhs, args.model, args.d > 0)
     print(rhs)
   else:
     r = redis.Redis(host='localhost', port=6379, decode_responses=True)
     if rhs := r.hget(lhs, "rhs"):
       print(lhs, rhs)
     else :
-      rhs = infer(lhs, int(args.d) > 0, min_profit=1)
-      if rhs == "Failed to infer RHS.":
+      success, rhs = infer(lhs, args.model, args.d > 0, min_profit=1)
+      if not success:
         r.hset(lhs, "noinfer", "noinfer")
       else :
-        rhs2 = infer(lhs, int(args.d) > 0, min_profit=2)
-        if rhs2 == "Failed to infer RHS.":
-          r.hset(lhs, "rhs", rhs)
+        success2, rhs2 = infer(lhs, args.model, args.d > 0, min_profit=2)
+        if not success2:
+          # Only store RHS if it contains meaningful content (non-empty and has non-whitespace)
+          if rhs and rhs.strip():
+            r.hset(lhs, "rhs", rhs)
+          else:
+            r.hset(lhs, "noinfer", "noinfer")
         else:
-          r.hset(lhs, "rhs", rhs2)
-          print(rhs2)
+          # Only store RHS2 if it contains meaningful content
+          if rhs2 and rhs2.strip():
+            r.hset(lhs, "rhs", rhs2)
+            print(rhs2)
+          else:
+            # Fall back to rhs if rhs2 is empty but rhs has content
+            if rhs and rhs.strip():
+              r.hset(lhs, "rhs", rhs)
+            else:
+              r.hset(lhs, "noinfer", "noinfer")
       print(rhs)
-
-

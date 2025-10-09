@@ -24,7 +24,7 @@ use Time::HiRes;
 
 # eval { require Sys::CPU; Sys::CPU->import(); };
 
-my $NPROCS = 8;
+my $NPROCS = 4;
 # $NPROCS = Sys::CPU::cpu_count() if defined(&Sys::CPU::cpu_count);
 
 my $CPU_LIMIT = 15 * 60;
@@ -69,7 +69,7 @@ GetOptions(
 
 my $REDISPORT = 6379;
 
-my $SOUPER_CHECK = "timeout 60 python3 @CMAKE_BINARY_DIR@/souper-infer-openai.py -souper-external-cache";
+my $SOUPER_CHECK = "timeout 120 python3 @CMAKE_BINARY_DIR@/souper-infer-openai.py -souper-external-cache";
 
 my $r;
 if ($UNIX) {
@@ -229,8 +229,9 @@ sub byrank {
 
 foreach my $k (sort byrank @keys) {
     status() if $VERBOSE;
-    my $result = $r->hget($k, "cache-infer-tag");
-    if (defined $result && $result eq $tag) {
+    my $tag_result = $r->hget($k, "cache-infer-tag");
+    my $rhs_result = $r->hget($k, "rhs");
+    if (defined $tag_result && $tag_result eq $tag && !defined $rhs_result) {
         $skip++;
         next;
     }

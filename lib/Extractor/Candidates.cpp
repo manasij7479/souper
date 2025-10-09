@@ -86,7 +86,7 @@ static llvm::cl::opt<bool> PrintSignBitsAtReturn(
 static llvm::cl::opt<bool> NoExternalUses(
     "no-external-uses",
     llvm::cl::desc("Do not mark external uses. (default=false)"),
-    llvm::cl::init(false));
+    llvm::cl::init(true));
 static llvm::cl::opt<bool> PrintRangeAtReturn(
     "print-range-at-return",
     llvm::cl::desc("Print range inforation in each value returned from a function (default=false)"),
@@ -98,7 +98,12 @@ static llvm::cl::opt<bool> PrintDemandedBitsAtReturn(
 static llvm::cl::opt<bool> ExtractPhi(
     "extract-phi",
     llvm::cl::desc("Follow PHI nodes when extracting from LLVM (default=true)"),
-    llvm::cl::init(true));
+    llvm::cl::init(false));
+static llvm::cl::opt<bool> ExtractFreeze(
+    "extract-freeze",
+    llvm::cl::desc("Extract freeze instructions (default=true)"),
+    llvm::cl::init(false));
+
 
 extern bool UseAlive;
 
@@ -236,7 +241,7 @@ Inst *ExprBuilder::makeArrayRead(Value *V) {
   if (HarvestDataFlowFacts) {
     if (V->getType()->isIntOrIntVectorTy(Width) ||
         V->getType()->isPtrOrPtrVectorTy()) {
-      computeKnownBits(V, Known, DL);
+      // computeKnownBits(V, Known, DL);
       NonZero = isKnownNonZero(V, DL);
       NonNegative = isKnownNonNegative(V, DL);
       PowOfTwo = isKnownToBeAPowerOfTwo(V, DL);
@@ -244,19 +249,19 @@ Inst *ExprBuilder::makeArrayRead(Value *V) {
       NumSignBits = ComputeNumSignBits(V, DL);
     }
 
-    if (V->getType()->isIntegerTy()) {
-      if (Instruction *I = dyn_cast<Instruction>(V)) {
-        // TODO: Find out a better way to get the current basic block
-        // with this approach, we might be restricting the constant
-        // range harvesting. Because range info. might be coming from
-        // llvm values other than instruction.
-        auto LVIRange = LVI.getConstantRange(V, I, /*UndefAllowed=*/false);
-        auto SC = SE.getSCEV(V);
-        auto R1 = LVIRange.intersectWith(SE.getSignedRange(SC));
-        auto R2 = LVIRange.intersectWith(SE.getUnsignedRange(SC));
-        Range = getSetSize(R1).ult(getSetSize(R2)) ? R1 : R2;
-      }
-    }
+    // if (V->getType()->isIntegerTy()) {
+    //   if (Instruction *I = dyn_cast<Instruction>(V)) {
+    //     // TODO: Find out a better way to get the current basic block
+    //     // with this approach, we might be restricting the constant
+    //     // range harvesting. Because range info. might be coming from
+    //     // llvm values other than instruction.
+    //     auto LVIRange = LVI.getConstantRange(V, I, /*UndefAllowed=*/false);
+    //     auto SC = SE.getSCEV(V);
+    //     auto R1 = LVIRange.intersectWith(SE.getSignedRange(SC));
+    //     auto R2 = LVIRange.intersectWith(SE.getUnsignedRange(SC));
+    //     Range = getSetSize(R1).ult(getSetSize(R2)) ? R1 : R2;
+    //   }
+    // }
   }
 
   return IC.createVar(Width, Name, Range, Known.Zero, Known.One, NonZero, NonNegative,
@@ -543,6 +548,9 @@ Inst *ExprBuilder::buildHelper(Value *V) {
       return IC.getPhi(BI.B, Incomings);
     }
   } else if (auto FI = dyn_cast<FreezeInst>(V)) {
+    if (!ExtractFreeze) {
+      return makeArrayRead(V);
+    }
     Inst *Op0 = get(FI->getOperand(0));
     return IC.getInst(Inst::Freeze, Op0->Width, {Op0});
   } else if (auto EV = dyn_cast<ExtractValueInst>(V)) {
@@ -1044,6 +1052,9 @@ void ExtractExprCandidates(Function &F, const LoopInfo &LI, DemandedBits &DB,
       In->HarvestFrom = nullptr;
       if (MarkExternalUses)
         EB.markExternalUses(In);
+      if (In->K == Inst::Var) {
+        continue; // don't extract single vars.
+      }
       BCS->Replacements.emplace_back(&I, InstMapping(In, 0));
       assert(EB.get(&I)->K == Inst::Const || EB.get(&I)->hasOrigin(&I));
     }
