@@ -286,9 +286,9 @@ if (getenv("SOUPER_DEBUG") && $souper) {
     print STDERR "\n";
 }
 
-foreach my $e (keys %ENV) {
-    next unless $e =~ /^SOUPER_/;
-    die "unexpected Souper-related environment variable '${e}'" unless $whitelist{$e};
-}
+# foreach my $e (keys %ENV) {
+#     next unless $e =~ /^SOUPER_/;
+#     die "unexpected Souper-related environment variable '${e}'" unless $whitelist{$e};
+# }
     
 exec @ARGV;

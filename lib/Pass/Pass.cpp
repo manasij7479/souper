@@ -434,11 +434,12 @@ public:
       llvm::report_fatal_error(("function " + F.getName() + " broken before Souper").str().c_str());
 
     bool res;
+    size_t max_iterations = 10;
     do {
       res = runOnFunction(F, FAM);
       if (res && verifyFunction(F))
         llvm::report_fatal_error("function broken after Souper changed it");
-    } while (res);
+    } while (res && max_iterations--);
 
     return PreservedAnalyses::none();
   }

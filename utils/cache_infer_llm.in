@@ -24,7 +24,7 @@ use Time::HiRes;
 
 # eval { require Sys::CPU; Sys::CPU->import(); };
 
-my $NPROCS = 4;
+my $NPROCS = 16;
 # $NPROCS = Sys::CPU::cpu_count() if defined(&Sys::CPU::cpu_count);
 
 my $CPU_LIMIT = 15 * 60;

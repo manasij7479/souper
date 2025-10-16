@@ -5,13 +5,88 @@ import argparse
 import redis
 import time
 import tempfile
+import random
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from openai import AzureOpenAI
+from openai import APIConnectionError, RateLimitError, APIError
+from types import SimpleNamespace
+import logging
+
+logger = logging.getLogger("souper.infer")
+
+# Timeout (in seconds) for all invocations of the souper-check binary
+S_CHECK_TIMEOUT_SECONDS = 120
+
+# Default architectures for profit calculation
+DEFAULT_ARCHITECTURES = ["x86-64", "aarch64", "riscv64"]
 
 client = AzureOpenAI(
   api_key=os.environ.get("OPENAI_API_KEY"),
   api_version="2024-02-15-preview",
   azure_endpoint="https://llm-proxy.perflab.nvidia.com",
 )
+
+def call_openai_with_retry(func, max_retries=5, initial_delay=1.0, max_delay=60.0, request_timeout=60.0, debug=False):
+  """
+  Call OpenAI API with exponential backoff retry logic.
+  
+  Args:
+    func: Function to call (should return the API response)
+    max_retries: Maximum number of retry attempts
+    initial_delay: Initial delay in seconds
+    max_delay: Maximum delay in seconds
+    debug: Whether to print debug information
+  
+  Returns:
+    API response or raises the last exception
+  """
+  for attempt in range(max_retries + 1):
+    if debug:
+      logger.debug("openai attempt=%d/%d timeout=%ss", attempt + 1, max_retries + 1, request_timeout)
+    try:
+      if request_timeout and request_timeout > 0:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+          future = executor.submit(func)
+          return future.result(timeout=request_timeout)
+      else:
+        return func()
+    except FuturesTimeoutError as e:
+      if attempt == max_retries:
+        raise TimeoutError(f"OpenAI API request timed out after {request_timeout}s")
+      delay = min(initial_delay * (2 ** attempt), max_delay)
+      jitter = random.uniform(0.1, 0.3) * delay
+      total_delay = delay + jitter
+      if debug:
+        logger.warning("openai timeout attempt=%d/%d retry_in=%.2fs err=%s", attempt + 1, max_retries + 1, total_delay, e)
+      time.sleep(total_delay)
+    except (APIConnectionError, RateLimitError) as e:
+      if attempt == max_retries:
+        # Last attempt failed, re-raise the exception
+        raise e
+      
+      # Calculate delay with exponential backoff and jitter
+      delay = min(initial_delay * (2 ** attempt), max_delay)
+      jitter = random.uniform(0.1, 0.3) * delay
+      total_delay = delay + jitter
+      
+      if debug:
+        logger.warning("openai transient error attempt=%d/%d retry_in=%.2fs err=%s", attempt + 1, max_retries + 1, total_delay, e)
+      
+      time.sleep(total_delay)
+    except APIError as e:
+      # Retry once for specific 400 error where a message content is empty
+      msg = str(e)
+      status_code = getattr(e, 'status_code', None)
+      if status_code == 400 and "least 1 character" in msg:
+        if attempt < 1:
+          if debug:
+            logger.warning("openai 400 empty-content; retrying once err=%s", e)
+          time.sleep(0.5)
+          continue
+      # For other API errors, don't retry
+      if debug:
+        logger.error("openai API error (no retry) err=%s", e)
+      raise e
 
 log=[{
 "role": "system",
@@ -47,6 +122,7 @@ Try to come up with new constants in the result by combining existing ones with 
 Avoid using the same constant in the replacement as the original.
 Avoid using the poison versions of the operations unless necessary for the optimization to be valid.
 Make sure the generated replacement is well-formed and well-typed.
+Make sure the generated replacement does not introduce a new path condition (pc).
 If nothing else works, try elementary algebraic operations on the variables.
 
 Most operations cost 1.
@@ -182,9 +258,41 @@ def splitOpt(opt):
       lhs += line + "\n"
     else:
       rhs += line + "\n"
-    if line.startswith("infer"):
+    # Switch to RHS when we hit the infer line (ignore leading spaces)
+    if line.lstrip().startswith("infer"):
       appendingToLHS = False
   return lhs.strip(), rhs.strip()
+
+def add_result_line_if_not_present(rhs):
+  """
+  Add a 'result %a' line if not present, where %a is the last binding in the RHS.
+  """
+  import re
+  
+  lines = rhs.strip().split('\n')
+  
+  # Check if result line already exists
+  for line in lines:
+    if line.strip().startswith('result'):
+      return rhs  # Already has result line
+  
+  # Find the last variable binding
+  last_var = None
+  for line in lines:
+    line = line.strip()
+    if '=' in line and not line.startswith(';') and not line.startswith('//'):
+      # Match patterns like "%z:i32 = " or "%z = "
+      match = re.match(r'(%\w+)(?::\w+)?\s*=', line)
+      if match:
+        last_var = match.group(1)
+  
+  # Add result line if we found a last variable
+  if last_var:
+    added = rhs + '\nresult ' + last_var
+    logger.debug("added missing result line using last_var=%s", last_var)
+    return added
+  else:
+    return rhs  # No variables found, return as is
 
 def alpha_renaming(lhs, rhs):
   """
@@ -197,9 +305,9 @@ def alpha_renaming(lhs, rhs):
   lhs_vars = set()
   for line in lhs.split('\n'):
     line = line.strip()
-    if '=' in line and not line.startswith(';') and not line.startswith('//'):
-      # Match pattern like "%0:i32 = " or "%var:i8 = "
-      match = re.match(r'(%\w+):', line)
+    if '=' in line and not line.startswith(';') and not line.startswith('//') and not line.startswith('infer') and not line.startswith('result'):
+      # Match patterns like "%0:i32 = ", "%var:i8 = ", "%z = ", etc.
+      match = re.match(r'(%\w+)(?::\w+)?\s*=', line)
       if match:
         lhs_vars.add(match.group(1))
   
@@ -217,6 +325,7 @@ def alpha_renaming(lhs, rhs):
   
   next_var_num = max_var_num + 1
   
+  rename_count = 0
   for line in rhs_lines:
     line = line.strip()
     if not line:
@@ -224,8 +333,9 @@ def alpha_renaming(lhs, rhs):
       continue
       
     # Check if this line defines a variable that conflicts with LHS
-    if '=' in line and not line.startswith(';') and not line.startswith('//'):
-      match = re.match(r'(%\w+):', line)
+    if '=' in line and not line.startswith(';') and not line.startswith('//') and not line.startswith('result'):
+      # Match patterns like "%z:i32 = " or "%z = "
+      match = re.match(r'(%\w+)(?::\w+)?\s*=', line)
       if match:
         var_name = match.group(1)
         if var_name in lhs_vars:
@@ -234,9 +344,15 @@ def alpha_renaming(lhs, rhs):
             new_var_name = f"%{next_var_num}"
             rename_map[var_name] = new_var_name
             next_var_num += 1
+            rename_count += 1
           
-          # Replace the variable definition
-          line = line.replace(var_name + ':', rename_map[var_name] + ':', 1)
+          # Replace the variable definition - handle both typed and untyped variables
+          if ':' in line.split('=')[0]:
+            # Typed variable like "%z:i32 = "
+            line = re.sub(r'%' + re.escape(var_name[1:]) + r'(?=:)', rename_map[var_name], line)
+          else:
+            # Untyped variable like "%z = "
+            line = line.replace(var_name + ' =', rename_map[var_name] + ' =', 1)
     
     # Apply any existing renamings to variable uses in this line
     for old_var, new_var in rename_map.items():
@@ -246,6 +362,8 @@ def alpha_renaming(lhs, rhs):
     
     renamed_rhs_lines.append(line)
   
+  if rename_count:
+    logger.debug("alpha_renaming applied; count=%d map=%s", rename_count, rename_map)
   return '\n'.join(renamed_rhs_lines)
 
 def fixit(lhs, rhs):
@@ -255,8 +373,10 @@ def fixit(lhs, rhs):
     filename = f.name
   
   try:
-    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-fixit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-fixit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=S_CHECK_TIMEOUT_SECONDS)
     fixed = result.stdout.strip()
+  except subprocess.TimeoutExpired:
+    fixed = ""
   finally:
     os.remove(filename)
   
@@ -272,40 +392,105 @@ def verify(lhs, rhs):
   try:
     # Execute the souper-check binary with the concatenated string
     # and return the stdout of the command
-    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-souper-use-alive'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-souper-use-alive'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=S_CHECK_TIMEOUT_SECONDS)
+  except subprocess.TimeoutExpired as e:
+    result = SimpleNamespace(returncode=1, stdout="", stderr="verification timeout")
+    logger.warning("souper-check verification timeout")
   finally:
     os.remove(filename)
   
   return result
 
-def profit(lhs, rhs, archs=["nvptx64", "x86-64", "aarch64", "riscv64"]):
+def profit(lhs, rhs, archs=None):
+  if archs is None:
+    archs = DEFAULT_ARCHITECTURES
+    
   opt = lhs + "\n" + rhs
   with tempfile.NamedTemporaryFile(mode='w', suffix='.opt', prefix='souper_ptx_profit_', delete=False) as f:
     f.write(opt)
     filename = f.name
 
   try:
-    llvm_rhs = subprocess.run(['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-rhs'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    llvm_rhs_ir = llvm_rhs.stdout.strip()
+    # Pre-compute LLVM IR for efficiency (used by multiple modes)
+    llvm_rhs_ir_raw = None
+    llvm_lhs_ir_raw = None
+    llvm_lhs_ir = None
+    llvm_rhs_ir = None
     
-    llvm_lhs = subprocess.run(['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-lhs'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    llvm_lhs_ir = llvm_lhs.stdout.strip()
+    # Check if we need LLVM IR for any mode
+    needs_llvm = any(arch in ["llvmir"] or arch not in ["souperir"] for arch in archs)
+    
+    if needs_llvm:
+      try:
+        llvm_rhs = subprocess.run(['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-rhs'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        llvm_rhs_ir_raw = llvm_rhs.stdout.strip()
+      except subprocess.TimeoutExpired:
+        llvm_rhs_ir_raw = None
+        logger.warning("souper2llvm -rhs timeout; skipping llvm profit for this candidate")
+      
+      try:
+        llvm_lhs = subprocess.run(['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-lhs'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        llvm_lhs_ir_raw = llvm_lhs.stdout.strip()
+      except subprocess.TimeoutExpired:
+        llvm_lhs_ir_raw = None
+        logger.warning("souper2llvm -lhs timeout; skipping llvm profit for this candidate")
 
-    llc_bin = "@CMAKE_BINARY_DIR@/../third_party/llvm-Release-install/bin/llc"
-    
+      # Pass through opt -passes=instcombine to apply LLVM optimizations
+      opt_bin = "@CMAKE_BINARY_DIR@/../third_party/llvm-Release-install/bin/opt"
+      
+      try:
+        opt_lhs = subprocess.run([opt_bin, '-S', '-O3'], input=llvm_lhs_ir_raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        llvm_lhs_ir = opt_lhs.stdout.strip()
+      except subprocess.TimeoutExpired:
+        llvm_lhs_ir = None
+        logger.warning("opt O3 lhs timeout")
+      
+      try:
+        opt_rhs = subprocess.run([opt_bin, '-S', '-O3'], input=llvm_rhs_ir_raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        llvm_rhs_ir = opt_rhs.stdout.strip()
+      except subprocess.TimeoutExpired:
+        llvm_rhs_ir = None
+        logger.warning("opt O3 rhs timeout")
+
     profits = []
     for arch in archs:
-      ptx_lhs = subprocess.run([llc_bin, '-march=' + arch], input=llvm_lhs_ir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-      ptx_rhs = subprocess.run([llc_bin, '-march=' + arch], input=llvm_rhs_ir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+      if arch == "souperir":
+        # Use souper-check -print-profit
+        try:
+          result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-print-profit'], 
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=S_CHECK_TIMEOUT_SECONDS)
+          profit_value = int(result.stdout.strip()) if result.stdout.strip() else 0
+          profits.append(profit_value)
+        except (ValueError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+          profits.append(0)
+      elif arch == "llvmir":
+        # Count LLVM IR lines
+        try:
+          lhs_lines = len([line for line in llvm_lhs_ir.split('\n') if line.strip() and not line.strip().startswith(';')])
+          rhs_lines = len([line for line in llvm_rhs_ir.split('\n') if line.strip() and not line.strip().startswith(';')])
+          profits.append(lhs_lines - rhs_lines)
+        except:
+          profits.append(0)
+      else:
+        # Regular architecture - use llc
+        try:
+          llc_bin = "@CMAKE_BINARY_DIR@/../third_party/llvm-Release-install/bin/llc"
+          llc_common = [llc_bin, '-march=' + arch]
+          if arch == 'riscv64':
+            llc_common = llc_common + ['-mattr=+c,+m,+b,+f,+d,+q,+zfh']
+          ptx_lhs = subprocess.run(llc_common, input=llvm_lhs_ir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+          ptx_rhs = subprocess.run(llc_common, input=llvm_rhs_ir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
 
-      ptx_lhs_output = ptx_lhs.stdout.strip()
-      ptx_rhs_output = ptx_rhs.stdout.strip()
+          ptx_lhs_output = ptx_lhs.stdout.strip()
+          ptx_rhs_output = ptx_rhs.stdout.strip()
 
-      # Count non-empty, non-comment lines in PTX output
-      lhs_lines = len([line for line in ptx_lhs_output.split('\n') if line.strip() and not line.strip().startswith('//')])
-      rhs_lines = len([line for line in ptx_rhs_output.split('\n') if line.strip() and not line.strip().startswith('//')])
-      
-      profits.append(lhs_lines - rhs_lines)
+          # Count non-empty, non-comment lines in assembly output
+          lhs_lines = len([line for line in ptx_lhs_output.split('\n') if line.strip() and not line.strip().startswith('//')])
+          rhs_lines = len([line for line in ptx_rhs_output.split('\n') if line.strip() and not line.strip().startswith('//')])
+          
+          profits.append(lhs_lines - rhs_lines)
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+          profits.append(0)
     
     return profits
   finally:
@@ -321,7 +506,7 @@ def old_profit(lhs, rhs):
   try:
     # Execute the souper-check binary with the concatenated string
     # and return the stdout of the command
-    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-print-profit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(['@CMAKE_BINARY_DIR@/souper-check', filename, '-print-profit'] , stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=S_CHECK_TIMEOUT_SECONDS)
     return int(result.stdout.strip())
   finally:
     os.remove(filename)
@@ -329,33 +514,64 @@ def old_profit(lhs, rhs):
 def sort_results(results):
   return sorted(results, key=lambda x: max(x['profits']) if isinstance(x['profits'], list) else x['profits'], reverse=True)
 
-def process_response(lhs, response, min_profit):
+def process_response(lhs, response, min_profit, debug_level=0):
   result = dict()
   result['valid'] = list()
   result['invalid'] = list()
   result['fixit_count'] = 0
   for choice in response.choices:
-    rhs = choice.message.content
+    rhs = choice.message.content if getattr(choice, 'message', None) else None
+    # Skip empty/whitespace-only outputs from the model; add a guidance message instead
+    if not rhs or not str(rhs).strip():
+      result['invalid'].append({
+        "role": "user",
+        "content": "Empty output. Please produce only the RHS lines for the optimization, ending with a result line.",
+      })
+      if debug_level >= 1:
+        logger.info("Skipping empty completion from model")
+      continue
+    # Normalize to string
+    rhs = str(rhs)
+    # Add result line if not present
+    rhs = add_result_line_if_not_present(rhs)
     # Apply alpha renaming to avoid variable redefinition conflicts
     rhs = alpha_renaming(lhs, rhs)
+    
+    # Check if RHS introduces a new path condition
+    if "pc " in rhs:
+      result['invalid'].append({
+        "role": "assistant",
+        "content": rhs,
+      })
+      result['invalid'].append({
+        "role": "user",
+        "content": "RHS can not have a new path condition.",
+      })
+      continue
+    
     oracle = verify(lhs, rhs)
     # print(rhs)
     if oracle.returncode == 0 and "LGTM" in oracle.stdout:
       # result['valid'].append(rhs)
       profits = profit(lhs, rhs)
       if any(p >= min_profit for p in profits):
+        if debug_level >= 1:
+          logger.info("Accepted candidate; profits=%s", profits)
+          logger.info("Accepted RHS:\n%s", rhs)
         result['valid'].append({
           "rhs": rhs,
           "profits": profits,
           "used_fixit": False,
         })
       else:
+        if debug_level >= 1:
+          logger.info("Rejected by profit; profits=%s min=%d", profits, min_profit)
+          logger.info("Rejected RHS (profit):\n%s", rhs)
         result['invalid'].append({
           "role": "assistant",
           "content": rhs,
         })
-        archs = ["nvptx64", "x86-64", "aarch64", "riscv64"]
-        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(archs, profits))
+        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(DEFAULT_ARCHITECTURES, profits))
         result['invalid'].append({
           "role": "user",
           "content": "Not profitable enough: " + profit_str + " are all less than the "
@@ -364,38 +580,54 @@ def process_response(lhs, response, min_profit):
     elif (fixed:= fixit(lhs, rhs)) != "":
       result['fixit_count'] += 1
       newlhs, newrhs = splitOpt(fixed)
+      used_fixit_flag = True
+      if not newrhs or not newrhs.strip():
+        if debug_level >= 1:
+          logger.info("fixit produced empty RHS; falling back to pre-fixit rhs")
+        newlhs, newrhs = lhs, rhs
+        used_fixit_flag = False
       profits = profit(newlhs, newrhs)
 
       if any(p >= min_profit for p in profits):
+        if debug_level >= 1:
+          logger.info("Accepted candidate (fixit=%s); profits=%s", used_fixit_flag, profits)
+          logger.info("Accepted RHS:\n%s", newrhs)
         result['valid'].append({
           "rhs": newrhs,
           "profits": profits,
-          "used_fixit": True,
+          "used_fixit": used_fixit_flag,
         })
       else:
         result['invalid'].append({
           "role": "assistant",
           "content": newrhs,
         })
-        archs = ["nvptx64", "x86-64", "aarch64", "riscv64"]
-        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(archs, profits))
+        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(DEFAULT_ARCHITECTURES, profits))
         result['invalid'].append({
           "role": "user",
           "content": "Not profitable enough: " + profit_str + " are all less than the "
           "minimum acceptable profit :" + str(min_profit),
         })
     else:
-      result['invalid'].append({
-        "role": "assistant",
-        "content": rhs,
-      })
+      # Only record assistant content if non-empty to avoid API 400 on next turn
+      if rhs and rhs.strip():
+        result['invalid'].append({
+          "role": "assistant",
+          "content": rhs,
+        })
 
       if oracle.stderr.strip() != "":
+        if debug_level >= 1:
+          logger.info("Rejected by verification (stderr):\n%s", oracle.stderr)
+          logger.info("Rejected RHS (verify):\n%s", rhs)
         result['invalid'].append({
         "role": "user",
         "content": "Error : " + oracle.stderr,
       })
       elif oracle.stdout.strip() != "":
+        if debug_level >= 1:
+          logger.info("Rejected by verification (stdout):\n%s", oracle.stdout)
+          logger.info("Rejected RHS (verify):\n%s", rhs)
         result['invalid'].append({
         "role": "user",
         "content": "The result is invalid for this input : " + oracle.stdout,
@@ -405,10 +637,9 @@ def process_response(lhs, response, min_profit):
           "role": "user",
           "content": "Error, please try again.",
         })
-
   return result
 
-def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1):
+def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1, debug_level: int = 0):
   global log
   log.append({
     "role": "user",
@@ -416,40 +647,61 @@ def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1):
     })
 
   start_time = time.time()
+  overall_timeout = 300.0
   tries = 0
   invalid = set()
   reasoning = "minimal"
   reasoning_models = ["gpt-5-20250807", "qwen-qwen-235b"]
   while True:
-    if (model in reasoning_models):
-      chat_completion = client.chat.completions.create(
-        messages = log, model=model, n = 1, reasoning_effort=reasoning)
-    else:
-      chat_completion = client.chat.completions.create(
-        messages = log, model=model, n = 1)
+    # Overall timeout guard
+    if time.time() - start_time > overall_timeout:
+      if debug:
+        logger.warning("overall inference timeout reached")
+      elapsed_time = time.time() - start_time
+      return (False, "; Failed to infer RHS tries " + str(tries) + " fixit 0 time {:.2f}s\n".format(elapsed_time))
+    # Sanitize messages to ensure no empty contents are sent
+    sanitized_log = [m for m in log if isinstance(m, dict) and m.get("content") and str(m["content"]).strip()]
+    if debug_level >= 1 and len(sanitized_log) != len(log):
+      logger.info("sanitized messages; removed=%d kept=%d", len(log) - len(sanitized_log), len(sanitized_log))
+    try:
+      if (model in reasoning_models):
+        chat_completion = call_openai_with_retry(
+          lambda: client.chat.completions.create(
+            messages = sanitized_log, model=model, n = 1, reasoning_effort=reasoning),
+          request_timeout=30.0, max_retries=2, debug=debug)
+      else:
+        chat_completion = call_openai_with_retry(
+          lambda: client.chat.completions.create(
+            messages = sanitized_log, model=model, n = 1),
+          request_timeout=30.0, max_retries=2, debug=debug)
+    except Exception as e:
+      if debug:
+        logger.error("openai call failed gracefully; err=%s", e)
+      elapsed_time = time.time() - start_time
+      # Report a normal failure instead of crashing
+      return (False, "; Failed to infer RHS tries " + str(tries) + " fixit 0 time {:.2f}s\n".format(elapsed_time))
 
     tries += 1
-    if debug:
-      print("Num tries: ", tries)
+    if debug_level >= 1:
+      logger.info("num_tries=%d", tries)
 
-    results = process_response(lhs, chat_completion, min_profit)
+    results = process_response(lhs, chat_completion, min_profit, debug_level=debug_level)
 
     if results['valid']:
-      if debug:
-        print ("Valid results: ", results['valid'])
+      if debug_level >= 1:
+        logger.info("valid_count=%d", len(results['valid']))
       best_result = sort_results(results['valid'])[0]
       elapsed_time = time.time() - start_time
       comment = "; tries " + str(tries)
       comment += " fixit " + ("1" if best_result['used_fixit'] else "0")
       # Format profits as "arch1 p1 arch2 p2 ..."
-      archs = ["nvptx64", "x86-64", "aarch64", "riscv64"]
-      profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(archs, best_result['profits']))
+      profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(DEFAULT_ARCHITECTURES, best_result['profits']))
       comment += " " + profit_str
       comment += " time {:.2f}s".format(elapsed_time)
       return (True, best_result['rhs'] + "\n" + comment + "\n")
     else :
-      if debug:
-        print("Invalid results: ", results['invalid'])
+      if debug_level >= 1:
+        logger.info("invalid_count=%d", len(results['invalid']))
       log = log + results['invalid']
 
     # Quit if no new invalid results are generated
@@ -461,7 +713,7 @@ def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1):
           invalid.add(i['content'])
     if not foundNewInvalid:
       if debug:
-        print("No new invalid results are generated. Quitting.")
+        logger.debug("no new invalid results; quitting")
       elapsed_time = time.time() - start_time
       return (False, "; Failed to infer RHS tries " + str(tries) + " fixit 0 time {:.2f}s\n".format(elapsed_time))
 
@@ -484,6 +736,7 @@ def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1):
 # qwen-qwen-235b
 # nvidia-llama-3.1-nemotron-ultra-253b-v1
 # gpt-5-20250807
+# claude-sonnet-4-5-20250929
 
 if __name__ == "__main__":
 
@@ -496,8 +749,41 @@ if __name__ == "__main__":
   parser.add_argument('-c', '-souper-external-cache',
                     action='store_true')
   parser.add_argument('-i', '--improve-profit', default=1, help='Try to improve profit')
-  parser.add_argument('-m', '--model', help='Model to use', default="nvidia-llama-3.1-nemotron-ultra-253b-v1")
+  parser.add_argument('-m', '--model', help='Model to use', default="claude-sonnet-4-5-20250929")
   args = parser.parse_args()
+
+  # Configure logging: -d >= 5 => DEBUG, 1..4 => INFO, 0 => WARNING
+  if args.d and args.d >= 5:
+    logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
+    # Allow library debug logs when explicitly requested
+  elif args.d and args.d >= 1:
+    logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+    # Suppress noisy library INFO logs from external libs
+    for _name in (
+      "httpx",
+      "httpcore",
+      "openai",
+      "azure",
+      "azure.core",
+      "azure.core.pipeline",
+      "azure.core.pipeline.policies",
+      "azure.core.pipeline.policies.http_logging_policy",
+    ):
+      logging.getLogger(_name).setLevel(logging.WARNING)
+  else:
+    logging.basicConfig(level=logging.WARNING, format='[%(levelname)s] %(message)s')
+    # Suppress noisy library INFO logs unless debug is enabled
+    for _name in (
+      "httpx",
+      "httpcore",
+      "openai",
+      "azure",
+      "azure.core",
+      "azure.core.pipeline",
+      "azure.core.pipeline.policies",
+      "azure.core.pipeline.policies.http_logging_policy",
+    ):
+      logging.getLogger(_name).setLevel(logging.WARNING)
 
   lhs = ""
   if args.filename:
@@ -506,18 +792,18 @@ if __name__ == "__main__":
     lhs = sys.stdin.read()
 
   if not args.c:
-    success, rhs = infer(lhs, args.model, args.d > 0)
+    success, rhs = infer(lhs, args.model, args.d >= 5, debug_level=args.d)
     print(rhs)
   else:
     r = redis.Redis(host='localhost', port=6379, decode_responses=True)
     if rhs := r.hget(lhs, "rhs"):
       print(lhs, rhs)
     else :
-      success, rhs = infer(lhs, args.model, args.d > 0, min_profit=1)
+      success, rhs = infer(lhs, args.model, args.d >= 5, min_profit=1, debug_level=args.d)
       if not success:
         r.hset(lhs, "noinfer", "noinfer")
       else :
-        success2, rhs2 = infer(lhs, args.model, args.d > 0, min_profit=2)
+        success2, rhs2 = infer(lhs, args.model, args.d >= 5, min_profit=2, debug_level=args.d)
         if not success2:
           # Only store RHS if it contains meaningful content (non-empty and has non-whitespace)
           if rhs and rhs.strip():
