@@ -91,6 +91,7 @@
         "hash_set": "cpp",
         "sim_stl_pair": "cpp",
         "*.def": "cpp",
-        "*.ipp": "cpp"
+        "*.ipp": "cpp",
+        "__log_hardening_failure": "cpp"
     }
 }

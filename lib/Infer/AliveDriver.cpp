@@ -289,6 +289,7 @@ souper::AliveDriver::AliveDriver(Inst *LHS_, Inst *PreCondition_, InstContext &I
     RC.printInst(LHS, llvm::outs(), true);
     llvm::report_fatal_error("Failed to translate LHS.\n");
   }
+  LHSF.setName("src");
 
   if (DisableUndefInput) {
     util::config::disable_undef_input = true;
@@ -315,6 +316,7 @@ souper::AliveDriver::synthesizeConstants(souper::Inst *RHS) {
     // TODO: Eventually turn this into an assertion
     return {};
   }
+  RHSF.setName("tgt");
   tools::Transform t;
   ReturnLHSRAII foo{t, LHSF};
   t.src = std::move(LHSF);
@@ -342,6 +344,7 @@ souper::AliveDriver::synthesizeConstantsWithCegis(souper::Inst *RHS, InstContext
     // TODO: Eventually turn this into an assertion
     return {};
   }
+  RHSF.setName("tgt");
 
   tools::Transform t;
   t.tgt = std::move(RHSF);
@@ -416,11 +419,12 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
     // TODO: Eventually turn this into an assertion
     return false;
   }
+  RHSF.setName("tgt");
 
   if (DebugLevel > 2) {
     std::cerr << "Verifying following Alive Transformation ... \n\n";
     std::cerr << LHSF << '\n';
-    std::cerr << " => \n\n";
+    std::cerr << "; => \n\n";
     std::cerr << RHSF << '\n';
   }
 
