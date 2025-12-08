@@ -24,6 +24,8 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 #include <map>
+#include <set>
+#include <vector>
 
 #include "llvm/Support/MemoryBuffer.h"
 

@@ -1,5 +1,6 @@
 #include "souper/Infer/SynthUtils.h"
 #include "souper/Infer/Pruning.h"
+#include "souper/Infer/AliveDriver.h"
 
 namespace souper {
 extern Solver *S;
@@ -80,6 +81,103 @@ ParsedReplacement Clone(ParsedReplacement In) {
   }
 
   return In;
+}
+
+// Width-related helper functions (moved from Generalize.cpp)
+
+Inst *CombinePCs(const std::vector<InstMapping> &PCs, InstContext &IC) {
+  Inst *Ante = IC.getConst(llvm::APInt(1, true));
+  for (auto PC : PCs) {
+    // Skip PCs with incompatible operand widths
+    if (PC.LHS->Width != PC.RHS->Width) {
+      continue;
+    }
+    Inst *Eq = IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
+    Ante = IC.getInst(Inst::And, 1, {Ante, Eq});
+  }
+  return Ante;
+}
+
+bool hasMultiArgumentPhi(Inst *I) {
+  if (I->K == Inst::Phi) {
+    return I->Ops.size() > 1;
+  }
+  for (auto Op : I->Ops) {
+    if (hasMultiArgumentPhi(Op)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
+  std::vector<Inst *> Inputs;
+  findVars(Input.Mapping.LHS, Inputs);
+
+  for (auto &&V : Inputs) {
+    if (!V->Range.isFullSet()) {
+      return true;
+    }
+    if (V->KnownOnes.getBitWidth() == V->Width && V->KnownOnes != 0) {
+      return true;
+    }
+
+    if (V->KnownZeros.getBitWidth() == V->Width && V->KnownZeros != 0) {
+      return true;
+    }
+  }
+
+  if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
+      !Input.Mapping.LHS->DemandedBits.isAllOnes()) {
+    return true;
+  }
+  return false;
+}
+
+ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement Input) {
+  std::map<Inst *, Inst *> Map;
+  for (size_t i = 2; i <= 64; ++i) {
+    Map[IC.getConst(llvm::APInt::getAllOnes(i))] =
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i)();
+    Map[IC.getConst(llvm::APInt::getAllOnes(i) - 1)] =
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).Sub(1)();
+    Map[IC.getConst(llvm::APInt::getSignedMaxValue(i))] =
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).LShr(1)();
+    Map[IC.getConst(llvm::APInt::getSignedMinValue(i))] =
+      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).LShr(1).Flip()();
+  }
+  return Replace(Input, Map);
+}
+
+size_t CountWidthAssignments(ParsedReplacement Input) {
+  // Check if we have a valid LHS
+  if (!Input.Mapping.LHS) {
+    return 0;
+  }
+  
+  auto &IC = *Input.Mapping.LHS->IC;
+  
+  // Check if we have a valid RHS (not a candidate)
+  if (!Input.Mapping.RHS) {
+    return 0;
+  }
+  
+  Input = ReplaceMinusOneAndFamily(IC, Input);
+  
+  if (!hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
+    // Instantiate Alive driver with Symbolic width.
+    AliveDriver Alive(Input.Mapping.LHS,
+      Input.PCs.empty() ? nullptr : CombinePCs(Input.PCs, IC),
+      IC, {}, true);
+    
+    // Count typings without verification
+    auto count = Alive.countTypings(Input.Mapping.RHS);
+    
+    return count;
+  }
+  
+  // Can't determine
+  return 0;
 }
 
 // bool IsValid(ParsedReplacement Input, InstContext &IC, Solver *S) {
@@ -528,6 +626,137 @@ ParsedReplacement ToSymConst(ParsedReplacement P, int64_t x) {
   
   // Add precondition that symconst equals x
   Result.PCs.push_back(InstMapping{SymConst, IC.getConst(llvm::APInt(SymConst->Width, x))});
+  
+  return Result;
+}
+
+bool VerifyWidthIndependent(ParsedReplacement Input,
+                            std::vector<std::map<const Inst *, size_t>> *ValidTypingsOut,
+                            std::vector<std::map<const Inst *, size_t>> *InvalidTypingsOut) {
+  if (!Input.Mapping.LHS || !Input.Mapping.RHS) {
+    return false;
+  }
+  
+  auto &IC = *Input.Mapping.LHS->IC;
+  
+  // Preprocess the input (same as in Generalize.cpp)
+  Input = ReplaceMinusOneAndFamily(IC, Input);
+  
+  // Combine preconditions
+  Inst *Pre = Input.PCs.empty() ? nullptr : CombinePCs(Input.PCs, IC);
+  
+  // Create AliveDriver in width-independent mode
+  AliveDriver Alive(Input.Mapping.LHS, Pre, IC, {}, /*WidthIndep=*/true);
+  
+  // Verify the transformation
+  bool Result = Alive.verify(Input.Mapping.RHS);
+  
+  // Copy typings if requested
+  if (ValidTypingsOut) {
+    *ValidTypingsOut = Alive.getValidTypings();
+  }
+  if (InvalidTypingsOut) {
+    *InvalidTypingsOut = Alive.getInvalidTypings();
+  }
+  
+  return Result;
+}
+
+void WidthVerificationResult::printTyping(llvm::raw_ostream &OS,
+                                          const std::map<const Inst *, size_t> &Typing) {
+  if (Typing.empty()) {
+    OS << "(empty)";
+    return;
+  }
+  bool first = true;
+  for (const auto &P : Typing) {
+    if (!P.first) continue;  // Skip null entries
+    if (!first) OS << ", ";
+    first = false;
+    if (!P.first->Name.empty()) {
+      OS << "%" << P.first->Name << ":i" << P.second;
+    } else {
+      OS << "%?:i" << P.second;
+    }
+  }
+}
+
+void WidthVerificationResult::printSummary(llvm::raw_ostream &OS) const {
+  if (CouldNotDetermine) {
+    OS << "Could not determine validity - width constraints may be missing.\n";
+    OS << "; Note: Generalized S-expressions with '_' wildcards lose width relationships.\n";
+    OS << "; Use explicit widths (e.g., sext 32 x:i16) for verification.\n";
+  } else if (IsValid) {
+    OS << "Valid for all widths\n";
+  } else if (IsPartiallyValid) {
+    OS << "Partially valid: " << ValidTypings.size() << " valid, " 
+       << InvalidTypings.size() << " invalid\n";
+  } else {
+    OS << "Invalid for all " << InvalidTypings.size() << " width assignments\n";
+  }
+}
+
+void WidthVerificationResult::printValidTypings(llvm::raw_ostream &OS) const {
+  if (ValidTypings.empty()) {
+    OS << "No valid typings\n";
+    return;
+  }
+  OS << "Valid typings (" << ValidTypings.size() << "):\n";
+  for (size_t i = 0; i < ValidTypings.size(); ++i) {
+    OS << "  [" << (i + 1) << "] ";
+    printTyping(OS, ValidTypings[i]);
+    OS << "\n";
+  }
+}
+
+void WidthVerificationResult::printInvalidTypings(llvm::raw_ostream &OS) const {
+  if (InvalidTypings.empty()) {
+    OS << "No invalid typings\n";
+    return;
+  }
+  OS << "Invalid typings (" << InvalidTypings.size() << "):\n";
+  for (size_t i = 0; i < InvalidTypings.size(); ++i) {
+    OS << "  [" << (i + 1) << "] ";
+    printTyping(OS, InvalidTypings[i]);
+    OS << "\n";
+  }
+}
+
+WidthVerificationResult VerifyWidthIndependentWithDetails(ParsedReplacement Input) {
+  WidthVerificationResult Result;
+  Result.IsValid = false;
+  Result.IsPartiallyValid = false;
+  Result.CouldNotDetermine = false;
+  
+  if (!Input.Mapping.LHS || !Input.Mapping.RHS) {
+    Result.CouldNotDetermine = true;
+    return Result;
+  }
+  
+  auto &IC = *Input.Mapping.LHS->IC;
+  
+  // Preprocess the input (same as in Generalize.cpp)
+  Input = ReplaceMinusOneAndFamily(IC, Input);
+  
+  // Combine preconditions
+  Inst *Pre = Input.PCs.empty() ? nullptr : CombinePCs(Input.PCs, IC);
+  
+  // Create AliveDriver in width-independent mode
+  AliveDriver Alive(Input.Mapping.LHS, Pre, IC, {}, /*WidthIndep=*/true);
+  
+  // Verify the transformation
+  bool Valid = Alive.verify(Input.Mapping.RHS);
+  
+  Result.ValidTypings = Alive.getValidTypings();
+  Result.InvalidTypings = Alive.getInvalidTypings();
+  
+  if (Valid) {
+    Result.IsValid = true;
+  } else if (!Result.ValidTypings.empty() && !Result.InvalidTypings.empty()) {
+    Result.IsPartiallyValid = true;
+  } else if (Result.ValidTypings.empty() && Result.InvalidTypings.empty()) {
+    Result.CouldNotDetermine = true;
+  }
   
   return Result;
 }

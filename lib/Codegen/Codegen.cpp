@@ -93,11 +93,6 @@ llvm::Value *Codegen::getValue(Inst *I) {
     return nullptr;
   }
 
-  // otherwise, recursively generate code
-  Value *V0 = Codegen::getValue(Ops[0]);
-  if (!V0)
-    return nullptr;
-
   // PHI nodes must be the first instructions in a basic block. If we're
   // replacing a PHI node with another instruction, make sure it comes after the
   // other PHI nodes.
@@ -105,8 +100,13 @@ llvm::Value *Codegen::getValue(Inst *I) {
     Instruction *InsertPoint = ReplacedInst;
     while (isa<PHINode>(InsertPoint->getNextNode()))
       InsertPoint = InsertPoint->getNextNode();
-    Builder.SetInsertPoint(InsertPoint->getNextNode());
+    Builder.SetInsertPoint(InsertPoint);  // Insert BEFORE the replaced instruction
   }
+
+  // otherwise, recursively generate code
+  Value *V0 = getValue(Ops[0]);
+  if (!V0)
+    return nullptr;
 
   switch (Ops.size()) {
   case 1: {
@@ -152,7 +152,7 @@ llvm::Value *Codegen::getValue(Inst *I) {
     break;
   }
   case 2: {
-    Value *V1 = Codegen::getValue(Ops[1]);
+    Value *V1 = getValue(Ops[1]);
     if (!V1)
       return nullptr;
     switch (I->K) {
@@ -287,8 +287,8 @@ llvm::Value *Codegen::getValue(Inst *I) {
     break;
   }
   case 3: {
-    Value *V1 = Codegen::getValue(Ops[1]);
-    Value *V2 = Codegen::getValue(Ops[2]);
+    Value *V1 = getValue(Ops[1]);
+    Value *V2 = getValue(Ops[2]);
     if (!V1 || !V2)
       return nullptr;
     switch (I->K) {
@@ -316,7 +316,7 @@ llvm::Value *Codegen::getValue(Inst *I) {
   // FIXME: PHI
 
   report_fatal_error(((std::string) "Unhandled Souper instruction " +
-                      Inst::getKindName(I->K) + " in Codegen::getValue()").c_str());
+                      Inst::getKindName(I->K) + " in Codegen::generateSingleInstruction()").c_str());
 }
 
 static std::vector<llvm::Type *>

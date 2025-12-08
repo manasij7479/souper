@@ -1,0 +1,9 @@
+; RUN: %hydra --sexpr-input --sexpr %s 2>&1 | %FileCheck %s
+; Test: abs of negative is just negation: abs(x) => -x when x < 0
+
+(rewritepre (negative x:i32) (select (slt x:i32 0:i32) (sub 0:i32 x:i32) x:i32) (sub 0:i32 x:i32))
+
+; CHECK: (let ((t0 (sub C1 x)))
+; CHECK-NEXT:   (rewritepre (and (negative x) (ule C1 (logb (width x))))
+; CHECK-NEXT:             (select (slt x C1) t0 x)
+; CHECK-NEXT:             t0))

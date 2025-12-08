@@ -22,6 +22,7 @@
 
 #include <unordered_map>
 #include <optional>
+#include <set>
 
 namespace souper {
 
@@ -36,12 +37,22 @@ public:
   std::map<Inst *, llvm::APInt> synthesizeConstantsWithCegis(souper::Inst *RHS, InstContext &IC);
 
   bool verify(Inst *RHS, Inst *RHSAssumptions = nullptr);
+  
+  // Count the number of width assignments to check without verifying
+  size_t countTypings(Inst *RHS);
+  
   ~AliveDriver() {
     for (auto &&p : TypeCache) {
       delete(p.second);
     }
+    // SymTypes may have shared pointers (due to width-preserving op sharing),
+    // so collect unique pointers first to avoid double-free
+    std::set<IR::Type *> UniqueSymTypes;
     for (auto &&t : SymTypes) {
-      delete(t.second);
+      UniqueSymTypes.insert(t.second);
+    }
+    for (auto *t : UniqueSymTypes) {
+      delete t;
     }
   }
 
@@ -51,6 +62,23 @@ public:
 
   std::vector<std::map<const Inst *, size_t>> getInvalidTypings() {
     return InvalidTypings;
+  }
+
+  // Get groups of instructions that share the same symbolic type (must have same width)
+  std::vector<std::vector<const Inst *>> getSymTypeGroups() {
+    std::map<IR::Type *, std::vector<const Inst *>> TypeToInsts;
+    for (auto &P : SymTypes) {
+      if (P.first && P.second) {
+        TypeToInsts[P.second].push_back(P.first);
+      }
+    }
+    std::vector<std::vector<const Inst *>> Groups;
+    for (auto &P : TypeToInsts) {
+      if (P.second.size() > 1) {
+        Groups.push_back(P.second);
+      }
+    }
+    return Groups;
   }
 
   bool WidthIndependentMode; // This probably doesn't need to be public

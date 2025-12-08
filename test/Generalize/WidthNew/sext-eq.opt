@@ -1,0 +1,10 @@
+; RUN: %hydra --sexpr-input --sexpr --alive-max-width=8 %s 2>&1 | %FileCheck %s
+; From Lean example one:
+; (signExtend r y = signExtend r x) ↔ (y = signExtend q x)
+; where p ≤ q, p ≤ r, q ≤ r, x:p, y:q
+; Fixed: x:i4, y:i7, r=25 (using smaller widths for testing: x:i2, y:i4, r=8)
+
+(rewrite (eq (sext 8 y:i4) (sext 8 x:i2)) (eq y:i4 (sext 4 x:i2)))
+
+; CHECK: (rewrite (eq (sext _ x) (sext _ y))
+; CHECK-NEXT:          (eq y (sext _ x)))

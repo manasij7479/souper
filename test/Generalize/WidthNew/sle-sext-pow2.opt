@@ -1,0 +1,11 @@
+; RUN: %hydra --sexpr-input --sexpr --alive-max-width=8 %s 2>&1 | %FileCheck %s
+; From Lean example four:
+; sle (twoPow r q) (x.signExtend r) = false
+; where p < q, q < r (so 2^q > max value of sext x)
+; Using smaller: x:i2, constant 4:i4 (4 = 2^2, and max sext of i2 is 1)
+; sext 4 bits can be -2 to 1, so 4 > any sext of i2
+
+(rewrite (sle 4:i4 (sext 4 x:i2)) 0:i1)
+
+; CHECK: (rewrite (sle 4 (sext _ x))
+; CHECK-NEXT:          0)

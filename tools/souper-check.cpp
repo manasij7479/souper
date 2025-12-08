@@ -24,6 +24,8 @@
 #include "souper/Infer/Pruning.h"
 #include "souper/Infer/SynthUtils.h"
 #include "souper/Infer/Invariants.h"
+#include "souper/Infer/AliveDriver.h"
+#include "souper/Generalize/Generalize.h"
 #include "souper/Inst/InstGraph.h"
 #include "souper/Parser/Parser.h"
 #include "souper/Tool/GetSolver.h"
@@ -53,6 +55,11 @@ InputFilename(cl::Positional, cl::desc("<input souper optimization>"),
 static cl::opt<bool> PrintCounterExample("print-counterexample",
     cl::desc("Print counterexample (default=true)"),
     cl::init(true));
+
+// Local flag for souper-check
+static cl::opt<bool> SkipUBChecks("skip-ub-checks",
+    cl::desc("Skip undefined behavior checks, only check equivalence (default=false)"),
+    cl::init(false));
 
 static cl::opt<bool> PrintRepl("print-replacement",
     cl::desc("Print the replacement, if valid (default=false)"),
@@ -133,6 +140,30 @@ static cl::opt<bool> PrintProfit("print-profit",
     cl::desc("Print profit (default=false)"),
     cl::init(false));
 
+static cl::opt<bool> WidthIndependent("width-independent",
+    cl::desc("Verify transformation in width-independent mode using Alive2 (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> CountWidthCombinations("count-width-combinations",
+    cl::desc("Count width combinations without verifying (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> PrintValidTypings("print-valid-typings",
+    cl::desc("Print all valid width typings (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> PrintInvalidTypings("print-invalid-typings",
+    cl::desc("Print all invalid width typings (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> PrintAllTypings("print-all-typings",
+    cl::desc("Print both valid and invalid width typings (default=false)"),
+    cl::init(false));
+
+static cl::opt<bool> VerifySExpr("verify-sexpr",
+    cl::desc("Parse input as S-expression. If widths are missing, use width-independent verification (default=false)"),
+    cl::init(false));
+
 
 size_t HashInt(size_t x) {
   x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
@@ -199,7 +230,22 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
 
   std::vector<ParsedReplacement> Reps;
   std::vector<ReplacementContext> Contexts;
-  if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA()) {
+  bool SExprWidthsExplicit = true;  // Track if S-expr input had explicit widths
+  
+  if (VerifySExpr) {
+    // Parse as S-expression
+    std::string input = MB.getBuffer().str();
+    auto result = ParseSExpr(IC, input, ErrStr, &SExprWidthsExplicit);
+    if (!result) {
+      llvm::errs() << "S-expression parse error: " << ErrStr << '\n';
+      return 1;
+    }
+    Reps.push_back(*result);
+    
+    if (!SExprWidthsExplicit) {
+      llvm::outs() << "; Widths not fully specified, using width-independent verification\n";
+    }
+  } else if (SymInferRHS || InferRHS || ParseLHSOnly || isInferDFA()) {
     Reps = ParseReplacementLHSs(IC, MB.getBufferIdentifier(), MB.getBuffer(),
                                 Contexts, ErrStr);
   } else {
@@ -620,6 +666,41 @@ int SolveInst(const MemoryBufferRef &MB, Solver *S) {
         llvm::outs() << "; LGTM\n";
       } else {
         llvm::outs() << "; Failed to verify invariant\n";
+      }
+    } else if (CountWidthCombinations) {
+      size_t count = souper::CountWidthAssignments(Rep);
+      if (count == 0) {
+        llvm::outs() << "; Cannot determine width assignments\n";
+      } else if (count == 1) {
+        llvm::outs() << "; Width-independent (1 assignment)\n";
+      } else {
+        llvm::outs() << "; " << count << " width combinations\n";
+      }
+      ++Success;
+    } else if (WidthIndependent || (VerifySExpr && !SExprWidthsExplicit)) {
+      // Use width-independent verification if explicitly requested or if
+      // S-expression input has missing (symbolic) widths
+      auto Result = VerifyWidthIndependentWithDetails(Rep);
+      
+      llvm::outs() << "; ";
+      Result.printSummary(llvm::outs());
+      
+      if (Result.IsValid) {
+        ++Success;
+        if (PrintRepl)
+          PrintReplacement(llvm::outs(), Rep.BPCs, Rep.PCs, Rep.Mapping);
+      } else if (Result.IsPartiallyValid) {
+        ++Fail;
+      } else {
+        ++Fail;
+      }
+      
+      // Print typings based on flags
+      if (PrintAllTypings || PrintValidTypings) {
+        Result.printValidTypings(llvm::outs());
+      }
+      if (PrintAllTypings || PrintInvalidTypings) {
+        Result.printInvalidTypings(llvm::outs());
       }
     } else {
       bool Valid;

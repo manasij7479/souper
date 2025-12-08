@@ -1,0 +1,7 @@
+; RUN: %hydra --sexpr-input --sexpr %s 2>&1 | %FileCheck %s
+; Test: (0 + x) => x (width independent)
+
+(rewrite (add 0:i32 x:i32) x:i32)
+
+; CHECK: (rewrite (add 0 x)
+; CHECK-NEXT:          x)

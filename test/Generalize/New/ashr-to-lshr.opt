@@ -1,0 +1,8 @@
+; RUN: %hydra --sexpr-input --sexpr %s 2>&1 | %FileCheck %s
+; Test: ashr x, c => lshr x, c when x is non-negative
+
+(rewritepre (nonNegative x:i32) (ashr x:i32 1:i32) (lshr x:i32 1:i32))
+
+; CHECK: (rewritepre (nonNegative x)
+; CHECK-NEXT:             (ashr x C1)
+; CHECK-NEXT:             (lshr x C1))

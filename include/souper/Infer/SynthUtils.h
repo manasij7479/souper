@@ -136,6 +136,13 @@ ParsedReplacement ToSymConst(ParsedReplacement P, int64_t x);
 
 Inst *Clone(Inst *R);
 
+// Width-related helper functions (moved from Generalize.cpp)
+Inst *CombinePCs(const std::vector<InstMapping> &PCs, InstContext &IC);
+ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement Input);
+bool hasMultiArgumentPhi(Inst *I);
+bool hasConcreteDataflowConditions(ParsedReplacement &Input);
+size_t CountWidthAssignments(ParsedReplacement Input);
+
 InstMapping Clone(InstMapping In);
 
 ParsedReplacement Clone(ParsedReplacement In);
@@ -144,6 +151,39 @@ ParsedReplacement Clone(ParsedReplacement In);
 // Returns clone if verified, nullptrs if not
 std::optional<ParsedReplacement> Verify(ParsedReplacement Input);
 // bool IsValid(ParsedReplacement Input);
+
+// Verify a transformation in width-independent mode using Alive2
+// Returns true if valid for all widths, false otherwise
+// If ValidTypings is provided, returns the valid width assignments
+// If InvalidTypings is provided, returns the invalid width assignments
+bool VerifyWidthIndependent(ParsedReplacement Input,
+                            std::vector<std::map<const Inst *, size_t>> *ValidTypings = nullptr,
+                            std::vector<std::map<const Inst *, size_t>> *InvalidTypings = nullptr);
+
+// Result of width-independent verification with detailed typing information
+struct WidthVerificationResult {
+  bool IsValid;                    // True if valid for all widths
+  bool IsPartiallyValid;           // True if some widths valid, some invalid
+  bool CouldNotDetermine;          // True if verification couldn't complete
+  std::vector<std::map<const Inst *, size_t>> ValidTypings;
+  std::vector<std::map<const Inst *, size_t>> InvalidTypings;
+  
+  // Print a summary to the given stream
+  void printSummary(llvm::raw_ostream &OS) const;
+  
+  // Print all valid typings
+  void printValidTypings(llvm::raw_ostream &OS) const;
+  
+  // Print all invalid typings  
+  void printInvalidTypings(llvm::raw_ostream &OS) const;
+  
+  // Print a single typing
+  static void printTyping(llvm::raw_ostream &OS, 
+                          const std::map<const Inst *, size_t> &Typing);
+};
+
+// Verify with full result information
+WidthVerificationResult VerifyWidthIndependentWithDetails(ParsedReplacement Input);
 
 bool VerifyInvariant(ParsedReplacement Input);
 
@@ -375,6 +415,9 @@ struct InfixPrinter {
       case Inst::Sle: Op = "<=s"; break;
       case Inst::KnownOnesP : Op = "<<=1"; break;
       case Inst::KnownZerosP : Op = "<<=0"; break;
+      case Inst::ZExt: Op = ShowImplicitWidths ? "zext-i" + std::to_string(I->Width) : "zext"; break;
+      case Inst::SExt: Op = ShowImplicitWidths ? "sext-i" + std::to_string(I->Width) : "sext"; break;
+      case Inst::Trunc: Op = ShowImplicitWidths ? "trunc-i" + std::to_string(I->Width) : "trunc"; break;
       case Inst::Custom: Op = I->Name; break;
       default: Op = Inst::getKindName(I->K); break;
       }
@@ -606,6 +649,9 @@ struct LatexPrinter : public InfixPrinter {
       case Inst::USubSat: Op = "-_\\text{u}^\\text{sat}"; break;
       case Inst::SSubSat: Op = "-_\\text{s}^\\text{sat}"; break;
       case Inst::AShrExact: Op = "\\gg_\\text{s}^\\text{exact}"; break;
+      case Inst::ZExt: Op = ShowImplicitWidths ? "\\text{zext}^{\\iN{" + std::to_string(I->Width) + "}}" : "\\text{zext}"; break;
+      case Inst::SExt: Op = ShowImplicitWidths ? "\\text{sext}^{\\iN{" + std::to_string(I->Width) + "}}" : "\\text{sext}"; break;
+      case Inst::Trunc: Op = ShowImplicitWidths ? "\\text{trunc}^{\\iN{" + std::to_string(I->Width) + "}}" : "\\text{trunc}"; break;
       default: {
         if (I->K == Inst::Custom) {
           Op = "\\text{" + I->Name + "}";
@@ -673,6 +719,907 @@ struct LatexPrinter : public InfixPrinter {
 
 
 };
+
+// S-expression printer for Souper transformations
+// Format: (rewrite lhs rhs) or (rewritepre pre lhs rhs)
+// Let bindings at root level
+struct SExprPrinter {
+  // ShowWidths: if true, add width annotations like x:i32 (for concrete widths)
+  //             if false, omit widths (for generalized/symbolic width output)
+  SExprPrinter(ParsedReplacement P_, bool ShowWidths_ = false) 
+    : P(P_), varnum(0), ShowWidths(ShowWidths_) {}
+
+  // Check for dataflow facts and error if present
+  bool hasDataflowFacts(Inst *I) {
+    if (!I) return false;
+    if (I->K == Inst::Var) {
+      if (I->KnownZeros.getBoolValue() || I->KnownOnes.getBoolValue())
+        return true;
+      if (I->NonNegative || I->Negative || I->NonZero || I->PowOfTwo)
+        return true;
+      if (I->NumSignBits > 1)
+        return true;
+      if (!I->Range.isFullSet())
+        return true;
+    }
+    for (auto *Op : I->Ops) {
+      if (hasDataflowFacts(Op)) return true;
+    }
+    return false;
+  }
+
+  void countUses(Inst *I) {
+    if (!I) return;
+    UseCount[I]++;
+    if (UseCount[I] == 1) {
+      for (auto *Op : I->Ops) {
+        countUses(Op);
+      }
+    }
+  }
+
+  // Collect dataflow facts as precondition strings
+  std::vector<std::string> DataflowPCs;
+  std::set<Inst *> DataflowVisited;
+  
+  void collectDataflowFacts(Inst *I) {
+    if (!I) return;
+    if (DataflowVisited.count(I)) return;  // Already processed this instruction
+    DataflowVisited.insert(I);
+    
+    if (I->K == Inst::Var) {
+      std::string varName = printInst(I);
+      if (I->PowOfTwo) {
+        DataflowPCs.push_back("(powerOfTwo " + varName + ")");
+      }
+      if (I->NonZero) {
+        DataflowPCs.push_back("(nonZero " + varName + ")");
+      }
+      if (I->NonNegative) {
+        DataflowPCs.push_back("(nonNegative " + varName + ")");
+      }
+      if (I->Negative) {
+        DataflowPCs.push_back("(negative " + varName + ")");
+      }
+      // Note: KnownZeros, KnownOnes, NumSignBits, Range not yet supported in sexpr format
+    }
+    for (auto *Op : I->Ops) {
+      collectDataflowFacts(Op);
+    }
+  }
+
+  void operator()(llvm::raw_ostream &S) {
+    // Count uses for let bindings
+    countUses(P.Mapping.LHS);
+    if (P.Mapping.RHS) countUses(P.Mapping.RHS);
+    for (auto &PC : P.PCs) {
+      countUses(PC.LHS);
+      countUses(PC.RHS);
+    }
+
+    // Collect let bindings (assigns names but doesn't print)
+    collectLetBindings(P.Mapping.LHS);
+    if (P.Mapping.RHS) collectLetBindings(P.Mapping.RHS);
+    for (auto &PC : P.PCs) {
+      collectLetBindings(PC.LHS);
+      collectLetBindings(PC.RHS);
+    }
+    
+    // Collect dataflow facts as preconditions
+    DataflowPCs.clear();
+    DataflowVisited.clear();
+    collectDataflowFacts(P.Mapping.LHS);
+    collectDataflowFacts(P.Mapping.RHS);
+
+    // Build the rewrite expression
+    std::string RewriteExpr;
+    bool hasPCs = !P.PCs.empty() || !DataflowPCs.empty();
+    if (!hasPCs) {
+      RewriteExpr = "(rewrite " + printInst(P.Mapping.LHS) + "\n" +
+                    "         " + printInst(P.Mapping.RHS) + ")";
+    } else {
+      std::string PCStr;
+      llvm::raw_string_ostream PCOS(PCStr);
+      // Combine existing PCs and dataflow fact PCs
+      std::vector<std::string> AllPCs;
+      for (auto &pc : DataflowPCs) {
+        AllPCs.push_back(pc);
+      }
+      if (!P.PCs.empty()) {
+        for (auto &PC : P.PCs) {
+          if (PC.RHS->K == Inst::Const && PC.RHS->Val == 1) {
+            AllPCs.push_back(printInst(PC.LHS));
+          } else if (PC.RHS->K == Inst::Const && PC.RHS->Val == 0) {
+            AllPCs.push_back("(not " + printInst(PC.LHS) + ")");
+          } else {
+            AllPCs.push_back("(eq " + printInst(PC.LHS) + " " + printInst(PC.RHS) + ")");
+          }
+        }
+      }
+      if (AllPCs.size() == 1) {
+        PCStr = AllPCs[0];
+      } else {
+        PCStr = "(and";
+        for (auto &pc : AllPCs) {
+          PCStr += " " + pc;
+        }
+        PCStr += ")";
+      }
+      RewriteExpr = "(rewritepre " + PCStr + "\n" +
+                    "            " + printInst(P.Mapping.LHS) + "\n" +
+                    "            " + printInst(P.Mapping.RHS) + ")";
+    }
+
+    // If we have let bindings, wrap in let expression
+    if (!LetBindings.empty()) {
+      S << "(let (";
+      for (size_t i = 0; i < LetBindings.size(); ++i) {
+        if (i > 0) S << "\n      ";
+        S << "(" << LetBindings[i].first << " " << LetBindings[i].second << ")";
+      }
+      S << ")\n  " << RewriteExpr << ")\n";
+    } else {
+      S << RewriteExpr << "\n";
+    }
+  }
+
+  void collectLetBindings(Inst *I) {
+    if (!I || Visited.count(I)) return;
+    Visited.insert(I);
+
+    // Visit children first
+    for (auto *Op : I->Ops) {
+      collectLetBindings(Op);
+    }
+
+    // If this needs a let binding and we haven't assigned one yet
+    if (UseCount[I] > 1 && !Syms.count(I) && I->K != Inst::Var && I->K != Inst::Const) {
+      std::string Name = "t" + std::to_string(varnum++);
+      Syms[I] = Name;
+      LetBindings.push_back({Name, printInstDirect(I)});
+    }
+  }
+
+  std::string printInst(Inst *I) {
+    if (!I) return "?";
+    
+    // If we have a symbol for this, use it
+    if (Syms.count(I)) {
+      return Syms[I];
+    }
+
+    return printInstDirect(I);
+  }
+
+  std::string printInstDirect(Inst *I) {
+    if (!I) return "?";
+
+    if (I->K == Inst::Const) {
+      std::string valStr;
+      if (I->Val.isNegative() && I->Val.sge(-1000)) {
+        valStr = std::to_string(I->Val.getSExtValue());
+      } else if (I->Val.ule(1000)) {
+        valStr = llvm::toString(I->Val, 10, false);
+      } else {
+        valStr = "#x" + llvm::toString(I->Val, 16, false);
+      }
+      // Add width annotation if ShowWidths is enabled
+      if (ShowWidths) {
+        return valStr + ":i" + std::to_string(I->Width);
+      }
+      return valStr;
+    } else if (I->K == Inst::Var) {
+      std::string Name = I->Name;
+      if (Name.empty()) Name = "v";
+      if (isdigit(Name[0])) {
+        Name = "x" + Name;
+      }
+      if (Name.starts_with("symconst_")) {
+        Name = "C" + Name.substr(9);
+      }
+      // Add width annotation only if ShowWidths is enabled
+      if (ShowWidths) {
+        return Name + ":i" + std::to_string(I->Width);
+      }
+      return Name;
+    }
+
+    // Get operation name
+    std::string Op = getOpName(I->K);
+
+    // Handle width-changing operations with explicit width argument
+    if (I->K == Inst::ZExt || I->K == Inst::SExt || I->K == Inst::Trunc) {
+      // Format: (zext <width> <operand>)
+      // For generalized output (no ShowWidths), use _ for any width
+      std::string widthArg = ShowWidths ? std::to_string(I->Width) : "_";
+      std::string Result = "(" + Op + " " + widthArg;
+      for (auto *Operand : I->orderedOps()) {
+        Result += " " + printInst(Operand);
+      }
+      Result += ")";
+      return Result;
+    }
+
+    // Build s-expression for other operations
+    std::string Result = "(" + Op;
+    for (auto *Operand : I->orderedOps()) {
+      Result += " " + printInst(Operand);
+    }
+    Result += ")";
+    return Result;
+  }
+
+  std::string getOpName(Inst::Kind K) {
+    switch (K) {
+    case Inst::Add: return "add";
+    case Inst::AddNSW: return "add.nsw";
+    case Inst::AddNUW: return "add.nuw";
+    case Inst::AddNW: return "add.nw";
+    case Inst::Sub: return "sub";
+    case Inst::SubNSW: return "sub.nsw";
+    case Inst::SubNUW: return "sub.nuw";
+    case Inst::SubNW: return "sub.nw";
+    case Inst::Mul: return "mul";
+    case Inst::MulNSW: return "mul.nsw";
+    case Inst::MulNUW: return "mul.nuw";
+    case Inst::MulNW: return "mul.nw";
+    case Inst::UDiv: return "udiv";
+    case Inst::SDiv: return "sdiv";
+    case Inst::URem: return "urem";
+    case Inst::SRem: return "srem";
+    case Inst::And: return "and";
+    case Inst::Or: return "or";
+    case Inst::Xor: return "xor";
+    case Inst::Shl: return "shl";
+    case Inst::ShlNSW: return "shl.nsw";
+    case Inst::ShlNUW: return "shl.nuw";
+    case Inst::ShlNW: return "shl.nw";
+    case Inst::LShr: return "lshr";
+    case Inst::LShrExact: return "lshr.exact";
+    case Inst::AShr: return "ashr";
+    case Inst::AShrExact: return "ashr.exact";
+    case Inst::Select: return "select";
+    case Inst::ZExt: return "zext";
+    case Inst::SExt: return "sext";
+    case Inst::Trunc: return "trunc";
+    case Inst::Eq: return "eq";
+    case Inst::Ne: return "ne";
+    case Inst::Ult: return "ult";
+    case Inst::Slt: return "slt";
+    case Inst::Ule: return "ule";
+    case Inst::Sle: return "sle";
+    case Inst::CtPop: return "ctpop";
+    case Inst::Ctlz: return "ctlz";
+    case Inst::Cttz: return "cttz";
+    case Inst::LogB: return "logb";
+    case Inst::BitWidth: return "width";
+    case Inst::BSwap: return "bswap";
+    case Inst::BitReverse: return "bitreverse";
+    case Inst::FShl: return "fshl";
+    case Inst::FShr: return "fshr";
+    case Inst::ExtractValue: return "extractvalue";
+    case Inst::SAddWithOverflow: return "sadd.overflow";
+    case Inst::UAddWithOverflow: return "uadd.overflow";
+    case Inst::SSubWithOverflow: return "ssub.overflow";
+    case Inst::USubWithOverflow: return "usub.overflow";
+    case Inst::SMulWithOverflow: return "smul.overflow";
+    case Inst::UMulWithOverflow: return "umul.overflow";
+    case Inst::SAddO: return "sadd.o";
+    case Inst::UAddO: return "uadd.o";
+    case Inst::SSubO: return "ssub.o";
+    case Inst::USubO: return "usub.o";
+    case Inst::SMulO: return "smul.o";
+    case Inst::UMulO: return "umul.o";
+    case Inst::SAddSat: return "sadd.sat";
+    case Inst::UAddSat: return "uadd.sat";
+    case Inst::SSubSat: return "ssub.sat";
+    case Inst::USubSat: return "usub.sat";
+    case Inst::Freeze: return "freeze";
+    case Inst::Lop3: return "lop3";
+    default: return Inst::getKindName(K);
+    }
+  }
+
+  void printPCs(llvm::raw_ostream &S) {
+    if (P.PCs.size() == 1) {
+      printPC(P.PCs[0], S);
+    } else {
+      S << "(and";
+      for (auto &PC : P.PCs) {
+        S << " ";
+        printPC(PC, S);
+      }
+      S << ")";
+    }
+  }
+
+  void printPC(const InstMapping &PC, llvm::raw_ostream &S) {
+    if (PC.RHS->K == Inst::Const && PC.RHS->Val == 1) {
+      S << printInst(PC.LHS);
+    } else if (PC.RHS->K == Inst::Const && PC.RHS->Val == 0) {
+      S << "(not " << printInst(PC.LHS) << ")";
+    } else {
+      S << "(eq " << printInst(PC.LHS) << " " << printInst(PC.RHS) << ")";
+    }
+  }
+
+  ParsedReplacement P;
+  std::map<Inst *, std::string> Syms;
+  std::map<Inst *, size_t> UseCount;
+  std::set<Inst *> Visited;
+  std::vector<std::pair<std::string, std::string>> LetBindings;
+  size_t varnum;
+  bool ShowWidths;
+};
+
+// S-expression parser for Souper transformations
+// Parses format: (let ((name expr)...) (rewrite lhs rhs)) or (rewritepre pre lhs rhs)
+// Variables can have width annotations like x:i32, c1:i8
+// Missing width annotation means symbolic width (for width-independent verification)
+// Width-changing ops use: (zext <width> x) where <width> is number, _, or variable name
+class SExprParser {
+public:
+  static const unsigned DefaultWidth = 32;  // Default width for unspecified widths
+  
+  SExprParser(InstContext &IC_) : IC(IC_), pos(0), AllWidthsExplicit(true) {}
+
+  std::optional<ParsedReplacement> parse(const std::string &input) {
+    this->input = input;
+    pos = 0;
+    LetEnv.clear();
+    VarCache.clear();
+    AllWidthsExplicit = true;  // Reset for each parse
+    
+    skipWhitespace();
+    if (pos >= input.size()) {
+      error = "Empty input";
+      return std::nullopt;
+    }
+    
+    return parseTopLevel();
+  }
+  
+  std::string getError() const { return error; }
+  
+  // Returns true if all variables and constants had explicit width annotations
+  bool allWidthsExplicit() const { return AllWidthsExplicit; }
+
+private:
+  InstContext &IC;
+  std::string input;
+  size_t pos;
+  std::string error;
+  std::map<std::string, Inst *> LetEnv;      // let-bound names -> Inst
+  std::map<std::string, Inst *> VarCache;    // variable names -> Inst (for dedup)
+  bool AllWidthsExplicit;                    // True if all vars/consts have explicit widths
+  
+  void skipWhitespace() {
+    while (pos < input.size() && (isspace(input[pos]) || input[pos] == ';')) {
+      if (input[pos] == ';') {
+        // Skip comment to end of line
+        while (pos < input.size() && input[pos] != '\n') pos++;
+      } else {
+        pos++;
+      }
+    }
+  }
+  
+  bool match(char c) {
+    skipWhitespace();
+    if (pos < input.size() && input[pos] == c) {
+      pos++;
+      return true;
+    }
+    return false;
+  }
+  
+  bool peek(char c) {
+    skipWhitespace();
+    return pos < input.size() && input[pos] == c;
+  }
+  
+  std::string parseSymbol() {
+    skipWhitespace();
+    std::string result;
+    while (pos < input.size() && !isspace(input[pos]) && 
+           input[pos] != '(' && input[pos] != ')') {
+      result += input[pos++];
+    }
+    return result;
+  }
+  
+  std::optional<ParsedReplacement> parseTopLevel() {
+    if (!match('(')) {
+      error = "Expected '(' at start";
+      return std::nullopt;
+    }
+    
+    std::string keyword = parseSymbol();
+    
+    if (keyword == "let") {
+      return parseLetExpr();
+    } else if (keyword == "rewrite") {
+      return parseRewrite();
+    } else if (keyword == "rewritepre") {
+      return parseRewritePre();
+    } else {
+      error = "Expected 'let', 'rewrite', or 'rewritepre', got: " + keyword;
+      return std::nullopt;
+    }
+  }
+  
+  std::optional<ParsedReplacement> parseLetExpr() {
+    // Parse bindings: ((name1 expr1) (name2 expr2) ...)
+    if (!match('(')) {
+      error = "Expected '(' for let bindings";
+      return std::nullopt;
+    }
+    
+    while (!peek(')')) {
+      if (!match('(')) {
+        error = "Expected '(' for let binding";
+        return std::nullopt;
+      }
+      
+      std::string name = parseSymbol();
+      if (name.empty()) {
+        error = "Expected binding name";
+        return std::nullopt;
+      }
+      
+      auto expr = parseExpr();
+      if (!expr) return std::nullopt;
+      
+      LetEnv[name] = *expr;
+      
+      if (!match(')')) {
+        error = "Expected ')' after let binding";
+        return std::nullopt;
+      }
+    }
+    
+    if (!match(')')) {
+      error = "Expected ')' after let bindings list";
+      return std::nullopt;
+    }
+    
+    // Parse the body (should be rewrite or rewritepre)
+    auto result = parseTopLevel();
+    
+    if (!match(')')) {
+      error = "Expected ')' at end of let expression";
+      return std::nullopt;
+    }
+    
+    return result;
+  }
+  
+  std::optional<ParsedReplacement> parseRewrite() {
+    auto lhs = parseExpr();
+    if (!lhs) return std::nullopt;
+    
+    auto rhs = parseExpr();
+    if (!rhs) return std::nullopt;
+    
+    if (!match(')')) {
+      error = "Expected ')' at end of rewrite";
+      return std::nullopt;
+    }
+    
+    ParsedReplacement PR;
+    PR.Mapping.LHS = *lhs;
+    PR.Mapping.RHS = *rhs;
+    return PR;
+  }
+  
+  std::optional<ParsedReplacement> parseRewritePre() {
+    auto pre = parseExpr();
+    if (!pre) return std::nullopt;
+    
+    auto lhs = parseExpr();
+    if (!lhs) return std::nullopt;
+    
+    auto rhs = parseExpr();
+    if (!rhs) return std::nullopt;
+    
+    if (!match(')')) {
+      error = "Expected ')' at end of rewritepre";
+      return std::nullopt;
+    }
+    
+    ParsedReplacement PR;
+    PR.Mapping.LHS = *lhs;
+    PR.Mapping.RHS = *rhs;
+    // Add precondition: pre == 1
+    PR.PCs.push_back({*pre, IC.getConst(llvm::APInt(1, 1))});
+    return PR;
+  }
+  
+  std::optional<Inst *> parseExpr() {
+    skipWhitespace();
+    if (pos >= input.size()) {
+      error = "Unexpected end of input";
+      return std::nullopt;
+    }
+    
+    if (input[pos] == '(') {
+      return parseCompoundExpr();
+    } else if (input[pos] == '-' || isdigit(input[pos])) {
+      return parseNumber();
+    } else if (input[pos] == '#') {
+      return parseHexNumber();
+    } else {
+      return parseAtom();
+    }
+  }
+  
+  std::optional<Inst *> parseAtom() {
+    std::string sym = parseSymbol();
+    if (sym.empty()) {
+      error = "Expected symbol";
+      return std::nullopt;
+    }
+    
+    // Check if it's a let-bound name
+    if (LetEnv.count(sym)) {
+      return LetEnv[sym];
+    }
+    
+    // Parse variable with optional width annotation: name or name:iN
+    // Missing width means symbolic width (for width-independent verification)
+    size_t colonPos = sym.find(':');
+    std::string name;
+    unsigned width;
+    
+    if (colonPos == std::string::npos) {
+      // No width annotation - symbolic width, use placeholder and mark for width-independent verification
+      name = sym;
+      width = DefaultWidth;  // Placeholder - actual width determined by width-independent verification
+      AllWidthsExplicit = false;
+    } else {
+      name = sym.substr(0, colonPos);
+      std::string widthStr = sym.substr(colonPos + 1);
+      
+      if (widthStr.empty() || widthStr[0] != 'i') {
+        error = "Invalid width annotation: " + widthStr;
+        return std::nullopt;
+      }
+      
+      width = std::stoul(widthStr.substr(1));
+    }
+    
+    // Convert CN back to symconst_N for symbolic constants (accept both C and c)
+    std::string instName = name;
+    if (name.size() > 1 && (name[0] == 'C' || name[0] == 'c') && isdigit(name[1])) {
+      instName = "symconst_" + name.substr(1);
+    } else if (name.size() > 1 && name[0] == 'x' && isdigit(name[1])) {
+      // x0 -> 0 (variable naming convention)
+      instName = name.substr(1);
+    }
+    
+    // Check cache for existing variable with same name
+    std::string cacheKey = instName + ":" + std::to_string(width);
+    if (VarCache.count(cacheKey)) {
+      return VarCache[cacheKey];
+    }
+    
+    Inst *V = IC.createVar(width, instName);
+    VarCache[cacheKey] = V;
+    return V;
+  }
+  
+  std::optional<Inst *> parseNumber() {
+    std::string numStr;
+    if (input[pos] == '-') {
+      numStr += input[pos++];
+    }
+    while (pos < input.size() && isdigit(input[pos])) {
+      numStr += input[pos++];
+    }
+    
+    // Width annotation is optional
+    unsigned width;
+    if (pos < input.size() && input[pos] == ':') {
+      pos++; // skip ':'
+      if (pos >= input.size() || input[pos] != 'i') {
+        error = "Invalid width annotation for constant '" + numStr + "'";
+        return std::nullopt;
+      }
+      pos++; // skip 'i'
+      std::string widthStr;
+      while (pos < input.size() && isdigit(input[pos])) {
+        widthStr += input[pos++];
+      }
+      if (widthStr.empty()) {
+        error = "Missing width value in annotation for constant '" + numStr + "'";
+        return std::nullopt;
+      }
+      width = std::stoul(widthStr);
+    } else {
+      // No width annotation - symbolic width, use placeholder for width-independent verification
+      width = DefaultWidth;
+      AllWidthsExplicit = false;
+    }
+    
+    int64_t val = std::stoll(numStr);
+    return IC.getConst(llvm::APInt(width, val, true));
+  }
+  
+  std::optional<Inst *> parseHexNumber() {
+    pos++; // skip '#'
+    if (pos >= input.size() || input[pos] != 'x') {
+      error = "Expected 'x' after '#'";
+      return std::nullopt;
+    }
+    pos++; // skip 'x'
+    
+    std::string hexStr;
+    while (pos < input.size() && isxdigit(input[pos])) {
+      hexStr += input[pos++];
+    }
+    
+    // Width annotation is optional
+    unsigned width;
+    if (pos < input.size() && input[pos] == ':') {
+      pos++; // skip ':'
+      if (pos >= input.size() || input[pos] != 'i') {
+        error = "Invalid width annotation for hex constant '#x" + hexStr + "'";
+        return std::nullopt;
+      }
+      pos++; // skip 'i'
+      std::string widthStr;
+      while (pos < input.size() && isdigit(input[pos])) {
+        widthStr += input[pos++];
+      }
+      if (widthStr.empty()) {
+        error = "Missing width value in annotation for hex constant '#x" + hexStr + "'";
+        return std::nullopt;
+      }
+      width = std::stoul(widthStr);
+    } else {
+      // No width annotation - symbolic width, use placeholder for width-independent verification
+      width = DefaultWidth;
+      AllWidthsExplicit = false;
+    }
+    
+    llvm::APInt val(width, hexStr, 16);
+    return IC.getConst(val);
+  }
+  
+  // Parse width argument for width-changing operations
+  // Returns: {width, isSymbolic, widthVarName}
+  // width=0 means "any width" (_), isSymbolic=true means it's a variable
+  struct WidthArg {
+    unsigned width;
+    bool isSymbolic;
+    std::string varName;
+  };
+  
+  std::optional<WidthArg> parseWidthArg() {
+    skipWhitespace();
+    if (pos >= input.size()) {
+      error = "Expected width argument";
+      return std::nullopt;
+    }
+    
+    // Check for _ (any width)
+    if (input[pos] == '_') {
+      pos++;
+      return WidthArg{0, false, ""};
+    }
+    
+    // Check for numeric width
+    if (isdigit(input[pos])) {
+      std::string numStr;
+      while (pos < input.size() && isdigit(input[pos])) {
+        numStr += input[pos++];
+      }
+      return WidthArg{(unsigned)std::stoul(numStr), false, ""};
+    }
+    
+    // Otherwise it's a variable name (symbolic width)
+    std::string varName;
+    while (pos < input.size() && !isspace(input[pos]) && 
+           input[pos] != '(' && input[pos] != ')') {
+      varName += input[pos++];
+    }
+    if (varName.empty()) {
+      error = "Expected width argument";
+      return std::nullopt;
+    }
+    return WidthArg{0, true, varName};
+  }
+  
+  std::optional<Inst *> parseCompoundExpr() {
+    if (!match('(')) {
+      error = "Expected '('";
+      return std::nullopt;
+    }
+    
+    std::string op = parseSymbol();
+    if (op.empty()) {
+      error = "Expected operation name";
+      return std::nullopt;
+    }
+    
+    // Check if this is a width-changing operation
+    bool isWidthChanging = (op == "zext" || op == "sext" || op == "trunc");
+    WidthArg widthArg{0, false, ""};
+    
+    if (isWidthChanging) {
+      // Parse width argument first
+      auto wa = parseWidthArg();
+      if (!wa) return std::nullopt;
+      widthArg = *wa;
+    }
+    
+    // Parse operands
+    std::vector<Inst *> operands;
+    while (!peek(')')) {
+      auto operand = parseExpr();
+      if (!operand) return std::nullopt;
+      operands.push_back(*operand);
+    }
+    
+    if (!match(')')) {
+      error = "Expected ')'";
+      return std::nullopt;
+    }
+    
+    return makeInst(op, operands, widthArg);
+  }
+  
+  std::optional<Inst *> makeInst(const std::string &op, const std::vector<Inst *> &operands, 
+                                  WidthArg widthArg = {0, false, ""}) {
+    // Map operation name to Inst::Kind
+    static const std::map<std::string, Inst::Kind> OpMap = {
+      {"add", Inst::Add}, {"add.nsw", Inst::AddNSW}, {"add.nuw", Inst::AddNUW}, {"add.nw", Inst::AddNW},
+      {"sub", Inst::Sub}, {"sub.nsw", Inst::SubNSW}, {"sub.nuw", Inst::SubNUW}, {"sub.nw", Inst::SubNW},
+      {"mul", Inst::Mul}, {"mul.nsw", Inst::MulNSW}, {"mul.nuw", Inst::MulNUW}, {"mul.nw", Inst::MulNW},
+      {"udiv", Inst::UDiv}, {"sdiv", Inst::SDiv},
+      {"urem", Inst::URem}, {"srem", Inst::SRem},
+      {"and", Inst::And}, {"or", Inst::Or}, {"xor", Inst::Xor},
+      {"shl", Inst::Shl}, {"shl.nsw", Inst::ShlNSW}, {"shl.nuw", Inst::ShlNUW}, {"shl.nw", Inst::ShlNW},
+      {"lshr", Inst::LShr}, {"lshr.exact", Inst::LShrExact},
+      {"ashr", Inst::AShr}, {"ashr.exact", Inst::AShrExact},
+      {"select", Inst::Select},
+      {"zext", Inst::ZExt}, {"sext", Inst::SExt}, {"trunc", Inst::Trunc},
+      {"eq", Inst::Eq}, {"ne", Inst::Ne},
+      {"ult", Inst::Ult}, {"slt", Inst::Slt}, {"ule", Inst::Ule}, {"sle", Inst::Sle},
+      {"ctpop", Inst::CtPop}, {"ctlz", Inst::Ctlz}, {"cttz", Inst::Cttz}, {"logb", Inst::LogB},
+      {"bswap", Inst::BSwap}, {"bitreverse", Inst::BitReverse},
+      {"fshl", Inst::FShl}, {"fshr", Inst::FShr},
+      {"sadd.sat", Inst::SAddSat}, {"uadd.sat", Inst::UAddSat},
+      {"ssub.sat", Inst::SSubSat}, {"usub.sat", Inst::USubSat},
+      {"freeze", Inst::Freeze},
+      {"width", Inst::BitWidth},
+      {"not", Inst::Xor}, // Special case: (not x) -> (xor x -1)
+    };
+    
+    // Handle dataflow fact predicates (before OpMap lookup)
+    
+    // (powerOfTwo x) => (x != 0) && ((x & (x - 1)) == 0)
+    if (op == "powerOfTwo" && operands.size() == 1) {
+      Inst *X = operands[0];
+      unsigned w = X->Width;
+      Inst *Zero = IC.getConst(llvm::APInt(w, 0));
+      Inst *One = IC.getConst(llvm::APInt(w, 1));
+      // x != 0
+      Inst *NonZeroCond = IC.getInst(Inst::Ne, 1, {X, Zero});
+      // x & (x - 1)
+      Inst *XMinusOne = IC.getInst(Inst::Sub, w, {X, One});
+      Inst *AndExpr = IC.getInst(Inst::And, w, {X, XMinusOne});
+      // (x & (x-1)) == 0
+      Inst *IsPow2 = IC.getInst(Inst::Eq, 1, {AndExpr, Zero});
+      // nonzero && ispow2
+      return IC.getInst(Inst::And, 1, {NonZeroCond, IsPow2});
+    }
+    
+    // (nonZero x) => x != 0
+    if (op == "nonZero" && operands.size() == 1) {
+      Inst *X = operands[0];
+      Inst *Zero = IC.getConst(llvm::APInt(X->Width, 0));
+      return IC.getInst(Inst::Ne, 1, {X, Zero});
+    }
+    
+    // (nonNegative x) => x >= 0 (signed)
+    if (op == "nonNegative" && operands.size() == 1) {
+      Inst *X = operands[0];
+      Inst *Zero = IC.getConst(llvm::APInt(X->Width, 0));
+      return IC.getInst(Inst::Sle, 1, {Zero, X});
+    }
+    
+    // (negative x) => x < 0 (signed)
+    if (op == "negative" && operands.size() == 1) {
+      Inst *X = operands[0];
+      Inst *Zero = IC.getConst(llvm::APInt(X->Width, 0));
+      return IC.getInst(Inst::Slt, 1, {X, Zero});
+    }
+    
+    auto it = OpMap.find(op);
+    if (it == OpMap.end()) {
+      error = "Unknown operation: " + op;
+      return std::nullopt;
+    }
+    
+    if (operands.empty()) {
+      error = "Operation " + op + " requires operands";
+      return std::nullopt;
+    }
+    
+    Inst::Kind K = it->second;
+    
+    // Handle special case: not
+    if (op == "not" && operands.size() == 1) {
+      unsigned w = operands[0]->Width;
+      Inst *MinusOne = IC.getConst(llvm::APInt::getAllOnes(w));
+      return IC.getInst(Inst::Xor, w, {operands[0], MinusOne});
+    }
+    
+    // Handle width-changing operations
+    if (K == Inst::ZExt || K == Inst::SExt || K == Inst::Trunc) {
+      unsigned resultWidth;
+      if (widthArg.isSymbolic) {
+        // Symbolic width variable - use placeholder, triggers width-independent verification
+        AllWidthsExplicit = false;
+        unsigned opWidth = operands[0]->Width;
+        if (K == Inst::Trunc) {
+          resultWidth = opWidth > 1 ? opWidth / 2 : 1;
+        } else {
+          resultWidth = opWidth * 2;
+        }
+      } else if (widthArg.width == 0) {
+        // _ means symbolic width - triggers width-independent verification
+        // Use a fixed large placeholder width (64) so all _ placeholders
+        // produce the same width, avoiding width mismatch in comparisons
+        AllWidthsExplicit = false;
+        unsigned opWidth = operands[0]->Width;
+        if (K == Inst::Trunc) {
+          // For trunc, use half of operand width as placeholder
+          resultWidth = opWidth > 1 ? opWidth / 2 : 1;
+        } else {
+          // For zext/sext, use a large fixed width (64) as placeholder
+          // This ensures all _ widths are the same for comparison operations
+          resultWidth = 64;
+        }
+      } else {
+        resultWidth = widthArg.width;
+      }
+      return IC.getInst(K, resultWidth, operands);
+    }
+    
+    // Determine result width from first operand
+    unsigned width = operands[0]->Width;
+    
+    // Comparison operations return i1
+    if (K == Inst::Eq || K == Inst::Ne || K == Inst::Ult || K == Inst::Slt ||
+        K == Inst::Ule || K == Inst::Sle) {
+      width = 1;
+    }
+    
+    // For select, the condition is i1 but result width comes from the other operands
+    if (K == Inst::Select && operands.size() >= 2) {
+      width = operands[1]->Width;
+    }
+    
+    return IC.getInst(K, width, operands);
+  }
+};
+
+// Helper function to parse S-expression string
+// Returns parsed replacement and sets allWidthsExplicit to indicate if all widths were specified
+inline std::optional<ParsedReplacement> ParseSExpr(InstContext &IC, const std::string &input, 
+                                                    std::string &error, bool *allWidthsExplicit = nullptr) {
+  SExprParser parser(IC);
+  auto result = parser.parse(input);
+  if (!result) {
+    error = parser.getError();
+  }
+  if (allWidthsExplicit) {
+    *allWidthsExplicit = parser.allWidthsExplicit();
+  }
+  return result;
+}
 
 // TODO print types in preamble (Alex)
 // TODO print type info for each instruction (Alex)

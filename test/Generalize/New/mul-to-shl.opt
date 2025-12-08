@@ -1,0 +1,8 @@
+; RUN: %hydra --sexpr-input --sexpr %s 2>&1 | %FileCheck %s
+; Test: x * c => x << logb(c) when c is a power of two
+
+(rewritepre (powerOfTwo c:i32) (mul x:i32 c:i32) (shl x:i32 (logb c:i32)))
+
+; CHECK: (rewritepre (powerOfTwo c)
+; CHECK-NEXT:             (mul c x)
+; CHECK-NEXT:             (shl x (logb c)))

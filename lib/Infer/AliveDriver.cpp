@@ -53,6 +53,14 @@ static llvm::cl::opt<bool> ShowValidWidths("show-valid-widths",
   llvm::cl::desc("Show widths for which the input is valid."),
   llvm::cl::init(false));
 
+static llvm::cl::opt<bool> AllWidthCombinations("alive-all-width-combinations",
+  llvm::cl::desc("Allow all width combinations, not just powers of two (default = false)"),
+  llvm::cl::init(false));
+
+static llvm::cl::opt<unsigned> MaxWidth("alive-max-width",
+  llvm::cl::desc("Maximum width to consider for symbolic widths (default = 64)"),
+  llvm::cl::init(64));
+
 
 class FunctionBuilder {
 public:
@@ -409,9 +417,91 @@ void souper::AliveDriver::copyInputs(souper::AliveDriver::Cache &To,
   }
 }
 
+size_t souper::AliveDriver::countTypings(Inst *RHS) {
+  RExprCache.clear();
+  IR::Function RHSF;
+  copyInputs(RExprCache, RHSF);
+  if (!translateRoot(RHS, nullptr, RHSF, RExprCache)) {
+    llvm::errs() << "Failed to translate RHS.\n";
+    return 0;
+  }
+  RHSF.setName("tgt");
+
+  tools::Transform t;
+  ReturnLHSRAII foo{t, LHSF};
+  t.src = std::move(LHSF);
+  t.tgt = std::move(RHSF);
+  tools::TransformVerify tv(t, /*check_each_var=*/false);
+
+  auto types = tv.getTypings();
+
+  if (!types.hasSingleTyping()) {
+    size_t count = 0;
+    for (; types; ++types) {
+      ++count;
+      
+      // Print width assignments at debug level 5
+      if (DebugLevel >= 5) {
+        tv.fixupTypes(types);
+        llvm::errs() << "  typing " << count << ":\n";
+        
+        // Print input variables
+        llvm::errs() << "    Inputs: ";
+        bool first = true;
+        for (auto &&P : Inputs) {
+          if (!first) llvm::errs() << ", ";
+          first = false;
+          std::string name = NameMap.count(P.first) ? NameMap[P.first] : 
+                            (P.first->Name.empty() ? "%?" : ("%" + P.first->Name));
+          llvm::errs() << name << "=i" << P.second->bits();
+        }
+        llvm::errs() << "\n";
+        
+        // Print all instructions from LHS cache
+        if (!LExprCache.empty()) {
+          llvm::errs() << "    LHS: ";
+          first = true;
+          for (auto &&P : LExprCache) {
+            if (!first) llvm::errs() << ", ";
+            first = false;
+            std::string name = NameMap.count(P.first) ? NameMap[P.first] : 
+                              (P.first->Name.empty() ? "%?" : ("%" + P.first->Name));
+            llvm::errs() << name << "=i" << P.second->bits();
+          }
+          llvm::errs() << "\n";
+        }
+        
+        // Print all instructions from RHS cache
+        if (!RExprCache.empty()) {
+          llvm::errs() << "    RHS: ";
+          first = true;
+          for (auto &&P : RExprCache) {
+            if (!first) llvm::errs() << ", ";
+            first = false;
+            std::string name = NameMap.count(P.first) ? NameMap[P.first] : 
+                              (P.first->Name.empty() ? "%?" : ("%" + P.first->Name));
+            llvm::errs() << name << "=i" << P.second->bits();
+          }
+          llvm::errs() << "\n";
+        }
+      } else if (DebugLevel > 4 && count % 100 == 0) {
+        llvm::errs() << "\rCounting typings: " << count;
+        llvm::errs().flush();
+      }
+    }
+    if (count > 0 && DebugLevel > 4) {
+      llvm::errs() << "\rCounting typings: " << count << " (done)\n";
+    }
+    return count;
+  }
+  
+  return 1; // Single typing
+}
+
 bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
   RExprCache.clear();
   ValidTypings.clear();
+  InvalidTypings.clear();
   IR::Function RHSF;
   copyInputs(RExprCache, RHSF);
   if (!translateRoot(RHS, RHSAssumptions, RHSF, RExprCache)) {
@@ -442,13 +532,23 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
     size_t incorrect = 0;
     for (; types; ++types, ++i) {
       if (DebugLevel > 4) {
-        llvm::errs() << "Typing : " << i << "\r";
+        if (i % 100 == 0 && i > 0) {
+          llvm::errs() << "\rVerifying typing: " << i << " (valid: " << correct << ", invalid: " << incorrect << ")";
+          llvm::errs().flush();
+        }
       }
 
       tv.fixupTypes(types);
       std::map<const Inst *, size_t> Typing;
+      // Include input variables
       for (auto &&P : Inputs) {
         Typing[P.first] = P.second->bits();
+      }
+      // Also include all instructions with symbolic types (includes width-changing ops)
+      for (auto &&P : SymTypes) {
+        if (P.first && P.second) {
+          Typing[P.first] = P.second->bits();
+        }
       }
       if (auto errs = tv.verify()) {
         if (DebugLevel > 4) {
@@ -464,6 +564,9 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
         ValidTypings.push_back(Typing);
         correct++;
       }
+    }
+    if (DebugLevel > 4 && i > 0) {
+      llvm::errs() << "\rVerifying typing: " << i << " (valid: " << correct << ", invalid: " << incorrect << ") - done\n";
     }
     if (!incorrect && i) {
       return true;
@@ -489,16 +592,29 @@ bool souper::AliveDriver::verify (Inst *RHS, Inst *RHSAssumptions) {
   if (SkipAliveSolver)
     return false;
 
+  // Single typing case - also populate ValidTypings/InvalidTypings for consistency
+  std::map<const Inst *, size_t> Typing;
+  for (auto &&P : Inputs) {
+    Typing[P.first] = P.second->bits();
+  }
+  for (auto &&P : SymTypes) {
+    if (P.first && P.second) {
+      Typing[P.first] = P.second->bits();
+    }
+  }
+
   if (auto errs = tv.verify()) {
     if (DebugLevel >= 1) {
       std::ostringstream os;
       os << errs << "\n";
       llvm::errs() << "RHS rejected by Alive2:\n" << os.str();
     }
+    InvalidTypings.push_back(Typing);
     return false; // TODO: Encode errs into ErrorCode
   } else {
     if (DebugLevel >= 2)
       llvm::errs() << "RHS verified by Alive2\n";
+    ValidTypings.push_back(Typing);
     return true;
   }
 }
@@ -616,6 +732,22 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
   }
   if (I->K == Inst::Var) {
     NameMap[I] = Name;
+  }
+
+  // In width-independent mode, share symbolic types for width-preserving ops.
+  // Width-changing ops (SExt, ZExt, Trunc) start new equivalence classes.
+  // This prevents combinatorial explosion of width combinations.
+  if (WidthIndependentMode && I->Width != 1 && 
+      I->K != Inst::SExt && I->K != Inst::ZExt && I->K != Inst::Trunc &&
+      I->K != Inst::Var && I->K != Inst::Const && I->K != Inst::Hole &&
+      !Ops.empty()) {
+    // Find an operand with the same width that has a symbolic type
+    for (auto &&Op : Ops) {
+      if (Op->Width == I->Width && SymTypes.find(Op) != SymTypes.end()) {
+        SymTypes[I] = SymTypes[Op];
+        break;
+      }
+    }
   }
 
   auto &t = getType(I->Width, I);
@@ -789,7 +921,32 @@ bool souper::AliveDriver::translateAndCache(const souper::Inst *I,
       return true;
     }
 
-    // TODO: Desugar log2. Alive2 only supports log2 for concrete constants.
+    case souper::Inst::LogB: {
+      // Expand logb(x) = ctpop(spread(x)) - 1
+      // where spread fills all bits below the highest set bit
+      // This is equivalent to: width - ctlz(x) - 1
+      auto operand = ExprCache[I->Ops[0]];
+      unsigned Width = I->Width;
+      
+      // First spread: val = val | (val >> 1) | (val >> 2) | (val >> 4) | ...
+      IR::Value *Val = operand;
+      for (unsigned i = 0, j = 0; j < Width / 2; i++) {
+        j = 1u << i;
+        auto shiftAmt = Builder.val(t, j);
+        auto shifted = Builder.binOp(t, "%logb_shr_" + std::to_string(j), 
+                                     Val, shiftAmt, IR::BinOp::LShr);
+        Val = Builder.binOp(t, "%logb_or_" + std::to_string(j),
+                           Val, shifted, IR::BinOp::Or);
+      }
+      
+      // ctpop of spread value gives us (highest bit position + 1)
+      auto ctpop = Builder.unaryOp(t, "%logb_ctpop", Val, IR::UnaryOp::Ctpop);
+      
+      // Subtract 1 to get logb
+      auto one = Builder.val(t, 1);
+      ExprCache[I] = Builder.binOp(t, Name, ctpop, one, IR::BinOp::Sub);
+      return true;
+    }
 
     default:{
       llvm::errs() << "Unsupported Instruction Kind : " << I->getKindName(I->K) << "\n";
@@ -844,17 +1001,28 @@ IR::Type &souper::AliveDriver::getType(int Width, const Inst *I) {
     }
     static int symtypenum = 0;
 
-    if (I->K == Inst::SExt || I->K == Inst::ZExt || I->K == Inst::Trunc) {
+    unsigned maxW = MaxWidth;  // Capture for lambda
+    
+    if (!AllWidthCombinations && (I->K == Inst::SExt || I->K == Inst::ZExt || I->K == Inst::Trunc)) {
+      // Constrain to power-of-two widths only, with max width
       SymTypes[I] = new IR::ConstrainedSymbolicType("symty_" +
         std::to_string(symtypenum++) + "_", IR::SymbolicType::Int,
-        [](auto width) {
+        [maxW](auto width) {
+          // Power of two constraint: width & (width - 1) == 0
           auto Cond = width & (width - smt::expr::mkUInt(1, width.bits()));
-          return (Cond == smt::expr::mkUInt(0, width.bits()));
+          auto IsPowerOfTwo = (Cond == smt::expr::mkUInt(0, width.bits()));
+          // Max width constraint: width <= maxW
+          auto MaxWidthConstraint = width.ule(smt::expr::mkUInt(maxW, width.bits()));
+          return IsPowerOfTwo && MaxWidthConstraint;
         });
       return *SymTypes[I];
     }
-    SymTypes[I] = new IR::SymbolicType("symty_" +
-      std::to_string(symtypenum++) + "_", (1 << IR::SymbolicType::Int));
+    // Apply max width constraint for all symbolic types
+    SymTypes[I] = new IR::ConstrainedSymbolicType("symty_" +
+      std::to_string(symtypenum++) + "_", IR::SymbolicType::Int,
+      [maxW](auto width) {
+        return width.ule(smt::expr::mkUInt(maxW, width.bits()));
+      });
     return *SymTypes[I];
   }
 

@@ -1,0 +1,10 @@
+; RUN: %hydra --sexpr-input --sexpr --alive-max-width=8 %s 2>&1 | %FileCheck %s
+; From Lean example five (simplified):
+; and(x, mask) = zext(trunc(x))
+; where mask = 2^w - 1 for truncation width w
+; Here: mask 1:i4 = 2^1 - 1, so trunc to i1
+; Note: This optimization fails to generalize because the constant 1 depends on width
+
+(rewrite (and x:i4 1:i4) (zext 4 (trunc 1 x:i4)))
+
+; CHECK: ; Generalization failed for input 0

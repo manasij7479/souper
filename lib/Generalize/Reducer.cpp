@@ -690,13 +690,96 @@ size_t WeakenSingleKB(ParsedReplacement Input,
 ParsedReplacement Reducer::ReducePCsToSimpleDF(ParsedReplacement Input) {
   std::vector<InstMapping> NewPCs;
   for (auto PC : Input.PCs) {
-    // NonZero
-    if (PC.LHS->K == Inst::Ne && PC.RHS->K == Inst::Const && PC.RHS->Val.isOne()) {
-      auto V = PC.LHS->Ops[0];
-      auto C = PC.LHS->Ops[1];
-      if (V->K == Inst::Var && C->K == Inst::Const && C->Val.getLimitedValue() == 0) {
-        V->NonZero = true;
-        continue;
+    // Check for PC == 1 patterns (precondition must be true)
+    if (PC.RHS->K == Inst::Const && PC.RHS->Val.isOne()) {
+      
+      // NonZero: (ne x 0) == 1
+      if (PC.LHS->K == Inst::Ne) {
+        auto V = PC.LHS->Ops[0];
+        auto C = PC.LHS->Ops[1];
+        if (V->K == Inst::Var && C->K == Inst::Const && C->Val.getLimitedValue() == 0) {
+          V->NonZero = true;
+          continue;
+        }
+        // Also check swapped order
+        if (C->K == Inst::Var && V->K == Inst::Const && V->Val.getLimitedValue() == 0) {
+          C->NonZero = true;
+          continue;
+        }
+      }
+      
+      // NonNegative: (sle 0 x) == 1 means x >= 0
+      if (PC.LHS->K == Inst::Sle) {
+        auto L = PC.LHS->Ops[0];
+        auto R = PC.LHS->Ops[1];
+        if (L->K == Inst::Const && L->Val.getLimitedValue() == 0 && R->K == Inst::Var) {
+          R->NonNegative = true;
+          continue;
+        }
+      }
+      
+      // Negative: (slt x 0) == 1 means x < 0
+      if (PC.LHS->K == Inst::Slt) {
+        auto L = PC.LHS->Ops[0];
+        auto R = PC.LHS->Ops[1];
+        if (L->K == Inst::Var && R->K == Inst::Const && R->Val.getLimitedValue() == 0) {
+          L->Negative = true;
+          continue;
+        }
+      }
+      
+      // PowerOfTwo: (and (ne x 0) (eq (and x (sub x 1)) 0)) == 1
+      if (PC.LHS->K == Inst::And && PC.LHS->Ops.size() == 2) {
+        auto Part1 = PC.LHS->Ops[0];
+        auto Part2 = PC.LHS->Ops[1];
+        // Try both orderings
+        for (int swap = 0; swap < 2; swap++) {
+          if (swap) std::swap(Part1, Part2);
+          // Part1 should be (ne x 0)
+          // Part2 should be (eq (and x (sub x 1)) 0)
+          if (Part1->K == Inst::Ne && Part2->K == Inst::Eq) {
+            Inst *Var1 = nullptr;
+            // Check (ne x 0)
+            if (Part1->Ops[0]->K == Inst::Var && 
+                Part1->Ops[1]->K == Inst::Const && Part1->Ops[1]->Val == 0) {
+              Var1 = Part1->Ops[0];
+            } else if (Part1->Ops[1]->K == Inst::Var && 
+                       Part1->Ops[0]->K == Inst::Const && Part1->Ops[0]->Val == 0) {
+              Var1 = Part1->Ops[1];
+            }
+            if (Var1) {
+              // Check (eq (and x (sub x 1)) 0)
+              Inst *AndExpr = nullptr;
+              if (Part2->Ops[0]->K == Inst::And && 
+                  Part2->Ops[1]->K == Inst::Const && Part2->Ops[1]->Val == 0) {
+                AndExpr = Part2->Ops[0];
+              } else if (Part2->Ops[1]->K == Inst::And && 
+                         Part2->Ops[0]->K == Inst::Const && Part2->Ops[0]->Val == 0) {
+                AndExpr = Part2->Ops[1];
+              }
+              if (AndExpr && AndExpr->Ops.size() == 2) {
+                // Check (and x (sub x 1))
+                Inst *SubExpr = nullptr;
+                Inst *Var2 = nullptr;
+                if (AndExpr->Ops[0] == Var1 && AndExpr->Ops[1]->K == Inst::Sub) {
+                  Var2 = AndExpr->Ops[0];
+                  SubExpr = AndExpr->Ops[1];
+                } else if (AndExpr->Ops[1] == Var1 && AndExpr->Ops[0]->K == Inst::Sub) {
+                  Var2 = AndExpr->Ops[1];
+                  SubExpr = AndExpr->Ops[0];
+                }
+                if (SubExpr && Var2 == Var1) {
+                  // Check (sub x 1)
+                  if (SubExpr->Ops[0] == Var1 && 
+                      SubExpr->Ops[1]->K == Inst::Const && SubExpr->Ops[1]->Val == 1) {
+                    Var1->PowOfTwo = true;
+                    continue;
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
 

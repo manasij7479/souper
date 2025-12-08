@@ -46,6 +46,11 @@ using namespace llvm;
 
 namespace {
 
+// Flag for skipping UB checks (can be set by souper-check or default to false)
+static cl::opt<bool> SkipUBChecks("souper-skip-ub-checks-internal",
+    cl::desc("Skip undefined behavior checks, only check equivalence (default=false)"),
+    cl::init(false), cl::Hidden);
+
 static cl::opt<bool> NoInfer("souper-no-infer",
     cl::desc("Populate the external cache, but don't infer replacements (default=false)"),
     cl::init(false));
@@ -477,7 +482,8 @@ public:
     std::string Query;
     if (Model) {
       std::vector<Inst *> ModelInsts;
-      std::string Query = BuildQuery(IC, BPCs, PCs, Mapping, &ModelInsts, /*Precondition=*/0);
+      std::string Query = BuildQuery(IC, BPCs, PCs, Mapping, &ModelInsts, /*Precondition=*/0,
+                                     /*Negate=*/false, /*DropUB=*/SkipUBChecks);
       if (Query.empty())
         return std::make_error_code(std::errc::value_too_large);
       bool IsSat;
@@ -494,7 +500,8 @@ public:
       }
       return EC;
     } else {
-      std::string Query = BuildQuery(IC, BPCs, PCs, Mapping, 0, /*Precondition=*/0);
+      std::string Query = BuildQuery(IC, BPCs, PCs, Mapping, 0, /*Precondition=*/0,
+                                     /*Negate=*/false, /*DropUB=*/SkipUBChecks);
       if (Query.empty())
         return std::make_error_code(std::errc::value_too_large);
       bool IsSat;

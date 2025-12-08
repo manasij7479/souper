@@ -43,6 +43,7 @@
 #include "souper/Tool/GetSolver.h"
 #include "souper/Tool/CandidateMapUtils.h"
 #include "set"
+#include <fstream>
 
 #define DEBUG_TYPE "souper"
 STATISTIC(InstructionReplaced, "Number of instructions replaced by another instruction");
@@ -86,6 +87,14 @@ static cl::opt<unsigned> LastReplace("souper-last-opt", cl::Hidden,
     cl::init(std::numeric_limits<unsigned>::max()),
     cl::desc("Last Souper optimization to perform (default=infinite)"));
 
+static cl::opt<std::string> MultiUseFilter("souper-multi-use-filter", cl::Hidden,
+    cl::init("cpos"),
+    cl::desc("Filter optimizations based on multi-use values: "
+             "none (no filtering), "
+             "all (skip if ALL eliminated values have multiple uses), "
+             "any (skip if ANY eliminated value has multiple uses), "
+             "cpos (skip if heuristic is not positive)"));
+
 #ifdef DYNAMIC_PROFILE_ALL
 static const bool DynamicProfileAll = true;
 #else
@@ -95,9 +104,12 @@ static const bool DynamicProfileAll = false;
 static void eliminateDeadCode(Function &F) {
   FunctionPassManager FPM;
   FPM.addPass(DCEPass());
+  FPM.addPass(ADCEPass());  // More aggressive dead code elimination
   FunctionAnalysisManager FAM;
   FAM.registerPass([&] { return TargetLibraryAnalysis(); });
   FAM.registerPass([&] { return PassInstrumentationAnalysis(); });
+  FAM.registerPass([&] { return DominatorTreeAnalysis(); });
+  FAM.registerPass([&] { return PostDominatorTreeAnalysis(); });
   FPM.run(F, FAM);
 }
 
@@ -326,6 +338,20 @@ public:
 
       Instruction *I = Cand.Origin;
       assert(Cand.Mapping.LHS->K == Inst::Const || Cand.Mapping.LHS->hasOrigin(I));
+
+      // here we finally commit to having a viable replacement
+
+      if (ReplacementIdx < FirstReplace || ReplacementIdx > LastReplace) {
+        if (DebugLevel > 1)
+          errs() << "Skipping this replacement (number " << ReplacementIdx << ")\n";
+        if (ReplacementIdx < std::numeric_limits<unsigned>::max())
+          ++ReplacementIdx;
+        continue;
+      }
+      if (ReplacementIdx < std::numeric_limits<unsigned>::max())
+        ++ReplacementIdx;
+      ReplacementsDone++;
+
       IRBuilder<> Builder(I);
 
       Value *NewVal = getValue(Cand.Mapping.RHS, I, EBC, DT,
@@ -342,18 +368,148 @@ public:
         continue;
       }
 
-      // here we finally commit to having a viable replacement
-
-      if (ReplacementIdx < FirstReplace || ReplacementIdx > LastReplace) {
-        if (DebugLevel > 1)
-          errs() << "Skipping this replacement (number " << ReplacementIdx << ")\n";
-        if (ReplacementIdx < std::numeric_limits<unsigned>::max())
-          ++ReplacementIdx;
-        continue;
+      // Multi-use filtering based on command line flag
+      if (MultiUseFilter != "none") {
+        std::set<Inst*> LHSInsts, RHSInsts;
+        std::function<void(Inst*, std::set<Inst*>&)> collectInsts = [&](Inst* inst, std::set<Inst*>& insts) {
+          if (insts.count(inst)) return;
+          insts.insert(inst);
+          for (auto Op : inst->Ops) {
+            collectInsts(Op, insts);
+          }
+        };
+        
+        collectInsts(Cand.Mapping.LHS, LHSInsts);
+        collectInsts(Cand.Mapping.RHS, RHSInsts);
+        
+        // Find instructions that are in LHS but not in RHS (being eliminated)
+        std::vector<Inst*> eliminatedInsts;
+        for (auto inst : LHSInsts) {
+          if (RHSInsts.find(inst) == RHSInsts.end()) {
+            eliminatedInsts.push_back(inst);
+          }
+        }
+        
+        bool shouldSkip = false;
+        bool foundEliminatedValues = false;
+        
+        if (MultiUseFilter == "all") {
+          // Skip if ALL eliminated values have multiple uses
+          bool allEliminatedHaveMultiUse = true;
+          for (auto inst : eliminatedInsts) {
+            if (inst->Origins.size() > 0) {
+              for (auto V : inst->Origins) {
+                if (auto LLVMInst = dyn_cast<Instruction>(V)) {
+                  foundEliminatedValues = true;
+                  if (LLVMInst->hasOneUse()) {
+                    allEliminatedHaveMultiUse = false;
+                    if (DebugLevel > 3) {
+                      errs() << "Found single-use eliminated value: ";
+                      LLVMInst->print(errs());
+                      errs() << " (uses: " << LLVMInst->getNumUses() << ")\n";
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+            if (!allEliminatedHaveMultiUse) break;
+          }
+          shouldSkip = foundEliminatedValues && allEliminatedHaveMultiUse;
+          
+        } else if (MultiUseFilter == "any") {
+          // Skip if ANY eliminated value has multiple uses
+          for (auto inst : eliminatedInsts) {
+            if (inst->Origins.size() > 0) {
+              for (auto V : inst->Origins) {
+                if (auto LLVMInst = dyn_cast<Instruction>(V)) {
+                  foundEliminatedValues = true;
+                  if (!LLVMInst->hasOneUse()) {
+                    shouldSkip = true;
+                    if (DebugLevel > 3) {
+                      errs() << "Found multi-use eliminated value: ";
+                      LLVMInst->print(errs());
+                      errs() << " (uses: " << LLVMInst->getNumUses() << ")\n";
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+            if (shouldSkip) break;
+          }
+          
+        } else if (MultiUseFilter == "cpos") {
+          // Simplified but effective heuristic focusing on key factors
+          
+          int eliminatedSingleUseInsts = 0;
+          int eliminatedMultiUseInsts = 0;
+          int totalEliminatedUses = 0;
+          
+          // Count eliminated instructions and their impact
+          for (auto inst : eliminatedInsts) {
+            if (inst->Origins.size() > 0) {
+              for (auto V : inst->Origins) {
+                if (auto LLVMInst = dyn_cast<Instruction>(V)) {
+                  foundEliminatedValues = true;
+                  
+                  if (LLVMInst->hasOneUse()) {
+                    eliminatedSingleUseInsts++;
+                  } else {
+                    eliminatedMultiUseInsts++;
+                    totalEliminatedUses += LLVMInst->getNumUses();
+                  }
+                  
+                  if (DebugLevel > 3) {
+                    errs() << "Eliminated instruction (uses=" << LLVMInst->getNumUses() << "): ";
+                    LLVMInst->print(errs());
+                    errs() << "\n";
+                  }
+                }
+              }
+            }
+          }
+          
+          // Count new RHS instructions (actual new computation)
+          int newRHSInstructionCount = 0;
+          std::function<void(Inst*)> countNewRHSInsts = [&](Inst* inst) {
+            if (inst->K != Inst::Const && inst->Origins.empty()) {
+              newRHSInstructionCount++;
+              if (DebugLevel > 3) {
+                errs() << "New RHS instruction: " << Inst::getKindName(inst->K) << "\n";
+              }
+            }
+            for (auto Op : inst->Ops) {
+              countNewRHSInsts(Op);
+            }
+          };
+          countNewRHSInsts(Cand.Mapping.RHS);
+          
+          // Simple but effective cost model
+          // Benefit: each eliminated single-use instruction = +1
+          // Cost: each new instruction = +1
+          // Penalty: multi-use instructions are harder to eliminate = -0.5 each
+          float benefit = eliminatedSingleUseInsts;
+          float cost = newRHSInstructionCount + (eliminatedMultiUseInsts * 0.5f);
+          float netBenefit = benefit - cost;
+          
+          if (DebugLevel > 3) {
+            errs() << "Simple cost analysis:\n";
+            errs() << "  eliminated_single_use=" << eliminatedSingleUseInsts << "\n";
+            errs() << "  eliminated_multi_use=" << eliminatedMultiUseInsts << "\n";
+            errs() << "  new_instructions=" << newRHSInstructionCount << "\n";
+            errs() << "  benefit=" << benefit << " cost=" << cost << " net=" << netBenefit << "\n";
+          }
+          
+          shouldSkip = foundEliminatedValues && (netBenefit <= 0.0f);
+        }
+        
+        if (shouldSkip) {
+          if (DebugLevel > 1)
+            errs() << "skipping optimization for LHS number " << LHSNum << " due to multi-use filter (" << MultiUseFilter << ")\n";
+          continue;
+        }
       }
-      if (ReplacementIdx < std::numeric_limits<unsigned>::max())
-        ++ReplacementIdx;
-      ReplacementsDone++;
 
       if (Cand.Mapping.LHS->HarvestKind == HarvestType::HarvestedFromDef)
         ReplacedValues[Cand.Mapping.LHS] = NewVal;
@@ -382,6 +538,17 @@ public:
         errs() << "\"\n";
       }
 
+      // Capture optimization details to stderr if debug level > 4
+      if (DebugLevel > 4) {
+        errs() << "=== Optimization " << ReplacementsDone << " ===\n";
+        PrintReplacement(errs(), Cand.BPCs, Cand.PCs, Cand.Mapping);
+        errs() << "\n";
+        
+        errs() << "; === Function before optimization " << ReplacementsDone << " ===\n";
+        F.print(errs());
+        errs() << "\n";
+      }
+
       if (DynamicProfile)
         dynamicProfile(&F, Cand);
 
@@ -401,6 +568,13 @@ public:
       }
 
       eliminateDeadCode(F);
+
+      // Capture LLVM IR after optimization to stderr if debug level > 4
+      if (DebugLevel > 4) {
+        errs() << "; === Function after optimization " << ReplacementsDone << " ===\n";
+        F.print(errs());
+        errs() << "\n";
+      }
 
       if (DebugLevel > 2) {
         if (DebugLevel > 4) {

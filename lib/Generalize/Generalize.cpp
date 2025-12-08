@@ -71,6 +71,10 @@ static cl::opt<bool> NoWidth("no-width",
     cl::desc("No width independence checks."),
     cl::init(false));
 
+static cl::opt<bool> FallbackToFixedWidth("fallback-to-fixed-width",
+    cl::desc("If width abstraction fails, fall back to exact width constraints."),
+    cl::init(false));
+
 static cl::opt<bool> SymbolicDF("symbolic-df",
     cl::desc("Generalize with symbolic dataflow facts."),
     cl::init(true));
@@ -422,6 +426,27 @@ struct ShrinkWrap {
         Ops.push_back(OpMap[Op]);
       }
 
+      // Check operand width compatibility before creating instruction
+      if (Ops.size() >= 2) {
+        // For binary ops, check if operands have compatible widths
+        if (Inst::isCmp(I->K) || I->K == Inst::Add || I->K == Inst::Sub ||
+            I->K == Inst::Mul || I->K == Inst::UDiv || I->K == Inst::SDiv ||
+            I->K == Inst::URem || I->K == Inst::SRem || I->K == Inst::And ||
+            I->K == Inst::Or || I->K == Inst::Xor || I->K == Inst::Shl ||
+            I->K == Inst::LShr || I->K == Inst::AShr) {
+          for (size_t i = 1; i < Ops.size(); ++i) {
+            if (Ops[i]->Width != Ops[0]->Width) {
+              if (DebugLevel > 4) {
+                llvm::errs() << "Operand width mismatch in " << Inst::getKindName(I->K)
+                             << ": Op0=" << Ops[0]->Width << ", Op" << i << "=" 
+                             << Ops[i]->Width << "\n";
+              }
+              return nullptr;
+            }
+          }
+        }
+      }
+
       auto Result = IC.getInst(I->K, InferWidth(I->K, Ops), Ops);
       Result->Name = I->Name;
       return Result;
@@ -474,7 +499,12 @@ struct ShrinkWrap {
     // Push Inequality PCs
     for (size_t i = 1; i < SynthConsts.size(); ++i) {
       for (size_t j = 0; j < i; ++j) {
+        // Only create inequality PCs for constants with matching widths
         if (SynthConsts[i]->Width != SynthConsts[j]->Width) {
+          if (DebugLevel > 4) {
+            llvm::errs() << "Skipping inequality PC for constants with different widths: "
+                         << SynthConsts[i]->Width << " vs " << SynthConsts[j]->Width << "\n";
+          }
           continue;
         }
         auto C1 = SynthConsts[i];
@@ -487,6 +517,11 @@ struct ShrinkWrap {
 
     // Verify
     do {
+      // Type check before verification to avoid crashes
+      if (!typeCheck(New)) {
+        New.PCs.pop_back();
+        continue;
+      }
       Result = Verify(New);
       if (Result) {
         break;
@@ -569,6 +604,14 @@ std::vector<Inst *> FilterRelationsByValue(const std::vector<Inst *> &Relations,
 
   std::vector<Inst *> FilteredRelations;
   for (auto &&R : Relations) {
+    // Skip relations that would crash due to width mismatches
+    if (!typeCheck(R)) {
+      if (DebugLevel > 4) {
+        llvm::errs() << "Skipping relation that failed type check\n";
+      }
+      continue;
+    }
+    
     auto Result = CPos.evaluateInst(R);
     // Positive example
     if (Result.hasValue() && !Result.getValue().isAllOnes()) {
@@ -794,6 +837,25 @@ std::vector<Inst *> InferPotentialRelations(
   if (!FindConstantRelations) {
     return Results;
   }
+  
+  // Pre-validate: Check if CMap has entries with wildly different widths
+  // This can cause crashes in APInt comparisons later
+  std::set<unsigned> Widths;
+  for (auto &&[I, Val] : CMap) {
+    Widths.insert(Val.getBitWidth());
+  }
+  if (Widths.size() > 1) {
+    unsigned MinWidth = *Widths.begin();
+    unsigned MaxWidth = *Widths.rbegin();
+    if (MaxWidth > MinWidth * 4) {
+      // Too much width variation - skip to avoid crashes
+      if (DebugLevel > 4) {
+        llvm::errs() << "Skipping InferPotentialRelations: width range too large ("
+                     << MinWidth << " to " << MaxWidth << ")\n";
+      }
+      return Results;
+    }
+  }
 
 
   // if (DebugLevel) {
@@ -924,16 +986,16 @@ std::vector<Inst *> InferPotentialRelations(
         Results.push_back(Builder(XI).Shl(YI).AShr(YI).Eq(XI)());
       }
 
-      // Mul C
-      if (C2 && YC!= 0 && XC.urem(YC) == 0) {
+      // Mul C - guard against width mismatch
+      if (C2 && XC.getBitWidth() == YC.getBitWidth() && YC!= 0 && XC.urem(YC) == 0) {
         auto Fact = XC.udiv(YC);
         if (Fact != 1 && Fact != 0) {
           Results.push_back(Builder(YI).Mul(Fact).Eq(XI)());
         }
       }
 
-      // log C
-      if (XC == YC.logBase2()) {
+      // log C - guard against width mismatch
+      if (XC.getBitWidth() == YC.getBitWidth() && XC == YC.logBase2()) {
         Results.push_back(Builder(XI).Eq(Builder(YI).LogB())());
       }
 
@@ -943,7 +1005,8 @@ std::vector<Inst *> InferPotentialRelations(
       //   Results.push_back(Builder(XI).Sub(Diff).Eq(YI)());
       // }
 
-      if (C2 && XC != 0 && YC.urem(XC) == 0) {
+      // Guard against width mismatch
+      if (C2 && XC.getBitWidth() == YC.getBitWidth() && XC != 0 && YC.urem(XC) == 0) {
         auto Fact = YC.udiv(XC);
         if (Fact != 1 && Fact != 0) {
           Results.push_back(Builder(XI).Mul(Fact).Eq(YI)());
@@ -952,11 +1015,16 @@ std::vector<Inst *> InferPotentialRelations(
 
       auto One = llvm::APInt(XC.getBitWidth(), 1);
 
-      if (XI->Width != 1 && XC - YC == 1) {
+      // Only perform APInt arithmetic if widths match
+      if (XI->Width != 1 && XC.getBitWidth() == YC.getBitWidth() && XC - YC == 1) {
         Results.push_back(Builder(XI).Sub(YI).Eq(One)());
       }
 
       auto GENComps = [&] (Inst *A, llvm::APInt AVal, Inst *B, llvm::APInt BVal) {
+        // Guard all APInt comparisons with width check
+        if (AVal.getBitWidth() != BVal.getBitWidth()) {
+          return;
+        }
         if (AVal.ne(BVal)) Results.push_back(Builder(A).Ne(B)());
         // For width == 1, there is exactly one model, hence it isn't a generalization
         if (AVal.sle(BVal)  && A->Width != 1) Results.push_back(Builder(A).Sle(B)());
@@ -1156,7 +1224,10 @@ std::optional<ParsedReplacement> DFPreconditionsAndVerifyGreedy(
 
   std::optional<ParsedReplacement> Ret;
   auto SOLVE = [&]() -> bool {
-            Ret = Verify(Input);
+    if (!typeCheck(Input)) {
+      return false;
+    }
+    Ret = Verify(Input);
     if (Ret) {
       return true;
     } else {
@@ -1226,7 +1297,10 @@ std::optional<ParsedReplacement> SimplePreconditionsAndVerifyGreedy(
   std::optional<ParsedReplacement> Clone = std::nullopt;
 
   auto SOLVE = [&]() -> bool {
-          Clone = Verify(Input);
+    if (!typeCheck(Input)) {
+      return false;
+    }
+    Clone = Verify(Input);
     if (Clone) {
       return true;
     } else {
@@ -1376,6 +1450,12 @@ std::optional<ParsedReplacement> VerifyWithRels(
 
     // InfixPrinter IP(Input);
     // IP(llvm::errs());
+
+    // Type check before verification
+    if (!typeCheck(Input)) {
+      Input.PCs.pop_back();
+      continue;
+    }
 
     auto Clone = Verify(Input);
 
@@ -2221,18 +2301,7 @@ void findDangerousConstants(Inst *I, std::set<Inst *> &Results) {
   }
 }
 
-// TODO: memoize
-bool hasMultiArgumentPhi(Inst *I) {
-  if (I->K == Inst::Phi) {
-    return I->Ops.size() > 1;
-  }
-  for (auto Op : I->Ops) {
-    if (hasMultiArgumentPhi(Op)) {
-      return true;
-    }
-  }
-  return false;
-}
+// hasMultiArgumentPhi moved to SynthUtils.cpp
 
 ParsedReplacement ReducePoison(ParsedReplacement Input) {
   auto &IC = *Input.Mapping.LHS->IC;
@@ -2529,6 +2598,15 @@ std::optional<ParsedReplacement> SuccessiveSymbolize(ParsedReplacement Input, bo
   Refresh("Symbolize common consts, two at a time");
 
   // Step 1.5 : Direct symbolize, simple rel constraints on LHS
+
+  // Validate before getting CEX to avoid crashes
+  if (!typeCheck(Result)) {
+    if (DebugLevel > 4) {
+      llvm::errs() << "Type check failed before GetMultipleCEX, returning empty\n";
+    }
+    Changed = false;
+    return {};
+  }
 
   auto CounterExamples = GetMultipleCEX(Result, 3);
   if (Nested) {
@@ -2979,18 +3057,378 @@ InstMapping GetWidthRangeConstraint(Inst *I, size_t Min, size_t Max, InstContext
   return {Left.And(Right)(), IC.getConst(llvm::APInt(1, 1))};
 }
 
-// TODO: More as needed.
+//===----------------------------------------------------------------------===//
+// Width Abstraction - Relational Width Constraints
+//===----------------------------------------------------------------------===//
 
-Inst *CombinePCs(const std::vector<InstMapping> &PCs, InstContext &IC) {
-  Inst *Ante = IC.getConst(llvm::APInt(1, true));
-  for (auto PC : PCs ) {
-    Inst *Eq = IC.getInst(Inst::Eq, 1, {PC.LHS, PC.RHS});
-    Ante = IC.getInst(Inst::And, 1, {Ante, Eq});
-  }
-  return Ante;
+// A width precondition with metadata for scoring during abstraction
+struct WidthPrecondition {
+  InstMapping PC;
+  std::string Description;
+  size_t ValidCount = 0;
+  size_t InvalidCount = 0;
+};
+
+namespace {
+
+// Generate width equality constraint: width(X) == width(Y)
+InstMapping GetWidthEqConstraint(Inst *X, Inst *Y, InstContext &IC) {
+  if (!X || !Y) return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(X).BitWidth().Eq(Builder(Y).BitWidth())(), IC.getConst(llvm::APInt(1, 1))};
 }
 
+// Generate: width(X) > width(Y)
+InstMapping GetWidthGtConstraint(Inst *X, Inst *Y, InstContext &IC) {
+  if (!X || !Y) return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(Y).BitWidth().Ult(Builder(X).BitWidth())(), IC.getConst(llvm::APInt(1, 1))};
+}
+
+// Generate: width(X) >= width(Y)
+InstMapping GetWidthGeConstraint(Inst *X, Inst *Y, InstContext &IC) {
+  if (!X || !Y) return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(Y).BitWidth().Ule(Builder(X).BitWidth())(), IC.getConst(llvm::APInt(1, 1))};
+}
+
+// Generate: width(X) < width(Y)
+InstMapping GetWidthLtConstraint(Inst *X, Inst *Y, InstContext &IC) {
+  if (!X || !Y) return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(X).BitWidth().Ult(Builder(Y).BitWidth())(), IC.getConst(llvm::APInt(1, 1))};
+}
+
+// Generate: width(X) <= width(Y)
+InstMapping GetWidthLeConstraint(Inst *X, Inst *Y, InstContext &IC) {
+  if (!X || !Y) return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  return {Builder(X).BitWidth().Ule(Builder(Y).BitWidth())(), IC.getConst(llvm::APInt(1, 1))};
+}
+
+// Generate: width(X) - width(Y) == Diff
+InstMapping GetWidthDiffEqConstraint(Inst *X, Inst *Y, int64_t Diff, InstContext &IC) {
+  if (!X || !Y) return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  auto WidthX = Builder(X).BitWidth();
+  auto WidthY = Builder(Y).BitWidth();
+  if (Diff >= 0) {
+    return {WidthX.Eq(WidthY.Add(Diff))(), IC.getConst(llvm::APInt(1, 1))};
+  } else {
+    return {WidthY.Eq(WidthX.Add(-Diff))(), IC.getConst(llvm::APInt(1, 1))};
+  }
+}
+
+// Generate "all widths equal" constraint for N variables
+InstMapping GetAllWidthsEqualConstraint(const std::vector<Inst *> &Vars, InstContext &IC) {
+  if (Vars.size() < 2) {
+    return {IC.getConst(llvm::APInt(1, 1)), IC.getConst(llvm::APInt(1, 1))};
+  }
+  // width(v0) == width(v1) && width(v0) == width(v2) && ...
+  Inst *Conj = IC.getConst(llvm::APInt(1, 1));
+  for (size_t i = 1; i < Vars.size(); ++i) {
+    if (!Vars[0] || !Vars[i]) continue;
+    auto Eq = Builder(Vars[0]).BitWidth().Eq(Builder(Vars[i]).BitWidth())();
+    Conj = IC.getInst(Inst::And, 1, {Conj, Eq});
+  }
+  return {Conj, IC.getConst(llvm::APInt(1, 1))};
+}
+
+// Check if a typing satisfies a relational constraint between two instructions
+bool TypingSatisfiesRelation(const std::map<const Inst *, size_t> &Typing,
+                             const Inst *X, const Inst *Y,
+                             std::function<bool(size_t, size_t)> Rel) {
+  if (!X || !Y) return false;
+  auto itX = Typing.find(X);
+  auto itY = Typing.find(Y);
+  if (itX == Typing.end() || itY == Typing.end()) {
+    return false;
+  }
+  return Rel(itX->second, itY->second);
+}
+
+// Check if a typing satisfies width(X) - width(Y) == Diff
+bool TypingSatisfiesWidthDiff(const std::map<const Inst *, size_t> &Typing,
+                              const Inst *X, const Inst *Y, int64_t Diff) {
+  if (!X || !Y) return false;
+  auto itX = Typing.find(X);
+  auto itY = Typing.find(Y);
+  if (itX == Typing.end() || itY == Typing.end()) return false;
+  return static_cast<int64_t>(itX->second) - static_cast<int64_t>(itY->second) == Diff;
+}
+
+// Check if all variables have the same width in a typing
+bool TypingHasAllEqualWidths(const std::map<const Inst *, size_t> &Typing,
+                             const std::vector<Inst *> &Vars) {
+  if (Vars.empty()) return true;
+  if (!Vars[0]) return false;
+  auto it0 = Typing.find(Vars[0]);
+  if (it0 == Typing.end()) return false;
+  size_t W = it0->second;
+  for (size_t i = 1; i < Vars.size(); ++i) {
+    if (!Vars[i]) return false;
+    auto it = Typing.find(Vars[i]);
+    if (it == Typing.end() || it->second != W) return false;
+  }
+  return true;
+}
+
+// Get instruction name safely for width precondition descriptions
+std::string SafeInstName(const Inst *I) {
+  if (!I) return "?";
+  if (!I->Name.empty()) return I->Name;
+  // For width-changing instructions, generate a descriptive name
+  switch (I->K) {
+    case Inst::Trunc: return "trunc";
+    case Inst::SExt: return "sext";
+    case Inst::ZExt: return "zext";
+    default: return "?";
+  }
+}
+
+} // anonymous namespace
+
+// Helper to add a precondition candidate with scoring
+static void AddPreconditionCandidate(
+    std::vector<WidthPrecondition> &Candidates,
+    InstMapping PC,
+    const std::string &Description,
+    const std::vector<std::map<const Inst *, size_t>> &ValidTypings,
+    const std::vector<std::map<const Inst *, size_t>> &InvalidTypings,
+    std::function<bool(const std::map<const Inst *, size_t>&)> Predicate) {
+  
+  WidthPrecondition WP;
+  WP.PC = PC;
+  WP.Description = Description;
+  for (const auto &T : ValidTypings) {
+    if (Predicate(T)) WP.ValidCount++;
+  }
+  for (const auto &T : InvalidTypings) {
+    if (Predicate(T)) WP.InvalidCount++;
+  }
+  Candidates.push_back(WP);
+}
+
+// Generate all candidate width preconditions for a set of variables
+static std::vector<WidthPrecondition> GenerateWidthPreconditions(
+    const std::vector<Inst *> &Vars,
+    const std::vector<std::map<const Inst *, size_t>> &ValidTypings,
+    const std::vector<std::map<const Inst *, size_t>> &InvalidTypings,
+    InstContext &IC) {
+  
+  std::vector<WidthPrecondition> Candidates;
+  
+  // Validate inputs
+  if (Vars.empty() || (ValidTypings.empty() && InvalidTypings.empty())) {
+    return Candidates;
+  }
+  
+  // If there are 2+ variables, try "all widths equal" constraint
+  if (Vars.size() >= 2) {
+    AddPreconditionCandidate(
+        Candidates,
+        GetAllWidthsEqualConstraint(Vars, IC),
+        "all widths equal",
+        ValidTypings, InvalidTypings,
+        [&Vars](const std::map<const Inst *, size_t> &T) {
+          return TypingHasAllEqualWidths(T, Vars);
+        });
+  }
+  
+  // Generate pairwise constraints between all pairs of variables
+  for (size_t i = 0; i < Vars.size(); ++i) {
+    for (size_t j = i + 1; j < Vars.size(); ++j) {
+      Inst *X = Vars[i];
+      Inst *Y = Vars[j];
+      
+      // Skip null variables
+      if (!X || !Y) continue;
+      
+      std::string XName = SafeInstName(X);
+      std::string YName = SafeInstName(Y);
+      
+      // width(X) == width(Y)
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthEqConstraint(X, Y, IC),
+          "width(" + XName + ") == width(" + YName + ")",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a == b; });
+          });
+      
+      // width(X) > width(Y)
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthGtConstraint(X, Y, IC),
+          "width(" + XName + ") > width(" + YName + ")",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a > b; });
+          });
+      
+      // width(X) >= width(Y)
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthGeConstraint(X, Y, IC),
+          "width(" + XName + ") >= width(" + YName + ")",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a >= b; });
+          });
+      
+      // width(X) < width(Y)
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthLtConstraint(X, Y, IC),
+          "width(" + XName + ") < width(" + YName + ")",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a < b; });
+          });
+      
+      // width(X) <= width(Y)
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthLeConstraint(X, Y, IC),
+          "width(" + XName + ") <= width(" + YName + ")",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a <= b; });
+          });
+      
+      // width(X) - width(Y) == 1
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthDiffEqConstraint(X, Y, 1, IC),
+          "width(" + XName + ") - width(" + YName + ") == 1",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesWidthDiff(T, X, Y, 1);
+          });
+      
+      // width(Y) - width(X) == 1
+      AddPreconditionCandidate(
+          Candidates,
+          GetWidthDiffEqConstraint(Y, X, 1, IC),
+          "width(" + YName + ") - width(" + XName + ") == 1",
+          ValidTypings, InvalidTypings,
+          [X, Y](const std::map<const Inst *, size_t> &T) {
+            return TypingSatisfiesWidthDiff(T, Y, X, 1);
+          });
+    }
+  }
+  
+  // Generate conjunction preconditions (pairs of constraints)
+  // Only do this if we have multiple instructions and simple constraints didn't work
+  if (Vars.size() >= 2) {
+    // Helper to create conjunction of two preconditions
+    auto MakeConjunction = [&IC](InstMapping PC1, InstMapping PC2) -> InstMapping {
+      Inst *And = IC.getInst(Inst::And, 1, {PC1.LHS, PC2.LHS});
+      return {And, IC.getConst(llvm::APInt(1, 1))};
+    };
+    
+    // Try all pairs of > constraints
+    for (size_t i = 0; i < Vars.size(); ++i) {
+      for (size_t j = 0; j < Vars.size(); ++j) {
+        if (i == j) continue;
+        Inst *X = Vars[i];
+        Inst *Y = Vars[j];
+        if (!X || !Y) continue;
+        std::string XName = SafeInstName(X);
+        std::string YName = SafeInstName(Y);
+        
+        for (size_t k = 0; k < Vars.size(); ++k) {
+          for (size_t l = 0; l < Vars.size(); ++l) {
+            if (k == l || (i == k && j == l)) continue;
+            Inst *A = Vars[k];
+            Inst *B = Vars[l];
+            if (!A || !B) continue;
+            std::string AName = SafeInstName(A);
+            std::string BName = SafeInstName(B);
+            
+            // width(X) > width(Y) AND width(A) > width(B)
+            AddPreconditionCandidate(
+                Candidates,
+                MakeConjunction(GetWidthGtConstraint(X, Y, IC), 
+                               GetWidthGtConstraint(A, B, IC)),
+                "width(" + XName + ") > width(" + YName + ") && width(" + AName + ") > width(" + BName + ")",
+                ValidTypings, InvalidTypings,
+                [X, Y, A, B](const std::map<const Inst *, size_t> &T) {
+                  return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a > b; }) &&
+                         TypingSatisfiesRelation(T, A, B, [](size_t a, size_t b) { return a > b; });
+                });
+            
+            // width(X) > width(Y) AND width(A) >= width(B)
+            AddPreconditionCandidate(
+                Candidates,
+                MakeConjunction(GetWidthGtConstraint(X, Y, IC), 
+                               GetWidthGeConstraint(A, B, IC)),
+                "width(" + XName + ") > width(" + YName + ") && width(" + AName + ") >= width(" + BName + ")",
+                ValidTypings, InvalidTypings,
+                [X, Y, A, B](const std::map<const Inst *, size_t> &T) {
+                  return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a > b; }) &&
+                         TypingSatisfiesRelation(T, A, B, [](size_t a, size_t b) { return a >= b; });
+                });
+            
+            // width(X) >= width(Y) AND width(A) > width(B)
+            AddPreconditionCandidate(
+                Candidates,
+                MakeConjunction(GetWidthGeConstraint(X, Y, IC), 
+                               GetWidthGtConstraint(A, B, IC)),
+                "width(" + XName + ") >= width(" + YName + ") && width(" + AName + ") > width(" + BName + ")",
+                ValidTypings, InvalidTypings,
+                [X, Y, A, B](const std::map<const Inst *, size_t> &T) {
+                  return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a >= b; }) &&
+                         TypingSatisfiesRelation(T, A, B, [](size_t a, size_t b) { return a > b; });
+                });
+            
+            // width(X) >= width(Y) AND width(A) >= width(B)
+            AddPreconditionCandidate(
+                Candidates,
+                MakeConjunction(GetWidthGeConstraint(X, Y, IC), 
+                               GetWidthGeConstraint(A, B, IC)),
+                "width(" + XName + ") >= width(" + YName + ") && width(" + AName + ") >= width(" + BName + ")",
+                ValidTypings, InvalidTypings,
+                [X, Y, A, B](const std::map<const Inst *, size_t> &T) {
+                  return TypingSatisfiesRelation(T, X, Y, [](size_t a, size_t b) { return a >= b; }) &&
+                         TypingSatisfiesRelation(T, A, B, [](size_t a, size_t b) { return a >= b; });
+                });
+          }
+        }
+      }
+    }
+  }
+  
+  return Candidates;
+}
+
+// Find the best width precondition: maximizes valid typings, excludes all invalid
+static std::optional<WidthPrecondition> FindBestWidthPrecondition(
+    const std::vector<WidthPrecondition> &Candidates) {
+  
+  if (Candidates.empty()) return std::nullopt;
+  
+  std::optional<WidthPrecondition> Best;
+  size_t BestValidCount = 0;
+  
+  for (const auto &C : Candidates) {
+    // Must exclude all invalid typings
+    if (C.InvalidCount > 0) continue;
+    
+    // Must accept at least one valid typing
+    if (C.ValidCount == 0) continue;
+    
+    // Prefer the one that accepts the most valid typings
+    if (C.ValidCount > BestValidCount) {
+      Best = C;
+      BestValidCount = C.ValidCount;
+    }
+  }
+  
+  return Best;
+}
+
+// TODO: More as needed.
+
+// CombinePCs moved to SynthUtils.cpp
+
 bool IsStaticallyWidthIndependent(ParsedReplacement Input) {
+  return false; // Not used any more. TODO delete.
   std::vector<Inst *> Consts;
   auto Pred = [](Inst *I) {return I->K == Inst::Const;};
   findInsts(Input.Mapping.LHS, Consts, Pred);
@@ -3039,59 +3477,29 @@ void GetWidthChangeInsts(Inst *I, std::vector<Inst *> &WidthChanges) {
     return I->K == Inst::Trunc || I->K == Inst::SExt || I->K == Inst::ZExt;});
 }
 
-bool hasConcreteDataflowConditions(ParsedReplacement &Input) {
-  std::vector<Inst *> Inputs;
-  findVars(Input.Mapping.LHS, Inputs);
+// hasConcreteDataflowConditions moved to SynthUtils.cpp
 
-  for (auto &&V : Inputs) {
-    if (!V->Range.isFullSet()) {
-      return true;
-    }
-    if (V->KnownOnes.getBitWidth() == V->Width && V->KnownOnes != 0) {
-      return true;
-    }
+// ReplaceMinusOneAndFamily moved to SynthUtils.cpp
 
-    if (V->KnownZeros.getBitWidth() == V->Width && V->KnownZeros != 0) {
-      return true;
-    }
-  }
+// Internal version that captures typing info
+struct WidthCheckResult {
+  ParsedReplacement Result;
+  bool IsWidthIndependent;
+  std::vector<std::map<const Inst *, size_t>> ValidTypings;
+  std::vector<std::map<const Inst *, size_t>> InvalidTypings;
+};
 
-  if (Input.Mapping.LHS->DemandedBits.getBitWidth() == Input.Mapping.LHS->Width &&
-      !Input.Mapping.LHS->DemandedBits.isAllOnes()) {
-    return true;
-  }
-  return false;
-}
-
-ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement Input) {
-  std::map<Inst *, Inst *> Map;
-  for (size_t i = 2; i <= 64; ++i) {
-    Map[IC.getConst(llvm::APInt::getAllOnes(i))] =
-      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i)();
-    Map[IC.getConst(llvm::APInt::getAllOnes(i) - 1)] =
-      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).Sub(1)();
-    Map[IC.getConst(llvm::APInt::getSignedMaxValue(i))] =
-      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).LShr(1)();
-    Map[IC.getConst(llvm::APInt::getSignedMinValue(i))] =
-      Builder(IC.getConst(llvm::APInt(1, 1))).SExt(i).LShr(1).Flip()();
-  }
-  return Replace(Input, Map);
-}
-
-std::pair<ParsedReplacement, bool>
-InstantiateWidthChecks(InstContext &IC,
-  ParsedReplacement Input) {
-
-  // llvm::errs() << "A\n";
-  // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
+WidthCheckResult
+InstantiateWidthChecksWithTypings(InstContext &IC, ParsedReplacement Input) {
+  WidthCheckResult WCR;
+  WCR.IsWidthIndependent = false;
 
   Input = ReplaceMinusOneAndFamily(IC, Input);
 
-  // llvm::errs() << "B\n";
-  // {InfixPrinter IP(Input); IP(llvm::errs()); llvm::errs() << "\n";}
-
   if (IsStaticallyWidthIndependent(Input)) {
-    return {Input, true};
+    WCR.Result = Input;
+    WCR.IsWidthIndependent = true;
+    return WCR;
   }
 
   if (!NoWidth && !hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
@@ -3106,23 +3514,86 @@ InstantiateWidthChecks(InstContext &IC,
         llvm::errs() << "WIDTH: Generalized opt is valid for all widths.\n";
       }
       // Completely width independent.
+      WCR.IsWidthIndependent = true;
+      
+      // Capture typings even for the "valid for all widths" case
+      WCR.ValidTypings = Alive.getValidTypings();
+      WCR.InvalidTypings = Alive.getInvalidTypings();
+
+      // Extract width constraints by analyzing what holds across ALL valid typings
+      // For each pair of variables, check if width(A) <= width(B) always holds
+      std::vector<Inst *> Vars;
+      findVars(Input.Mapping.LHS, Vars);
+      
+      if (!WCR.ValidTypings.empty() && Vars.size() >= 2) {
+        for (size_t i = 0; i < Vars.size(); ++i) {
+          for (size_t j = i + 1; j < Vars.size(); ++j) {
+            Inst *A = Vars[i];
+            Inst *B = Vars[j];
+            if (!A || !B) continue;
+            
+            // Check if width(A) <= width(B) for all valid typings
+            bool A_le_B = true;
+            bool B_le_A = true;
+            bool A_eq_B = true;
+            
+            for (const auto &Typing : WCR.ValidTypings) {
+              auto itA = Typing.find(A);
+              auto itB = Typing.find(B);
+              if (itA == Typing.end() || itB == Typing.end()) continue;
+              
+              size_t wA = itA->second;
+              size_t wB = itB->second;
+              
+              if (wA > wB) A_le_B = false;
+              if (wB > wA) B_le_A = false;
+              if (wA != wB) A_eq_B = false;
+            }
+            
+            // Add the strongest constraint that holds
+            if (A_eq_B) {
+              Input.PCs.push_back(GetWidthEqConstraint(A, B, IC));
+              if (DebugLevel > 4) {
+                llvm::errs() << "WIDTH: Adding constraint: width(" 
+                             << A->Name << ") == width(" << B->Name << ")\n";
+              }
+            } else if (A_le_B && !B_le_A) {
+              Input.PCs.push_back(GetWidthLeConstraint(A, B, IC));
+              if (DebugLevel > 4) {
+                llvm::errs() << "WIDTH: Adding constraint: width(" 
+                             << A->Name << ") <= width(" << B->Name << ")\n";
+              }
+            } else if (B_le_A && !A_le_B) {
+              Input.PCs.push_back(GetWidthLeConstraint(B, A, IC));
+              if (DebugLevel > 4) {
+                llvm::errs() << "WIDTH: Adding constraint: width(" 
+                             << B->Name << ") <= width(" << A->Name << ")\n";
+              }
+            }
+          }
+        }
+      }
 
       // Only width == 1 checks needed
       std::set<Inst *> Visited;
-      std::vector<Inst *> Stack{Input.Mapping.LHS, Input.Mapping.RHS};
+      std::vector<Inst *> Stack;
+      if (Input.Mapping.LHS) Stack.push_back(Input.Mapping.LHS);
+      if (Input.Mapping.RHS) Stack.push_back(Input.Mapping.RHS);
       // DFS to visit all instructions.
 
       std::vector<Inst *> WidthChangeInsts;
       std::set<Inst *> WISet;
-      GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
-      for (auto &&I : WidthChangeInsts) {
-        WISet.insert(I);
+      if (Input.Mapping.LHS) {
+        GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
+        for (auto &&I : WidthChangeInsts) {
+          if (I) WISet.insert(I);
+        }
       }
 
       while (!Stack.empty()) {
         auto I = Stack.back();
         Stack.pop_back();
-        if (Visited.count(I)) {
+        if (!I || Visited.count(I)) {
           continue;
         }
 
@@ -3132,71 +3603,132 @@ InstantiateWidthChecks(InstContext &IC,
 
         Visited.insert(I);
         for (auto Op : I->Ops) {
-          Stack.push_back(Op);
+          if (Op) Stack.push_back(Op);
         }
       }
 
-      return {Input, true};
+      WCR.Result = Input;
+      return WCR;
     }
 
-    auto &&ValidTypings = Alive.getValidTypings();
-    if (ValidTypings.empty() && !Alive.getInvalidTypings().empty()) {
+    // Capture typing info
+    WCR.ValidTypings = Alive.getValidTypings();
+    WCR.InvalidTypings = Alive.getInvalidTypings();
+
+    if (WCR.ValidTypings.empty() && !WCR.InvalidTypings.empty()) {
       // Something went wrong, generalized opt is not valid at any width.
       if (DebugLevel > 4) {
         llvm::errs() << "WIDTH: Generalized opt is not valid for any width.\n";
       }
       Input.Mapping.LHS = nullptr;
       Input.Mapping.RHS = nullptr;
-      return {Input, false};
+      WCR.Result = Input;
+      return WCR;
     }
 
-    if (ValidTypings.empty() && Alive.getInvalidTypings().empty()) {
+    if (WCR.ValidTypings.empty() && WCR.InvalidTypings.empty()) {
       // Something went wrong, Alive didn't generate typing assignments.
       if (DebugLevel > 4) {
         llvm::errs() << "Alive didn't generate typing assignments.\n";
       }
-
     }
 
-
-  // Abstract width to a range or relational precondition
-  // TODO: Abstraction
-
+    // Abstract width to a range or relational precondition
     std::vector<Inst *> Inputs;
     findVars(Input.Mapping.LHS, Inputs);
-    if (Inputs.size() == 1 && ValidTypings.size() > 1) {
+    
+    // Also collect width-changing instructions for precondition generation
+    std::vector<Inst *> WidthChangeInsts;
+    GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
+    GetWidthChangeInsts(Input.Mapping.RHS, WidthChangeInsts);
+    
+    // Combine variables and width-changing instructions for precondition generation
+    std::vector<Inst *> AllWidthInsts = Inputs;
+    for (auto *I : WidthChangeInsts) {
+      if (I && I->K != Inst::Const) {
+        AllWidthInsts.push_back(I);
+      }
+    }
+    
+    // Try single-variable range abstraction first (existing logic)
+    if (Inputs.size() == 1 && WCR.ValidTypings.size() > 1) {
       auto I = Inputs[0];
-      auto Width = I->Width;
 
       std::vector<size_t> Widths;
-      for (auto &&V : ValidTypings) {
-        Widths.push_back(V[I]);
+      for (auto &&V : WCR.ValidTypings) {
+        auto it = V.find(I);
+        if (it != V.end()) Widths.push_back(it->second);
       }
 
-      size_t MaxWidth = *std::max_element(Widths.begin(), Widths.end());
-      size_t MinWidth = *std::min_element(Widths.begin(), Widths.end());
+      if (!Widths.empty()) {
+        size_t MaxWidth = *std::max_element(Widths.begin(), Widths.end());
+        size_t MinWidth = *std::min_element(Widths.begin(), Widths.end());
 
-      if (ValidTypings.size() == (MaxWidth - MinWidth + 1)) {
-        Input.PCs.push_back(GetWidthRangeConstraint(I, MinWidth, MaxWidth, IC));
-        return {Input, false};
+        if (WCR.ValidTypings.size() == (MaxWidth - MinWidth + 1)) {
+          Input.PCs.push_back(GetWidthRangeConstraint(I, MinWidth, MaxWidth, IC));
+          if (DebugLevel > 4) {
+            llvm::errs() << "WIDTH: Abstracted to range [" << MinWidth << ", " << MaxWidth << "]\n";
+          }
+          WCR.Result = Input;
+          return WCR;
+        }
       }
     }
+    
+    // Try relational width abstraction for all width-relevant instructions
+    if (!WCR.ValidTypings.empty() && !WCR.InvalidTypings.empty()) {
+      auto Candidates = GenerateWidthPreconditions(AllWidthInsts, WCR.ValidTypings, 
+                                                    WCR.InvalidTypings, IC);
+      
+      if (DebugLevel > 4) {
+        llvm::errs() << "WIDTH: Generated " << Candidates.size() << " candidate preconditions\n";
+        for (const auto &C : Candidates) {
+          llvm::errs() << "  " << C.Description << ": valid=" << C.ValidCount 
+                       << " invalid=" << C.InvalidCount << "\n";
+        }
+      }
+      
+      if (auto Best = FindBestWidthPrecondition(Candidates)) {
+        if (DebugLevel > 4) {
+          llvm::errs() << "WIDTH: Selected precondition: " << Best->Description 
+                       << " (covers " << Best->ValidCount << "/" << WCR.ValidTypings.size() 
+                       << " valid typings)\n";
+        }
+        Input.PCs.push_back(Best->PC);
+        WCR.Result = Input;
+        return WCR;
+      }
+    }
+  }
 
-  }
-  // If abstraction fails, insert checks for existing widths.
-  std::vector<Inst *> Inputs;
-  findVars(Input.Mapping.LHS, Inputs);
-  for (auto &&I : Inputs) {
-    Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
-  }
-  std::vector<Inst *> WidthChangeInsts;
-  GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
-  for (auto &&I : WidthChangeInsts) {
-    if (I->K != Inst::Const) {
+  // If abstraction fails and flag is set, fall back to exact width constraints.
+  if (FallbackToFixedWidth) {
+    if (DebugLevel > 4) {
+      llvm::errs() << "WIDTH: Falling back to fixed width constraints\n";
+    }
+    std::vector<Inst *> Inputs;
+    findVars(Input.Mapping.LHS, Inputs);
+    for (auto &&I : Inputs) {
       Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
     }
+    std::vector<Inst *> WidthChangeInsts;
+    GetWidthChangeInsts(Input.Mapping.LHS, WidthChangeInsts);
+    for (auto &&I : WidthChangeInsts) {
+      if (I->K != Inst::Const) {
+        Input.PCs.push_back(GetEqWidthConstraint(I, I->Width, IC));
+      }
+    }
   }
-  return {Input, false};
+  // If no abstraction found and no fallback, return without width constraints
+  WCR.Result = Input;
+  return WCR;
+}
+
+std::pair<ParsedReplacement, bool>
+InstantiateWidthChecks(InstContext &IC,
+  ParsedReplacement Input) {
+  auto WCR = InstantiateWidthChecksWithTypings(IC, Input);
+  return {WCR.Result, WCR.IsWidthIndependent};
 }
 
 std::optional<ParsedReplacement> ShrinkRep(ParsedReplacement Input,
@@ -3333,24 +3865,185 @@ std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input) {
   return Replace(Input, RepMap);
 }
 
-std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
+std::vector<std::map<const Inst *, size_t>> GetWidthAssignments(ParsedReplacement Input, bool *IsWidthIndependent, bool *IsNoWidthMode) {
+  if (IsWidthIndependent) *IsWidthIndependent = false;
+  if (IsNoWidthMode) *IsNoWidthMode = false;
+  
+  // Check if we have a valid LHS
+  if (!Input.Mapping.LHS) {
+    if (DebugLevel > 2) {
+      llvm::errs() << "GetWidthAssignments: No LHS\n";
+    }
+    return {};
+  }
+  
+  auto &IC = *Input.Mapping.LHS->IC;
+  
+  // Check if we have a valid RHS (not a candidate)
+  if (!Input.Mapping.RHS) {
+    if (DebugLevel > 2) {
+      llvm::errs() << "GetWidthAssignments: No RHS\n";
+    }
+    // No RHS means this is a candidate, can't get width assignments
+    return {};
+  }
+  
+  // Check if NoWidth flag is set
+  if (NoWidth) {
+    if (DebugLevel > 2) {
+      llvm::errs() << "GetWidthAssignments: NoWidth flag is set\n";
+    }
+    if (IsNoWidthMode) *IsNoWidthMode = true;
+    return {};
+  }
+  
+  if (DebugLevel > 2) {
+    llvm::errs() << "GetWidthAssignments: Starting...\n";
+  }
+  
+  Input = ReplaceMinusOneAndFamily(IC, Input);
+  
+  if (DebugLevel > 2) {
+    llvm::errs() << "GetWidthAssignments: After ReplaceMinusOneAndFamily\n";
+  }
+  
+  if (IsStaticallyWidthIndependent(Input)) {
+    if (DebugLevel > 2) {
+      llvm::errs() << "GetWidthAssignments: Width independent\n";
+    }
+    // Width independent, return empty to indicate all widths valid
+    if (IsWidthIndependent) *IsWidthIndependent = true;
+    return {};
+  }
+  
+  if (DebugLevel > 2) {
+    llvm::errs() << "GetWidthAssignments: NoWidth=" << NoWidth 
+                 << " hasMultiArgumentPhi=" << hasMultiArgumentPhi(Input.Mapping.LHS)
+                 << " hasConcreteDataflowConditions=" << hasConcreteDataflowConditions(Input) << "\n";
+  }
+  
+  if (!hasMultiArgumentPhi(Input.Mapping.LHS) && !hasConcreteDataflowConditions(Input)) {
+    if (DebugLevel > 2) {
+      llvm::errs() << "GetWidthAssignments: Creating AliveDriver...\n";
+    }
+    // Instantiate Alive driver with Symbolic width.
+    AliveDriver Alive(Input.Mapping.LHS,
+      Input.PCs.empty() ? nullptr : CombinePCs(Input.PCs, IC),
+      IC, {}, true);
+    
+    if (DebugLevel > 2) {
+      llvm::errs() << "GetWidthAssignments: Getting typings...\n";
+    }
+    
+    // Just enumerate typings without verification
+    // Return empty vector - caller will use countTypings instead
+    return {};
+  }
+  
+  if (DebugLevel > 2) {
+    llvm::errs() << "GetWidthAssignments: Returning empty (default)\n";
+  }
+  
+  // Can't determine (multi-argument phi or concrete dataflow conditions)
+  return {};
+}
+
+// CountWidthAssignments moved to SynthUtils.cpp
+
+void GeneralizationResult::printTyping(llvm::raw_ostream &OS,
+                                       const std::map<const Inst *, size_t> &Typing) {
+  if (Typing.empty()) {
+    OS << "(empty)";
+    return;
+  }
+  bool first = true;
+  for (const auto &P : Typing) {
+    if (!P.first) continue;  // Skip null entries
+    if (!first) OS << ", ";
+    first = false;
+    if (!P.first->Name.empty()) {
+      OS << "%" << P.first->Name << ":i" << P.second;
+    } else {
+      OS << "%?:i" << P.second;
+    }
+  }
+}
+
+void GeneralizationResult::printWidthSummary(llvm::raw_ostream &OS) const {
+  if (IsWidthIndependent) {
+    OS << "Width-independent (valid for all widths)\n";
+  } else if (IsPartiallyValid) {
+    OS << "Partially valid: " << ValidTypings.size() << " valid, "
+       << InvalidTypings.size() << " invalid width assignments\n";
+  } else if (!ValidTypings.empty()) {
+    OS << "Valid for " << ValidTypings.size() << " width assignments\n";
+  } else if (!InvalidTypings.empty()) {
+    OS << "Invalid for all " << InvalidTypings.size() << " width assignments\n";
+  } else {
+    OS << "Could not determine width validity\n";
+  }
+}
+
+void GeneralizationResult::printValidTypings(llvm::raw_ostream &OS) const {
+  if (ValidTypings.empty()) {
+    OS << "No valid typings\n";
+    return;
+  }
+  OS << "Valid typings (" << ValidTypings.size() << "):\n";
+  for (size_t i = 0; i < ValidTypings.size(); ++i) {
+    OS << "  [" << (i + 1) << "] ";
+    printTyping(OS, ValidTypings[i]);
+    OS << "\n";
+  }
+}
+
+void GeneralizationResult::printInvalidTypings(llvm::raw_ostream &OS) const {
+  if (InvalidTypings.empty()) {
+    OS << "No invalid typings\n";
+    return;
+  }
+  OS << "Invalid typings (" << InvalidTypings.size() << "):\n";
+  for (size_t i = 0; i < InvalidTypings.size(); ++i) {
+    OS << "  [" << (i + 1) << "] ";
+    printTyping(OS, InvalidTypings[i]);
+    OS << "\n";
+  }
+}
+
+// Internal helper for generalization with typings
+static GeneralizationResult GeneralizeRepImpl(ParsedReplacement Input, bool CaptureTypings) {
+  GeneralizationResult GR;
+  GR.IsWidthIndependent = false;
+  GR.IsPartiallyValid = false;
+
+  // Validate input
+  if (!Input.Mapping.LHS) {
+    if (DebugLevel > 2) llvm::errs() << "GeneralizeRepImpl: No LHS\n";
+    return GR;
+  }
+  
+  if (!Input.Mapping.RHS) {
+    if (DebugLevel > 2) llvm::errs() << "GeneralizeRepImpl: No RHS\n";
+    return GR;
+  }
+
   auto &IC = *Input.Mapping.LHS->IC;
 
-    if (Input.Mapping.LHS == Input.Mapping.RHS) {
-    if (DebugLevel > 4)  llvm::errs() << "Input == Output\n";
-      return std::nullopt;
-    } else if (profit(Input) < 0 && !IgnoreCost) {
-      if (DebugLevel > 4) llvm::errs() << "Not an optimization\n";
-      return std::nullopt;
-    } else if (!Verify(Input)) {
-      if (DebugLevel > 4) llvm::errs() << "Invalid Input.\n";
-      return std::nullopt;
-    }
+  if (Input.Mapping.LHS == Input.Mapping.RHS) {
+    if (DebugLevel > 4) llvm::errs() << "Input == Output\n";
+    return GR;
+  } else if (profit(Input) < 0 && !IgnoreCost) {
+    if (DebugLevel > 4) llvm::errs() << "Not an optimization\n";
+    return GR;
+  } else if (!Verify(Input)) {
+    if (DebugLevel > 4) llvm::errs() << "Invalid Input.\n";
+    return GR;
+  }
 
   ParsedReplacement Result = ReduceBasic(Input);
 
   bool Changed = false;
-  size_t MaxTries = 1; // Increase this if we ever run with 10/100x timeout.
+  size_t MaxTries = 1;
   bool FirstTime = true;
   if (!OnlyWidth) {
     if (Changed) {
@@ -3362,7 +4055,6 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
     if (auto Rep = ReplaceWidthVars(Input)) {
       Result = *Rep;
     }
-    // TODO: run both variants?
 
     if (!NoWidth) {
       Opt = GeneralizeShrinked(Result);
@@ -3378,10 +4070,6 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
       Result = *Opt;
     }
 
-    // if (Changed && Opt) {
-    //   PrintInputAndResult(Input, Result);
-    // }
-
     if (SymbolicDF) {
       if (DebugLevel > 4) {
         Result.print(llvm::errs(), true);
@@ -3394,7 +4082,6 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
         Aug.print(llvm::errs(), true);
       }
 
-      // auto [CM2, Aug2] = AugmentForSymKB(Aug1, IC);
       if (!CM.empty()) {
         bool SymDFChanged = false;
 
@@ -3415,12 +4102,32 @@ std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
       }
       if (DebugLevel > 4) llvm::errs() << "POP SYMDF_KB_DB\n";
     }
+  }
 
-  }
-  bool Indep = false;
   if (!NoWidth) {
-    std::tie(Result, Indep) = InstantiateWidthChecks(IC, Result);
+    auto WCR = InstantiateWidthChecksWithTypings(IC, Result);
+    Result = WCR.Result;
+    GR.IsWidthIndependent = WCR.IsWidthIndependent;
+    GR.ValidTypings = std::move(WCR.ValidTypings);
+    GR.InvalidTypings = std::move(WCR.InvalidTypings);
+    GR.IsPartiallyValid = !GR.ValidTypings.empty() && !GR.InvalidTypings.empty();
   }
-  return Result;
+
+  GR.Result = Result;
+  return GR;
 }
+
+std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement Input) {
+  auto GR = GeneralizeRepImpl(Input, false);
+  return GR.Result;
+}
+
+GeneralizationResult GeneralizeRepWithTypings(ParsedReplacement Input) {
+  return GeneralizeRepImpl(Input, true);
+}
+
+bool isNoWidthMode() {
+  return NoWidth;
+}
+
 }

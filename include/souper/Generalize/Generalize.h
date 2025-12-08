@@ -4,14 +4,42 @@
 #include "souper/Parser/Parser.h"
 #include "souper/Extractor/Solver.h"
 #include "souper/Infer/Interpreter.h"
+#include "souper/Infer/SynthUtils.h"
 #include <optional>
 
 extern unsigned DebugLevel;
 
 namespace souper {
 
+// Result of width-independent generalization with detailed typing information
+struct GeneralizationResult {
+  std::optional<ParsedReplacement> Result;  // The generalized replacement (if successful)
+  bool IsWidthIndependent;                  // True if valid for all widths
+  bool IsPartiallyValid;                    // True if some widths valid, some invalid
+  std::vector<std::map<const Inst *, size_t>> ValidTypings;
+  std::vector<std::map<const Inst *, size_t>> InvalidTypings;
   
+  // Print a summary of width verification
+  void printWidthSummary(llvm::raw_ostream &OS) const;
+  
+  // Print all valid typings
+  void printValidTypings(llvm::raw_ostream &OS) const;
+  
+  // Print all invalid typings
+  void printInvalidTypings(llvm::raw_ostream &OS) const;
+  
+  // Print a single typing
+  static void printTyping(llvm::raw_ostream &OS,
+                          const std::map<const Inst *, size_t> &Typing);
+};
+
 std::optional<ParsedReplacement> GeneralizeRep(ParsedReplacement input);
+
+// Generalize with detailed width typing information
+GeneralizationResult GeneralizeRepWithTypings(ParsedReplacement input);
+
+// CountWidthAssignments is now in SynthUtils.h
+std::vector<std::map<const Inst *, size_t>> GetWidthAssignments(ParsedReplacement Input, bool *IsWidthIndependent = nullptr, bool *IsNoWidthMode = nullptr);
 void PrintInputAndResult(ParsedReplacement Input, ParsedReplacement Result);
 
 ParsedReplacement ReduceBasic(
@@ -87,17 +115,20 @@ std::vector<std::vector<Inst *>> InferSketchExprs(std::vector<Inst *> RHS,
   const std::vector<std::pair<Inst *, llvm::APInt>> &ConstMap);
 
 void findDangerousConstants(Inst *I, std::set<Inst *> &Results);
-bool hasMultiArgumentPhi(Inst *I);
+// hasMultiArgumentPhi is now in SynthUtils.h
 std::optional<ParsedReplacement> SuccessiveSymbolize(ParsedReplacement Input, bool &Changed,
                                                     std::vector<std::pair<Inst *, llvm::APInt>> ConstMap);
 std::optional<ParsedReplacement> GeneralizeShrinked(ParsedReplacement Input);
 std::optional<ParsedReplacement> ReplaceWidthVars(ParsedReplacement &Input);
 
-Inst *CombinePCs(const std::vector<InstMapping> &PCs, InstContext &IC);
+// CombinePCs is now in SynthUtils.h
 bool IsStaticallyWidthIndependent(ParsedReplacement Input);
 void GetWidthChangeInsts(Inst *I, std::vector<Inst *> &WidthChanges);
-bool hasConcreteDataflowConditions(ParsedReplacement &Input);
-ParsedReplacement ReplaceMinusOneAndFamily(InstContext &IC, ParsedReplacement Input);
+// hasConcreteDataflowConditions is now in SynthUtils.h
+// ReplaceMinusOneAndFamily is now in SynthUtils.h
+
+// Check if --no-width mode is enabled
+bool isNoWidthMode();
 
 }
 

@@ -1,0 +1,7 @@
+; RUN: %hydra --sexpr-input --sexpr %s 2>&1 | %FileCheck %s
+; Test: (c1 + (x + c2)) => (x + (c1 + c2)) (constant folding prep, width independent)
+
+(rewrite (add c1:i32 (add x:i32 c2:i32)) (add x:i32 (add c1:i32 c2:i32)))
+
+; CHECK: (rewrite (add C1 (add x C2))
+; CHECK-NEXT:          (add x (add C1 C2)))
