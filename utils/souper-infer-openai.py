@@ -18,7 +18,7 @@ logger = logging.getLogger("souper.infer")
 S_CHECK_TIMEOUT_SECONDS = 120
 
 # Default architectures for profit calculation
-DEFAULT_ARCHITECTURES = ["x86-64", "aarch64", "riscv64"]
+DEFAULT_ARCHITECTURES = ["x86-64", "aarch64", "riscv64", "souperir"]
 
 client = AzureOpenAI(
   api_key=os.environ.get("OPENAI_API_KEY"),
@@ -514,7 +514,9 @@ def old_profit(lhs, rhs):
 def sort_results(results):
   return sorted(results, key=lambda x: max(x['profits']) if isinstance(x['profits'], list) else x['profits'], reverse=True)
 
-def process_response(lhs, response, min_profit, debug_level=0):
+def process_response(lhs, response, min_profit, archs=None, debug_level=0):
+  if archs is None:
+    archs = DEFAULT_ARCHITECTURES
   result = dict()
   result['valid'] = list()
   result['invalid'] = list()
@@ -553,7 +555,7 @@ def process_response(lhs, response, min_profit, debug_level=0):
     # print(rhs)
     if oracle.returncode == 0 and "LGTM" in oracle.stdout:
       # result['valid'].append(rhs)
-      profits = profit(lhs, rhs)
+      profits = profit(lhs, rhs, archs=archs)
       if any(p >= min_profit for p in profits):
         if debug_level >= 1:
           logger.info("Accepted candidate; profits=%s", profits)
@@ -571,7 +573,7 @@ def process_response(lhs, response, min_profit, debug_level=0):
           "role": "assistant",
           "content": rhs,
         })
-        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(DEFAULT_ARCHITECTURES, profits))
+        profit_str = " ".join(f"{arch} {p}" for arch, p in zip(archs, profits))
         result['invalid'].append({
           "role": "user",
           "content": "Not profitable enough: " + profit_str + " are all less than the "
@@ -586,7 +588,7 @@ def process_response(lhs, response, min_profit, debug_level=0):
           logger.info("fixit produced empty RHS; falling back to pre-fixit rhs")
         newlhs, newrhs = lhs, rhs
         used_fixit_flag = False
-      profits = profit(newlhs, newrhs)
+      profits = profit(newlhs, newrhs, archs=archs)
 
       if any(p >= min_profit for p in profits):
         if debug_level >= 1:
@@ -602,7 +604,7 @@ def process_response(lhs, response, min_profit, debug_level=0):
           "role": "assistant",
           "content": newrhs,
         })
-        profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(DEFAULT_ARCHITECTURES, profits))
+        profit_str = " ".join(f"{arch} {p}" for arch, p in zip(archs, profits))
         result['invalid'].append({
           "role": "user",
           "content": "Not profitable enough: " + profit_str + " are all less than the "
@@ -639,7 +641,9 @@ def process_response(lhs, response, min_profit, debug_level=0):
         })
   return result
 
-def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1, debug_level: int = 0):
+def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1, archs=None, debug_level: int = 0):
+  if archs is None:
+    archs = DEFAULT_ARCHITECTURES
   global log
   log.append({
     "role": "user",
@@ -685,7 +689,7 @@ def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1, debug_level: i
     if debug_level >= 1:
       logger.info("num_tries=%d", tries)
 
-    results = process_response(lhs, chat_completion, min_profit, debug_level=debug_level)
+    results = process_response(lhs, chat_completion, min_profit, archs=archs, debug_level=debug_level)
 
     if results['valid']:
       if debug_level >= 1:
@@ -695,7 +699,7 @@ def infer(lhs, model, debug=False, max_tries = 4, min_profit = 1, debug_level: i
       comment = "; tries " + str(tries)
       comment += " fixit " + ("1" if best_result['used_fixit'] else "0")
       # Format profits as "arch1 p1 arch2 p2 ..."
-      profit_str = " ".join(f"{arch} {profit}" for arch, profit in zip(DEFAULT_ARCHITECTURES, best_result['profits']))
+      profit_str = " ".join(f"{arch} {p}" for arch, p in zip(archs, best_result['profits']))
       comment += " " + profit_str
       comment += " time {:.2f}s".format(elapsed_time)
       return (True, best_result['rhs'] + "\n" + comment + "\n")
@@ -749,8 +753,14 @@ if __name__ == "__main__":
   parser.add_argument('-c', '-souper-external-cache',
                     action='store_true')
   parser.add_argument('-i', '--improve-profit', default=1, help='Try to improve profit')
-  parser.add_argument('-m', '--model', help='Model to use', default="claude-sonnet-4-5-20250929")
+  parser.add_argument('-m', '--model', help='Model to use', default="claude-sonnet-4-20250514")
+  parser.add_argument('-a', '--arch', 
+                    help='Comma-separated list of architectures for profit calculation (default: x86-64,aarch64,riscv64,souperir)',
+                    default=','.join(DEFAULT_ARCHITECTURES))
   args = parser.parse_args()
+  
+  # Parse architectures from comma-separated string
+  archs = [a.strip() for a in args.arch.split(',') if a.strip()]
 
   # Configure logging: -d >= 5 => DEBUG, 1..4 => INFO, 0 => WARNING
   if args.d and args.d >= 5:
@@ -792,18 +802,18 @@ if __name__ == "__main__":
     lhs = sys.stdin.read()
 
   if not args.c:
-    success, rhs = infer(lhs, args.model, args.d >= 5, debug_level=args.d)
+    success, rhs = infer(lhs, args.model, args.d >= 5, archs=archs, debug_level=args.d)
     print(rhs)
   else:
     r = redis.Redis(host='localhost', port=6379, decode_responses=True)
     if rhs := r.hget(lhs, "rhs"):
       print(lhs, rhs)
     else :
-      success, rhs = infer(lhs, args.model, args.d >= 5, min_profit=1, debug_level=args.d)
+      success, rhs = infer(lhs, args.model, args.d >= 5, min_profit=1, archs=archs, debug_level=args.d)
       if not success:
         r.hset(lhs, "noinfer", "noinfer")
       else :
-        success2, rhs2 = infer(lhs, args.model, args.d >= 5, min_profit=2, debug_level=args.d)
+        success2, rhs2 = infer(lhs, args.model, args.d >= 5, min_profit=2, archs=archs, debug_level=args.d)
         if not success2:
           # Only store RHS if it contains meaningful content (non-empty and has non-whitespace)
           if rhs and rhs.strip():
