@@ -347,14 +347,15 @@ static std::map<Inst *, Value *> GetArgsMapping(const InstContext &IC,
 /// If there are no errors, the function returns false. If an error is found,
 /// a message describing the error is written to OS (if non-null) and true is
 /// returned.
-bool genModule(InstContext &IC, souper::Inst *I, llvm::Module &Module) {
+bool genModule(InstContext &IC, souper::Inst *I, llvm::Module &Module,
+               const std::string &FuncName) {
   llvm::LLVMContext &Context = Module.getContext();
   const std::vector<llvm::Type *> ArgTypes = GetInputArgumentTypes(IC, Context, I);
   const auto FT = llvm::FunctionType::get(
       /*Result=*/Codegen::GetInstReturnType(Context, I),
       /*Params=*/ArgTypes, /*isVarArg=*/false);
 
-  Function *F = Function::Create(FT, Function::ExternalLinkage, "fun", &Module);
+  Function *F = Function::Create(FT, Function::ExternalLinkage, FuncName, &Module);
 
   const std::map<Inst *, Value *> Args = GetArgsMapping(IC, F, I);
 

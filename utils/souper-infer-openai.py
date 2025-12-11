@@ -511,6 +511,37 @@ def old_profit(lhs, rhs):
   finally:
     os.remove(filename)
 
+def to_llvmir(lhs, rhs):
+  """
+  Convert LHS and RHS to LLVM IR using souper2llvm.
+  LHS function is named 'src', RHS function is named 'tgt'.
+  Returns a tuple (lhs_ir, rhs_ir) or (None, None) on error.
+  """
+  opt = lhs + "\n" + rhs
+  with tempfile.NamedTemporaryFile(mode='w', suffix='.opt', prefix='souper_llvmir_', delete=False) as f:
+    f.write(opt)
+    filename = f.name
+  
+  try:
+    # Run souper2llvm -lhs to get src function
+    lhs_result = subprocess.run(
+      ['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-lhs'],
+      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    lhs_ir = lhs_result.stdout.strip() if lhs_result.returncode == 0 else None
+    
+    # Run souper2llvm -rhs to get tgt function
+    rhs_result = subprocess.run(
+      ['@CMAKE_BINARY_DIR@/souper2llvm', filename, '-rhs'],
+      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    rhs_ir = rhs_result.stdout.strip() if rhs_result.returncode == 0 else None
+    
+    return (lhs_ir, rhs_ir)
+  except subprocess.TimeoutExpired:
+    logger.warning("souper2llvm timeout during LLVM IR conversion")
+    return (None, None)
+  finally:
+    os.remove(filename)
+
 def sort_results(results):
   return sorted(results, key=lambda x: max(x['profits']) if isinstance(x['profits'], list) else x['profits'], reverse=True)
 
@@ -757,6 +788,8 @@ if __name__ == "__main__":
   parser.add_argument('-a', '--arch', 
                     help='Comma-separated list of architectures for profit calculation (default: x86-64,aarch64,riscv64,souperir)',
                     default=','.join(DEFAULT_ARCHITECTURES))
+  parser.add_argument('--emit-llvmir', action='store_true',
+                    help='Emit LLVM IR output (src and tgt functions) instead of Souper IR')
   args = parser.parse_args()
   
   # Parse architectures from comma-separated string
@@ -803,7 +836,25 @@ if __name__ == "__main__":
 
   if not args.c:
     success, rhs = infer(lhs, args.model, args.d >= 5, archs=archs, debug_level=args.d)
-    print(rhs)
+    if success and args.emit_llvmir:
+      # Extract just the RHS content (before the comment line)
+      rhs_lines = rhs.strip().split('\n')
+      rhs_content = '\n'.join(line for line in rhs_lines if not line.startswith(';'))
+      comment_lines = [line for line in rhs_lines if line.startswith(';')]
+      
+      # Convert to LLVM IR and print only LLVM IR output
+      lhs_ir, rhs_ir = to_llvmir(lhs, rhs_content)
+      if lhs_ir:
+        print(lhs_ir)
+        print()
+      if rhs_ir:
+        print(rhs_ir)
+      
+      # Print stats as comment at the end
+      for c in comment_lines:
+        print(c)
+    else:
+      print(rhs)
   else:
     r = redis.Redis(host='localhost', port=6379, decode_responses=True)
     if rhs := r.hget(lhs, "rhs"):

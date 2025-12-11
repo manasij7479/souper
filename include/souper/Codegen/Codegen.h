@@ -56,7 +56,8 @@ public:
 // If there are no errors, the function returns false. If an error is found,
 // a message describing the error is written to OS (if non-null) and true is
 // returned.
-bool genModule(InstContext &IC, Inst *I, llvm::Module &Module);
+bool genModule(InstContext &IC, Inst *I, llvm::Module &Module,
+               const std::string &FuncName = "fun");
 
 struct BackendCost {
   std::vector<int> C;

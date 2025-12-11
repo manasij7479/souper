@@ -38,26 +38,29 @@ static cl::opt<std::string>
                   cl::init("-"));
 
 static cl::opt<bool> LHS(
-    "lhs", cl::desc("input a replacement and convert ths LHS"),
+    "lhs", cl::desc("Convert only the LHS (default: print both LHS and RHS)"),
     cl::init(false));
 
 static cl::opt<bool> RHS(
-    "rhs", cl::desc("input a replacement and convert ths RHS"),
+    "rhs", cl::desc("Convert only the RHS (default: print both LHS and RHS)"),
     cl::init(false));
 
 static cl::opt<std::string> OutputFilename(
     "o", cl::desc("<output destination for textual LLVM IR (default=stdout)>"),
     cl::init("-"));
 
+static cl::opt<bool> PrintPreamble(
+    "print-preamble", cl::desc("Print module preamble and cost comment"),
+    cl::init(false));
+
 int Work(const MemoryBufferRef &MB) {
   InstContext IC;
   ReplacementContext RC;
   std::string ErrStr;
 
+  // Always parse as a full replacement (LHS + RHS)
   const ParsedReplacement &Rep =
-    (LHS || RHS) ? 
-    ParseReplacement(IC, MB.getBufferIdentifier(), MB.getBuffer(), ErrStr) : 
-    ParseReplacementRHS(IC, MB.getBufferIdentifier(), MB.getBuffer(), RC, ErrStr);
+    ParseReplacement(IC, MB.getBufferIdentifier(), MB.getBuffer(), ErrStr);
 
   if (!ErrStr.empty()) {
     llvm::errs() << ErrStr << '\n';
@@ -65,29 +68,46 @@ int Work(const MemoryBufferRef &MB) {
   }
 
   llvm::LLVMContext Context;
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(OutputFilename, EC);
 
-  if (LHS) {
+  // By default (neither -lhs nor -rhs), print both
+  bool printLHS = LHS || (!LHS && !RHS);
+  bool printRHS = RHS || (!LHS && !RHS);
+
+  if (printLHS) {
     llvm::Module Module("souper.ll", Context);
-    if (genModule(IC, Rep.Mapping.LHS, Module))
+    if (genModule(IC, Rep.Mapping.LHS, Module, "src"))
       return 1;
-    std::error_code EC;
-    llvm::raw_fd_ostream OS(OutputFilename, EC);
-    OS << "; cost = " << cost(Rep.Mapping.LHS) << "\n\n";
-    OS << Module;
-    OS.flush();
+    if (PrintPreamble) {
+      OS << "; cost = " << cost(Rep.Mapping.LHS) << "\n\n";
+      OS << Module;
+    } else {
+      // Print only the function, skip module preamble
+      for (auto &F : Module) {
+        F.print(OS);
+        OS << "\n";
+      }
+    }
   }
 
-  if (RHS || (!LHS && !RHS)) {
+  if (printRHS) {
     llvm::Module Module("souper.ll", Context);
-    if (genModule(IC, Rep.Mapping.RHS, Module))
+    if (genModule(IC, Rep.Mapping.RHS, Module, "tgt"))
       return 1;
-    std::error_code EC;
-    llvm::raw_fd_ostream OS(OutputFilename, EC);
-    OS << "; cost = " << cost(Rep.Mapping.RHS) << "\n\n";
-    OS << Module;
-    OS.flush();
+    if (PrintPreamble) {
+      OS << "; cost = " << cost(Rep.Mapping.RHS) << "\n\n";
+      OS << Module;
+    } else {
+      // Print only the function, skip module preamble
+      for (auto &F : Module) {
+        F.print(OS);
+        OS << "\n";
+      }
+    }
   }
-  
+
+  OS.flush();
   return 0;
 }
 
