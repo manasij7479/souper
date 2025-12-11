@@ -72,6 +72,11 @@ static cl::opt<bool>
 Cost("cost", cl::desc("Print the cost"),
      cl::init(false));
 
+static cl::opt<bool>
+PrintLHSOnly("print-lhs-only",
+    cl::desc("Extract and print LHS candidates in 'infer' format without synthesizing RHS (default=false)"),
+    cl::init(false));
+
 static ExitOnError ExitOnErr;
 
 // adapted from llvm-dis.cpp
@@ -136,6 +141,17 @@ int main(int argc, char **argv) {
   }
 
   AddModuleToCandidateMap(IC, EBC, CandMap, *M.get());
+
+  if (PrintLHSOnly) {
+    // Just print LHS candidates in 'infer' format, don't synthesize RHS
+    for (auto &Cand : CandMap) {
+      llvm::outs() << '\n';
+      Cand.printFunction(llvm::outs());
+      ReplacementContext Context;
+      Cand.printLHS(llvm::outs(), Context);
+    }
+    return 0;
+  }
 
   if (Check) {
     return CheckCandidateMap(*M.get(), CandMap, S_.get(), IC) ? 0 : 1;
